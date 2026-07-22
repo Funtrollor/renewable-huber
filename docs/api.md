@@ -56,4 +56,4 @@ fit_intercept      # 設計矩陣是否加入截距欄
 
 ## 版本界線
 
-v0.4 正式支援 NumPy CPU、CuPy CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。`backend="cupy"` 需要安裝 CUDA 12 版 extra，且 `predict` 會回傳 `cupy.ndarray`，不會隱性複製回 CPU。`backend="torch"` 與 `backend="tensorflow"` 均需要各自的 optional extra；`device="auto"` 保持在 CPU，明確指定 `device="cuda"` 時才使用 CUDA。TensorFlow backend 要求 eager execution，不可直接在 `tf.function` 內使用。
+v0.5 正式支援 NumPy CPU、CuPy CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。`backend="cupy"` 需要安裝 CUDA 12 版 extra，且 `predict` 會回傳 `cupy.ndarray`，不會隱性複製回 CPU。`backend="torch"` 與 `backend="tensorflow"` 均需要各自的 optional extra；`device="auto"` 保持在 CPU，明確指定 `device="cuda"` 時才使用 CUDA。TensorFlow backend 要求 eager execution，不可直接在 `tf.function` 內使用。安裝 `sklearn` extra 後，可使用 `renewable_huber.integrations.sklearn.SklearnRenewableHuberRegressor` 進入 Pipeline、clone、GridSearchCV 與 cross-validation 工作流。
