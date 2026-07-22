@@ -490,7 +490,10 @@ class EstimatorCorrectnessContractTests(unittest.TestCase):
         )
 
         np.testing.assert_allclose(
-            self._parameters(shuffled), self._parameters(original), rtol=0.0, atol=1e-9
+            self._parameters(shuffled),
+            self._parameters(original),
+            rtol=2e-9,
+            atol=2e-10,
         )
         np.testing.assert_allclose(
             shuffled.state_.information,
