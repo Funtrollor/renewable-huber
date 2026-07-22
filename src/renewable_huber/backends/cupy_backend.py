@@ -24,6 +24,7 @@ class CuPyBackend:
     def __init__(self, dtype: str = "float64") -> None:
         try:
             import cupy as cp
+            import cupyx
         except ImportError as error:
             raise BackendUnavailableError(
                 "The CuPy backend requires a CUDA-specific CuPy wheel. "
@@ -41,6 +42,7 @@ class CuPyBackend:
             raise BackendUnavailableError("No CUDA device is available for the CuPy backend")
 
         self.xp = cp
+        self._cupyx = cupyx
         self.dtype = cp.dtype(dtype)
         self._cuda_dll_directory = self._configure_windows_cuda_dll_path()
         self.device_id = int(cp.cuda.runtime.getDevice())
@@ -117,7 +119,10 @@ class CuPyBackend:
 
     def solve(self, matrix: Any, vector: Any) -> Any:
         try:
-            return self.xp.linalg.solve(matrix, vector)
+            # CuPy otherwise warns and may return NaN for singular systems
+            # instead of raising, which would bypass the least-squares path.
+            with self._cupyx.errstate(linalg="raise"):
+                return self.xp.linalg.solve(matrix, vector)
         except self.xp.linalg.LinAlgError:
             return self.xp.linalg.lstsq(matrix, vector, rcond=None)[0]
 
@@ -180,6 +185,17 @@ class CuPyBackend:
             return None
         with self.xp.cuda.Device(self.device_id):
             return kernels.smoothed_terms(residual, tau, bandwidth)
+
+    def cuda_huber_score_and_smoothed_curvature(
+        self, residual: Any, tau: float, bandwidth: float
+    ) -> tuple[Any, Any] | None:
+        """Evaluate the current Huber score and smoothed curvature in one launch."""
+
+        kernels = self._get_cuda_kernels()
+        if kernels is None:
+            return None
+        with self.xp.cuda.Device(self.device_id):
+            return kernels.huber_score_and_smoothed_curvature(residual, tau, bandwidth)
 
     def _get_cuda_kernels(self) -> CudaKernels | None:
         """Compile the internal CUDA C++ module once and retain a safe fallback."""

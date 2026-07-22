@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
+
+import numpy as np
 
 from .exceptions import ValidationError
 
@@ -62,6 +65,15 @@ class RenewableHuberState:
             raise ValidationError("state information shape does not match feature metadata")
         if self.n_samples_seen < 0 or self.batch_count < 0:
             raise ValidationError("state counters must be non-negative")
+        if not isfinite(self.previous_lambda) or self.previous_lambda < 0:
+            raise ValidationError("state previous lambda must be finite and non-negative")
+        # Checkpoint arrays are decoded through NumPy. Restrict the value scan
+        # to NumPy-backed state so regular validation never copies a full GPU
+        # information matrix back to the host.
+        if isinstance(self.coefficients, np.ndarray) and not np.isfinite(self.coefficients).all():
+            raise ValidationError("state coefficients must contain only finite values")
+        if isinstance(self.information, np.ndarray) and not np.isfinite(self.information).all():
+            raise ValidationError("state information must contain only finite values")
 
 
 def _copy_array(value: Any) -> Any:

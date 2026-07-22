@@ -82,6 +82,23 @@ class CuPyBackendTests(unittest.TestCase):
             self.cp.asnumpy(gpu_model.coef_), cpu_model.coef_, rtol=2e-5, atol=2e-5
         )
 
+    def test_singular_design_falls_back_to_a_finite_least_squares_solution(self) -> None:
+        x = self.cp.linspace(-5.0, 5.0, 101)
+        X = self.cp.column_stack((x, x))
+        y = 3.0 * x
+        model = RenewableHuberRegressor(
+            backend="cupy",
+            device="cuda",
+            fit_intercept=False,
+            ridge=0.0,
+            max_iter=200,
+            tol=1e-10,
+        ).fit(X, y)
+
+        self.assertTrue(bool(self.cp.all(self.cp.isfinite(model.coef_))))
+        self.assertTrue(bool(self.cp.all(self.cp.isfinite(model.state_.information))))
+        self.cp.testing.assert_allclose(model.predict(X), y, rtol=1e-10, atol=1e-10)
+
 
 if __name__ == "__main__":
     unittest.main()

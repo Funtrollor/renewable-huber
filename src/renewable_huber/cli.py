@@ -21,8 +21,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.parse_args(argv)
     print(f"renewable-huber {__version__}")
-    print("available backends: numpy (CPU), cupy (CUDA; install the gpu-cupy extra)")
-    print("reserved backends: torch, tensorflow")
+    print("available backends:")
+    print("  numpy: CPU (base install)")
+    print("  cupy: CUDA (install the gpu-cupy extra)")
+    print("  torch: CPU/CUDA (install the gpu-torch extra)")
+    print("  tensorflow: CPU/CUDA, eager execution only (install the gpu-tensorflow extra)")
+    print("device policy: backend='auto' uses NumPy unless device='cuda' selects CuPy")
     return 0
 
 

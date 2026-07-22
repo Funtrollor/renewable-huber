@@ -1,36 +1,49 @@
 # 架構
 
-套件將「演算法」、「陣列運算後端」與「使用者 API」分離：
+v0.5 將「公開估計器」、「可共用演算法核心」與「陣列後端」分離。四個正式 backend 共用同一份 RHE Newton／RPSHE LAMM 更新邏輯；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
 
 ```text
 RenewableHuberRegressor
         │
         ├── validation / design matrix / checkpointing
-        ├── core.loss       (Huber、平滑 score、curvature)
+        ├── core.loss       (Huber loss、平滑 score、curvature)
         ├── core.update     (RHE Newton / RPSHE LAMM)
-        └── backends        (NumPy 現已實作；GPU 後續加入)
+        └── backends
+             ├── NumPy      (CPU / BLAS / LAPACK)
+             ├── CuPy       (CUDA C++ kernels / cuBLAS / cuSOLVER)
+             ├── PyTorch    (CPU / CUDA tensors)
+             └── TensorFlow (CPU / CUDA tensors，eager only)
 ```
 
-`core` 不依賴 pandas、scikit-learn、CuPy、PyTorch 或 TensorFlow。它只使用由 backend 提供的 Array-API 形狀數值運算、線性方程解法與 scalar conversion。這能讓同一份演算法在 GPU 後端完成後持續保持單一來源。
+## Backend 邊界
 
-## 運算模式
+`core` 不直接 import pandas、scikit-learn、CuPy、PyTorch 或 TensorFlow，而是使用 backend 提供的陣列運算、線性方程解法與 scalar conversion。CuPy 可額外提供融合的 CUDA C++ Huber／score／curvature kernel；若 NVRTC 不可用，會回退至共用 CuPy 表達式而不改變 API。
 
-| 模式 | v0.1 狀態 | 後續實作原則 |
-| --- | --- | --- |
-| `backend="numpy"` | 支援 | 以連結的 BLAS/LAPACK 執行 CPU 線性代數。 |
-| `backend="cupy"` | 支援 | 資料、係數與資訊矩陣長駐 CUDA；避免每個 batch 回傳 NumPy。 |
-| `backend="torch"` | 支援 | 接受原生 Torch tensor，支援明確指定的 CPU 或 CUDA device。 |
-| `backend="tensorflow"` | 支援 | 接受原生 TensorFlow tensor，在 eager mode 下支援明確指定的 CPU 或 CUDA device。 |
+Backend 只在第一次 `fit`／`partial_fit` 時解析：
 
-CuPy implementation 必須通過與 NumPy reference 的數值一致性測試才能列為支援。不同框架在相同裝置上交換資料時，adapter 層才使用 DLPack；API 層不得無提示轉換或同步 GPU。
+- `backend="auto", device="auto"` 與 `backend="auto", device="cpu"` 固定解析成 NumPy。
+- `backend="auto", device="cuda"` 解析成 CuPy，且需要可用的 NVIDIA CUDA 裝置。
+- `backend="torch"` 與 `backend="tensorflow"` 必須由呼叫端明確選擇；不會依輸入 tensor 推斷。
+- `device="auto"` 對 Torch 與 TensorFlow 也選擇 CPU；CUDA 必須明確要求。
 
-Windows 上 CuPy 的 cuBLAS 可能在第一次矩陣運算才延遲載入。後端會自動把偵測到的 CUDA Toolkit `bin` 目錄加入目前 Python 行程的 DLL 搜尋路徑；若未安裝 Toolkit，請依 CuPy 文件安裝含 CUDA runtime 的 `cupy-cuda12x[ctk]`。
+輸入會由選定 backend 轉型並移至它的裝置。跨框架輸入沒有 DLPack 零複製保證，可能發生配置或主機／裝置複製。PyTorch tensor 會先 detach；TensorFlow 只支援 eager execution。
+
+## 演算法正確性邊界
+
+依原論文 Eq. (2.8) 與 Eq. (3.9)，新到批次的 estimating equation 使用 ordinary Huber score（將殘差截在 `[-tau, tau]`）；Eq. (2.1) 的平滑 score 導數只用來建立並累積歷史資訊矩陣 `J`。兩者不可互換，否則求解的 estimating equation 會改變。RPSHE 更新另保留上一批的 lambda subgradient，並以目前累積樣本數正規化歷史與當前項。
+
+## State 與同步邊界
+
+係數和累積資訊矩陣在更新、預測期間留在選定 backend。`predict` 直接回傳該 backend 的陣列；套件不會自動把 CUDA 預測複製回 NumPy。收斂判斷、公開 scalar 屬性及 checkpoint serialization 是允許的同步邊界。
+
+`.npz` checkpoint 會把數值 state 轉為 NumPy 儲存，但同時保留原始 `backend`、`device` 與 `dtype` 設定。`load` 會依這些設定重建原 backend，因此載入環境仍須安裝對應 extra 並具備所需硬體；v0.5 沒有自動從 GPU checkpoint 降級至 NumPy 的公開 API。
 
 ## 效能原則
 
 1. 對整個 batch 向量化，避免 Python per-row 迴圈。
-2. 讓已編譯的 BLAS/LAPACK／CUDA library 處理矩陣乘法與求解。
-3. 模型 state 永遠留在選定 backend；只在 `predict` 或 serialization 的明確邊界轉換。
-4. 先以 benchmark 找到瓶頸，再考慮 Numba、CuPy RawKernel 或 C++/CUDA extension。
+2. 由 BLAS/LAPACK、cuBLAS/cuSOLVER 或框架原生 kernel 處理矩陣乘法與求解。
+3. 重用 Newton Hessian workspace，並在 CuPy 路徑融合分支密集的 elementwise kernel。
+4. 將資料、係數與資訊矩陣留在同一裝置，避免每批來回複製。
+5. 使用可重現 benchmark 評估穩態吞吐量；CUDA context、NVRTC 與 library 首次載入時間需和穩態時間分開觀察。
 
-GPU 的 CUDA context 與 cuBLAS 首次載入有固定成本，因此應以長時間串流吞吐量，而非第一個微小 batch 的時間，評估 GPU 效益。使用 `scripts/benchmarks/benchmark_numpy_cupy.py`，並在 GPU 上優先嘗試 `float32` 與至少數萬筆資料的 batch。
+GPU 對小批次未必較快。CuPy kernel microbenchmark 見 `scripts/benchmarks/benchmark_cuda_kernels.py`，端到端 NumPy/CuPy 比較見 `scripts/benchmarks/benchmark_numpy_cupy.py`；量測 GPU 時應先 warm up 並同步 CUDA stream。

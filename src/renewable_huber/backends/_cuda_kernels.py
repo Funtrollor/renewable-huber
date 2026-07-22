@@ -21,6 +21,8 @@ _KERNEL_NAMES = (
     "smoothed_curvature_f64",
     "smoothed_terms_f32",
     "smoothed_terms_f64",
+    "huber_score_smoothed_curvature_f32",
+    "huber_score_smoothed_curvature_f64",
 )
 
 
@@ -38,14 +40,18 @@ __device__ __forceinline__ void smoothed_terms(
         *score = -tau;
         *curvature = T(0);
     } else if (residual <= negative_right) {
-        *score = T(0.5) * (residual - tau + bandwidth);
-        *curvature = T(0.5);
+        const T offset = residual + tau;
+        *score = bandwidth / T(4) - tau + T(0.5) * offset
+            + offset * offset / (T(4) * bandwidth);
+        *curvature = T(0.5) + offset / (T(2) * bandwidth);
     } else if (residual < positive_left) {
         *score = residual;
         *curvature = T(1);
     } else if (residual <= positive_right) {
-        *score = T(0.5) * (residual + tau - bandwidth);
-        *curvature = T(0.5);
+        const T offset = tau - residual;
+        *score = -(bandwidth / T(4) - tau + T(0.5) * offset
+            + offset * offset / (T(4) * bandwidth));
+        *curvature = T(0.5) + offset / (T(2) * bandwidth);
     } else {
         *score = tau;
         *curvature = T(0);
@@ -176,6 +182,46 @@ extern "C" __global__ void smoothed_terms_f64(
     }
 }
 
+extern "C" __global__ void huber_score_smoothed_curvature_f32(
+    const float* residual,
+    float* score,
+    float* curvature,
+    const long long size,
+    const float tau,
+    const float bandwidth
+) {
+    const long long index = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < size) {
+        float ignored_score;
+        smoothed_terms(
+            residual[index], tau, bandwidth, &ignored_score, &curvature[index]
+        );
+        score[index] = residual[index] < -tau
+            ? -tau
+            : (residual[index] > tau ? tau : residual[index]);
+    }
+}
+
+extern "C" __global__ void huber_score_smoothed_curvature_f64(
+    const double* residual,
+    double* score,
+    double* curvature,
+    const long long size,
+    const double tau,
+    const double bandwidth
+) {
+    const long long index = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < size) {
+        double ignored_score;
+        smoothed_terms(
+            residual[index], tau, bandwidth, &ignored_score, &curvature[index]
+        );
+        score[index] = residual[index] < -tau
+            ? -tau
+            : (residual[index] > tau ? tau : residual[index]);
+    }
+}
+
 """
 
 
@@ -252,6 +298,25 @@ class CudaKernels:
         )
         return score, curvature
 
+    def huber_score_and_smoothed_curvature(
+        self, residual: Any, tau: float, bandwidth: float
+    ) -> tuple[Any, Any] | None:
+        """Return the current Huber score and smoothed curvature in one launch."""
+
+        specification = self._vector_specification(residual, tau, bandwidth)
+        if specification is None:
+            return None
+        suffix, size, tau_value, bandwidth_value = specification
+        score = self._cp.empty_like(residual)
+        curvature = self._cp.empty_like(residual)
+        blocks = (size + self._threads_per_block - 1) // self._threads_per_block
+        self._functions[f"huber_score_smoothed_curvature_{suffix}"](
+            (blocks,),
+            (self._threads_per_block,),
+            (residual, score, curvature, np.int64(size), tau_value, bandwidth_value),
+        )
+        return score, curvature
+
     def _vector_specification(
         self, residual: Any, tau: float, bandwidth: float
     ) -> tuple[str, int, Any, Any] | None:
@@ -261,7 +326,7 @@ class CudaKernels:
         if suffix is None:
             return None
         scalar_type = np.float32 if suffix == "f32" else np.float64
-        h = min(bandwidth, tau * 0.5)
+        h = min(bandwidth, tau)
         return suffix, int(residual.size), scalar_type(tau), scalar_type(h)
 
     def _loss_specification(self, residual: Any, tau: float) -> tuple[str, int, Any] | None:

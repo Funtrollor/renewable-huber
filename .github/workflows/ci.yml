@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,10 +25,21 @@ jobs:
         run: python -m pip install ".[dev]"
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+
+  quality:
+    name: Lint and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package and development tools
+        run: python -m pip install ".[dev]"
       - name: Lint
-        run: ruff check src tests scripts/renewable_huber
-      - name: Build distributions
-        run: python -m build
+        run: ruff check src tests scripts
+      - name: Check formatting
+        run: ruff format --check src tests scripts
 
   optional-backend:
     name: ${{ matrix.name }} CPU
@@ -43,6 +54,9 @@ jobs:
           - name: TensorFlow
             extra: gpu-tensorflow
             test-module: tests.test_tensorflow_backend
+          - name: scikit-learn
+            extra: sklearn
+            test-module: tests.test_sklearn_integration
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -54,3 +68,44 @@ jobs:
         env:
           TF_CPP_MIN_LOG_LEVEL: "2"
         run: python -m unittest ${{ matrix.test-module }} -v
+
+  package-smoke:
+    name: Wheel and sdist smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build frontend
+        run: python -m pip install build
+      - name: Build wheel and sdist
+        run: python -m build
+      - name: Smoke-test wheel in a clean environment
+        shell: bash
+        run: |
+          shopt -s nullglob
+          artifacts=(dist/*.whl)
+          if (( ${#artifacts[@]} != 1 )); then
+            echo "Expected exactly one wheel, found ${#artifacts[@]}"
+            exit 1
+          fi
+          python -m venv "$RUNNER_TEMP/wheel-smoke"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install "${artifacts[0]}"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "import numpy as np; from renewable_huber import RenewableHuberRegressor, __version__; X = np.arange(8, dtype=float).reshape(4, 2); y = np.arange(4, dtype=float); model = RenewableHuberRegressor(max_iter=5).fit(X, y); assert __version__; assert model.predict(X).shape == (4,)"
+          "$RUNNER_TEMP/wheel-smoke/bin/renewable-huber" --version
+      - name: Smoke-test sdist in a clean environment
+        shell: bash
+        run: |
+          shopt -s nullglob
+          artifacts=(dist/*.tar.gz)
+          if (( ${#artifacts[@]} != 1 )); then
+            echo "Expected exactly one sdist, found ${#artifacts[@]}"
+            exit 1
+          fi
+          python -m venv "$RUNNER_TEMP/sdist-smoke"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install "${artifacts[0]}"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -c "import numpy as np; from renewable_huber import RenewableHuberRegressor, __version__; X = np.arange(8, dtype=float).reshape(4, 2); y = np.arange(4, dtype=float); model = RenewableHuberRegressor(max_iter=5).fit(X, y); assert __version__; assert model.predict(X).shape == (4,)"
+          "$RUNNER_TEMP/sdist-smoke/bin/renewable-huber" --version
