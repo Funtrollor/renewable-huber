@@ -1,0 +1,27 @@
+name: GPU validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cupy-cuda:
+    name: CuPy CUDA on self-hosted GPU
+    # Deliberately manual: public pull requests must not execute arbitrary
+    # contributor code on a self-hosted machine with access to a GPU.
+    runs-on: [self-hosted, windows, x64, gpu]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Show CUDA device
+        shell: pwsh
+        run: nvidia-smi
+      - name: Install CUDA backend and test tools
+        run: python -m pip install ".[dev,gpu-cupy]"
+      - name: Run CUDA C++ kernel and CuPy integration tests
+        run: python -m unittest tests.test_cuda_kernels tests.test_cupy_backend -v
