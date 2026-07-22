@@ -101,6 +101,10 @@ class CuPyBackend:
         with self.xp.cuda.Device(self.device_id):
             return value.copy()
 
+    def reshape(self, value: Any, shape: tuple[int, ...]) -> Any:
+        with self.xp.cuda.Device(self.device_id):
+            return value.reshape(shape)
+
     def to_numpy(self, value: Any) -> Any:
         return self.xp.asnumpy(value)
 

@@ -25,6 +25,9 @@ class NumPyBackend:
     def copy(self, value: np.ndarray) -> np.ndarray:
         return value.copy()
 
+    def reshape(self, value: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+        return value.reshape(shape)
+
     def to_numpy(self, value: Any) -> np.ndarray:
         return np.asarray(value)
 

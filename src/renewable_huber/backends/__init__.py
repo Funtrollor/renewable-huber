@@ -32,10 +32,9 @@ def resolve_backend(name: str, *, device: str = "auto", dtype: str = "float64") 
 
         return TorchBackend(dtype, device)
     if name == "tensorflow":
-        raise BackendUnavailableError(
-            "The 'tensorflow' backend is part of the public API but is not implemented yet. "
-            "Use backend='numpy' for the reference implementation."
-        )
+        from .tensorflow_backend import TensorFlowBackend
+
+        return TensorFlowBackend(dtype, device)
     raise BackendUnavailableError(f"Unknown backend: {name!r}")
 
 

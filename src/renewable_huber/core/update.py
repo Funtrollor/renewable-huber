@@ -33,11 +33,12 @@ def _lambda(n_total: int, n_predictors: int, config: EstimatorConfig) -> float:
     return config.lambda_scale * config.tau * sqrt(log(max(n_predictors, 2)) / n_total)
 
 
-def _penalty_mask(n_parameters: int, fit_intercept: bool, xp: Any, dtype: Any) -> Any:
-    mask = xp.ones(n_parameters, dtype=dtype)
-    if fit_intercept:
-        mask[-1] = 0.0
-    return mask
+def _penalty_mask(reference: Any, fit_intercept: bool, xp: Any) -> Any:
+    """Return an L1 mask without mutation, including immutable tensor backends."""
+
+    if not fit_intercept:
+        return xp.ones_like(reference)
+    return xp.concatenate((xp.ones_like(reference[:-1]), xp.zeros_like(reference[-1:])))
 
 
 def _smooth_objective(
@@ -51,10 +52,12 @@ def _smooth_objective(
 ) -> float:
     xp = backend.xp
     n_batch = X.shape[0]
-    residual = y - X @ beta
+    residual = y - xp.matmul(X, beta)
     current_loss = xp.mean(huber_loss(residual, config.tau, xp))
     delta = beta - state.coefficients
-    historical_loss = 0.5 * (delta @ state.information @ delta) / n_batch
+    historical_loss = (
+        0.5 * xp.matmul(xp.matmul(delta, state.information), delta) / n_batch
+    )
     return backend.scalar(current_loss + historical_loss)
 
 
@@ -71,7 +74,7 @@ def _full_objective(
     xp = backend.xp
     result = _smooth_objective(X, y, beta, state, config, bandwidth, backend)
     if config.penalty == "l1":
-        mask = _penalty_mask(beta.shape[0], state.fit_intercept, xp, beta.dtype)
+        mask = _penalty_mask(beta, state.fit_intercept, xp)
         result += lambda_value * backend.scalar(xp.sum(xp.abs(beta) * mask))
     return result
 
@@ -87,12 +90,18 @@ def _gradient_and_hessian(
 ) -> tuple[Any, Any]:
     xp = backend.xp
     n_batch, n_parameters = X.shape
-    residual = y - X @ beta
+    residual = y - xp.matmul(X, beta)
     score = smoothed_score(residual, config.tau, bandwidth, xp)
     curvature = smoothed_curvature(residual, config.tau, bandwidth, xp)
     delta = beta - state.coefficients
-    gradient = -(X.T @ score) / n_batch + (state.information @ delta) / n_batch
-    hessian = (X.T @ (X * curvature[:, None]) + state.information) / n_batch
+    transposed = xp.transpose(X)
+    gradient = (
+        -xp.matmul(transposed, score) / n_batch
+        + xp.matmul(state.information, delta) / n_batch
+    )
+    hessian = (
+        xp.matmul(transposed, X * curvature[:, None]) + state.information
+    ) / n_batch
     hessian = hessian + config.ridge * xp.eye(n_parameters, dtype=beta.dtype)
     return gradient, hessian
 
@@ -143,7 +152,7 @@ def _solve_l1(
 
     xp = backend.xp
     beta = backend.copy(state.coefficients)
-    mask = _penalty_mask(beta.shape[0], state.fit_intercept, xp, beta.dtype)
+    mask = _penalty_mask(beta, state.fit_intercept, xp)
     smooth_objective = _smooth_objective(X, y, beta, state, config, bandwidth, backend)
     phi = 1.0
 
@@ -155,7 +164,7 @@ def _solve_l1(
             difference = candidate - beta
             upper_bound = (
                 smooth_objective
-                + backend.scalar(gradient @ difference)
+                + backend.scalar(xp.matmul(gradient, difference))
                 + 0.5 * phi * backend.norm(difference) ** 2
             )
             candidate_smooth = _smooth_objective(
@@ -201,9 +210,9 @@ def renewable_update(
         )
 
     xp = backend.xp
-    residual = y - X @ coefficients
+    residual = y - xp.matmul(X, coefficients)
     curvature = smoothed_curvature(residual, config.tau, bandwidth, xp)
-    information = state.information + X.T @ (X * curvature[:, None])
+    information = state.information + xp.matmul(xp.transpose(X), X * curvature[:, None])
     new_state = RenewableHuberState(
         coefficients=backend.copy(coefficients),
         information=backend.copy(information),
