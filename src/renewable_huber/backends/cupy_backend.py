@@ -97,6 +97,10 @@ class CuPyBackend:
         with self.xp.cuda.Device(self.device_id):
             return self.xp.asarray(value, dtype=self.dtype)
 
+    def copy(self, value: Any) -> Any:
+        with self.xp.cuda.Device(self.device_id):
+            return value.copy()
+
     def to_numpy(self, value: Any) -> Any:
         return self.xp.asnumpy(value)
 

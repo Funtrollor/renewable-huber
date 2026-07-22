@@ -72,7 +72,7 @@ class RenewableHuberRegressorTests(unittest.TestCase):
         with self.assertRaises(NotFittedError):
             RenewableHuberRegressor().predict(self.X)
         with self.assertRaises(BackendUnavailableError):
-            RenewableHuberRegressor(backend="torch").fit(self.X, self.y)
+            RenewableHuberRegressor(backend="tensorflow").fit(self.X, self.y)
 
 
 if __name__ == "__main__":

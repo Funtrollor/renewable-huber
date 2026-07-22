@@ -19,7 +19,7 @@ RenewableHuberRegressor
 | --- | --- | --- |
 | `backend="numpy"` | 支援 | 以連結的 BLAS/LAPACK 執行 CPU 線性代數。 |
 | `backend="cupy"` | 支援 | 資料、係數與資訊矩陣長駐 CUDA；避免每個 batch 回傳 NumPy。 |
-| `backend="torch"` | 保留 | 接受原生 Torch tensor，保留 device 與 dtype。 |
+| `backend="torch"` | 支援 | 接受原生 Torch tensor，支援明確指定的 CPU 或 CUDA device。 |
 | `backend="tensorflow"` | 保留 | 接受原生 TensorFlow tensor；不混用 eager/graph state。 |
 
 CuPy implementation 必須通過與 NumPy reference 的數值一致性測試才能列為支援。不同框架在相同裝置上交換資料時，adapter 層才使用 DLPack；API 層不得無提示轉換或同步 GPU。

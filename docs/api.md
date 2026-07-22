@@ -56,4 +56,4 @@ fit_intercept      # 設計矩陣是否加入截距欄
 
 ## 版本界線
 
-v0.2 正式支援 NumPy CPU 與 CuPy CUDA。`backend="cupy"` 需要安裝 CUDA 12 版 extra，且 `predict` 會回傳 `cupy.ndarray`，不會隱性複製回 CPU。`"torch"` 與 `"tensorflow"` 仍會明確拋出 `BackendUnavailableError`。
+v0.3 正式支援 NumPy CPU、CuPy CUDA 與 PyTorch CPU/CUDA。`backend="cupy"` 需要安裝 CUDA 12 版 extra，且 `predict` 會回傳 `cupy.ndarray`，不會隱性複製回 CPU。`backend="torch"` 需要安裝 PyTorch，`device="auto"` 保持在 CPU，明確指定 `device="cuda"` 時才使用 CUDA。TensorFlow 仍會明確拋出 `BackendUnavailableError`。
