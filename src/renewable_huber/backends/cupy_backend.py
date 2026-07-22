@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..exceptions import BackendUnavailableError
+from ._cuda_kernels import CudaKernels
 
 
 class CuPyBackend:
@@ -44,6 +45,9 @@ class CuPyBackend:
         self._cuda_dll_directory = self._configure_windows_cuda_dll_path()
         self.device_id = int(cp.cuda.runtime.getDevice())
         self.device = f"cuda:{self.device_id}"
+        self._cuda_kernels: CudaKernels | None = None
+        self._cuda_kernels_attempted = False
+        self._cuda_kernel_error: Exception | None = None
         self._validate_linear_algebra()
 
     def _configure_windows_cuda_dll_path(self) -> Any | None:
@@ -125,3 +129,69 @@ class CuPyBackend:
 
     def synchronize(self) -> None:
         self.xp.cuda.get_current_stream(self.device_id).synchronize()
+
+    @property
+    def cuda_kernels_available(self) -> bool:
+        """Whether the optional NVRTC-compiled CUDA C++ fast path is usable."""
+
+        return self._get_cuda_kernels() is not None
+
+    @property
+    def cuda_kernel_error(self) -> Exception | None:
+        """Compilation error retained when the backend falls back to generic CuPy."""
+
+        self._get_cuda_kernels()
+        return self._cuda_kernel_error
+
+    def cuda_huber_loss(self, residual: Any, tau: float) -> Any | None:
+        """Evaluate elementwise Huber loss with one CUDA C++ kernel."""
+
+        kernels = self._get_cuda_kernels()
+        if kernels is None:
+            return None
+        with self.xp.cuda.Device(self.device_id):
+            return kernels.huber_loss(residual, tau)
+
+    def cuda_smoothed_score(self, residual: Any, tau: float, bandwidth: float) -> Any | None:
+        """Evaluate score with one CUDA C++ kernel when its input is supported."""
+
+        kernels = self._get_cuda_kernels()
+        if kernels is None:
+            return None
+        with self.xp.cuda.Device(self.device_id):
+            return kernels.smoothed_score(residual, tau, bandwidth)
+
+    def cuda_smoothed_curvature(self, residual: Any, tau: float, bandwidth: float) -> Any | None:
+        """Evaluate curvature with one CUDA C++ kernel when its input is supported."""
+
+        kernels = self._get_cuda_kernels()
+        if kernels is None:
+            return None
+        with self.xp.cuda.Device(self.device_id):
+            return kernels.smoothed_curvature(residual, tau, bandwidth)
+
+    def cuda_smoothed_terms(
+        self, residual: Any, tau: float, bandwidth: float
+    ) -> tuple[Any, Any] | None:
+        """Evaluate score and curvature together in one CUDA C++ kernel."""
+
+        kernels = self._get_cuda_kernels()
+        if kernels is None:
+            return None
+        with self.xp.cuda.Device(self.device_id):
+            return kernels.smoothed_terms(residual, tau, bandwidth)
+
+    def _get_cuda_kernels(self) -> CudaKernels | None:
+        """Compile the internal CUDA C++ module once and retain a safe fallback."""
+
+        if self._cuda_kernels_attempted:
+            return self._cuda_kernels
+        self._cuda_kernels_attempted = True
+        try:
+            with self.xp.cuda.Device(self.device_id):
+                self._cuda_kernels = CudaKernels(self.xp)
+        except Exception as error:
+            # The generic CuPy expressions remain a correct route on unusual
+            # drivers, CUDA versions, or environments without NVRTC.
+            self._cuda_kernel_error = error
+        return self._cuda_kernels

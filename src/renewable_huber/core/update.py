@@ -82,6 +82,56 @@ def _gradient_from_score(
     return -xp.matmul(transposed, score) / n_batch + xp.matmul(state.information, delta) / n_batch
 
 
+def _smoothed_score(
+    residual: Any, config: EstimatorConfig, bandwidth: float, backend: ArrayBackend
+) -> Any:
+    """Use a fused CUDA C++ score kernel when the active backend provides one."""
+
+    accelerated_score = getattr(backend, "cuda_smoothed_score", None)
+    if accelerated_score is not None:
+        score = accelerated_score(residual, config.tau, bandwidth)
+        if score is not None:
+            return score
+    return smoothed_score(residual, config.tau, bandwidth, backend.xp)
+
+
+def _huber_loss(residual: Any, tau: float, backend: ArrayBackend) -> Any:
+    """Use the CUDA C++ Huber-loss kernel when the active backend provides one."""
+
+    accelerated_loss = getattr(backend, "cuda_huber_loss", None)
+    if accelerated_loss is not None:
+        loss = accelerated_loss(residual, tau)
+        if loss is not None:
+            return loss
+    return huber_loss(residual, tau, backend.xp)
+
+
+def _smoothed_curvature(
+    residual: Any, config: EstimatorConfig, bandwidth: float, backend: ArrayBackend
+) -> Any:
+    """Use a fused CUDA C++ curvature kernel when the active backend provides one."""
+
+    accelerated_curvature = getattr(backend, "cuda_smoothed_curvature", None)
+    if accelerated_curvature is not None:
+        curvature = accelerated_curvature(residual, config.tau, bandwidth)
+        if curvature is not None:
+            return curvature
+    return smoothed_curvature(residual, config.tau, bandwidth, backend.xp)
+
+
+def _smoothed_score_and_curvature(
+    residual: Any, config: EstimatorConfig, bandwidth: float, backend: ArrayBackend
+) -> tuple[Any, Any]:
+    """Use one fused CUDA C++ launch for both smoothed Huber terms when available."""
+
+    accelerated_terms = getattr(backend, "cuda_smoothed_terms", None)
+    if accelerated_terms is not None:
+        terms = accelerated_terms(residual, config.tau, bandwidth)
+        if terms is not None:
+            return terms
+    return smoothed_score_and_curvature(residual, config.tau, bandwidth, backend.xp)
+
+
 def _gradient(
     X: Any,
     y: Any,
@@ -95,7 +145,7 @@ def _gradient(
 
     xp = backend.xp
     residual = y - xp.matmul(X, beta)
-    score = smoothed_score(residual, config.tau, bandwidth, xp)
+    score = _smoothed_score(residual, config, bandwidth, backend)
     return _gradient_from_score(X, score, beta, state, backend)
 
 
@@ -111,7 +161,7 @@ def _smooth_objective(
     xp = backend.xp
     n_batch = X.shape[0]
     residual = y - xp.matmul(X, beta)
-    current_loss = xp.mean(huber_loss(residual, config.tau, xp))
+    current_loss = xp.mean(_huber_loss(residual, config.tau, backend))
     delta = beta - state.coefficients
     historical_loss = 0.5 * xp.matmul(xp.matmul(delta, state.information), delta) / n_batch
     return backend.scalar(current_loss + historical_loss)
@@ -131,7 +181,7 @@ def _gradient_and_hessian(
     xp = backend.xp
     n_batch, n_parameters = X.shape
     residual = y - xp.matmul(X, beta)
-    score, curvature = smoothed_score_and_curvature(residual, config.tau, bandwidth, xp)
+    score, curvature = _smoothed_score_and_curvature(residual, config, bandwidth, backend)
     gradient = _gradient_from_score(X, score, beta, state, backend)
     hessian = _weighted_gram(X, curvature, backend, workspace=workspace) + state.information
     hessian = hessian / n_batch
@@ -235,7 +285,7 @@ def renewable_update(
     bandwidth = _bandwidth(n_total, n_predictors, config.bandwidth_scale)
     lambda_value = _lambda(n_total, n_predictors, config)
     workspace = None
-    if config.penalty == "none" and backend.name == "numpy":
+    if config.penalty == "none" and backend.name in {"numpy", "cupy"}:
         workspace = backend.xp.empty_like(X)
 
     if config.penalty == "l1":
@@ -249,7 +299,7 @@ def renewable_update(
 
     xp = backend.xp
     residual = y - xp.matmul(X, coefficients)
-    curvature = smoothed_curvature(residual, config.tau, bandwidth, xp)
+    curvature = _smoothed_curvature(residual, config, bandwidth, backend)
     information = state.information + _weighted_gram(X, curvature, backend, workspace=workspace)
     new_state = RenewableHuberState(
         coefficients=backend.copy(coefficients),
