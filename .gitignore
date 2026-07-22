@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Packaging and test artifacts
+build/
+dist/
+*.egg-info/
+.coverage
+coverage.xml
+htmlcov/
+.gpu_test_packages/
+
+# Local / external data
+artifacts/
+archives/
+data/
+data/external/*.xlsx
+legacy/
+models/
+notebooks/
+scripts/diagnostics/
+scripts/prototypes/
+scripts/wildfire/
+
+# Local research material and tooling state
+.agents/
+.ruff_cache/
+docs/references/
+docs/reports/
