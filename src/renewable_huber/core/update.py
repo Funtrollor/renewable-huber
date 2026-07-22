@@ -105,7 +105,7 @@ def _solve_unpenalized(
     bandwidth: float,
     backend: ArrayBackend,
 ) -> tuple[Any, int, bool]:
-    beta = state.coefficients.copy()
+    beta = backend.copy(state.coefficients)
     objective = _smooth_objective(X, y, beta, state, config, bandwidth, backend)
     for iteration in range(1, config.max_iter + 1):
         gradient, hessian = _gradient_and_hessian(X, y, beta, state, config, bandwidth, backend)
@@ -142,7 +142,7 @@ def _solve_l1(
     """Solve the penalised surrogate with LAMM/proximal-gradient steps."""
 
     xp = backend.xp
-    beta = state.coefficients.copy()
+    beta = backend.copy(state.coefficients)
     mask = _penalty_mask(beta.shape[0], state.fit_intercept, xp, beta.dtype)
     smooth_objective = _smooth_objective(X, y, beta, state, config, bandwidth, backend)
     phi = 1.0
@@ -205,8 +205,8 @@ def renewable_update(
     curvature = smoothed_curvature(residual, config.tau, bandwidth, xp)
     information = state.information + X.T @ (X * curvature[:, None])
     new_state = RenewableHuberState(
-        coefficients=coefficients.copy(),
-        information=information.copy(),
+        coefficients=backend.copy(coefficients),
+        information=backend.copy(information),
         n_samples_seen=n_total,
         batch_count=state.batch_count + 1,
         previous_lambda=lambda_value,

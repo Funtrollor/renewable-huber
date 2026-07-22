@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike
 
 from .backends import ArrayBackend, resolve_backend
 from .config import BackendName, DeviceName, DTypeName, EstimatorConfig, Penalty
@@ -19,8 +19,8 @@ class RenewableHuberRegressor:
     """Robust linear regression that can be updated one batch at a time.
 
     Parameters mirror :class:`~renewable_huber.config.EstimatorConfig`.  The
-    estimator executes on NumPy or, when installed and selected, CuPy/CUDA.
-    PyTorch and TensorFlow names remain reserved for subsequent releases.
+    estimator executes on NumPy, CuPy/CUDA, or PyTorch tensors on CPU/CUDA.
+    TensorFlow remains reserved for a subsequent release.
 
     Notes
     -----
@@ -136,7 +136,7 @@ class RenewableHuberRegressor:
         self._sync_public_coefficients()
         return self
 
-    def predict(self, X: ArrayLike) -> NDArray[np.float64]:
+    def predict(self, X: ArrayLike) -> Any:
         """Predict with the current streamed estimator state."""
 
         state = self._require_state()
@@ -280,11 +280,12 @@ class RenewableHuberRegressor:
 
     def _sync_public_coefficients(self) -> None:
         state = self._require_state()
+        backend = self._require_backend()
         if state.fit_intercept:
-            self.coef_ = state.coefficients[:-1].copy()
-            self.intercept_ = self._require_backend().scalar(state.coefficients[-1])
+            self.coef_ = backend.copy(state.coefficients[:-1])
+            self.intercept_ = backend.scalar(state.coefficients[-1])
         else:
-            self.coef_ = state.coefficients.copy()
+            self.coef_ = backend.copy(state.coefficients)
             self.intercept_ = 0.0
 
     def _require_state(self) -> RenewableHuberState:

@@ -43,8 +43,8 @@ class RenewableHuberState:
         """Return an independent copy suitable for inspection by callers."""
 
         return RenewableHuberState(
-            coefficients=self.coefficients.copy(),
-            information=self.information.copy(),
+            coefficients=_copy_array(self.coefficients),
+            information=_copy_array(self.information),
             n_samples_seen=self.n_samples_seen,
             batch_count=self.batch_count,
             previous_lambda=self.previous_lambda,
@@ -62,3 +62,11 @@ class RenewableHuberState:
             raise ValidationError("state information shape does not match feature metadata")
         if self.n_samples_seen < 0 or self.batch_count < 0:
             raise ValidationError("state counters must be non-negative")
+
+
+def _copy_array(value: Any) -> Any:
+    """Copy NumPy/CuPy-style arrays and PyTorch tensors without importing either."""
+
+    if clone := getattr(value, "clone", None):
+        return clone()
+    return value.copy()

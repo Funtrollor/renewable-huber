@@ -56,4 +56,4 @@ def smoothed_curvature(residual: Any, tau: float, bandwidth: float, xp: Any) -> 
 def soft_threshold(values: Any, threshold: Any, xp: Any) -> Any:
     """Apply elementwise soft-thresholding for L1-penalised updates."""
 
-    return xp.sign(values) * xp.maximum(xp.abs(values) - threshold, 0.0)
+    return xp.sign(values) * xp.maximum(xp.abs(values) - threshold, xp.zeros_like(values))

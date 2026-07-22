@@ -22,6 +22,9 @@ class NumPyBackend:
             value = value.to_numpy()
         return np.asarray(value, dtype=self.dtype)
 
+    def copy(self, value: np.ndarray) -> np.ndarray:
+        return value.copy()
+
     def to_numpy(self, value: Any) -> np.ndarray:
         return np.asarray(value)
 

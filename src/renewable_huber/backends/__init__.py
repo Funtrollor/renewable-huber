@@ -27,9 +27,13 @@ def resolve_backend(name: str, *, device: str = "auto", dtype: str = "float64") 
         from .cupy_backend import CuPyBackend
 
         return CuPyBackend(dtype)
-    if name in {"torch", "tensorflow"}:
+    if name == "torch":
+        from .torch_backend import TorchBackend
+
+        return TorchBackend(dtype, device)
+    if name == "tensorflow":
         raise BackendUnavailableError(
-            f"The '{name}' backend is part of the public API but is not implemented yet. "
+            "The 'tensorflow' backend is part of the public API but is not implemented yet. "
             "Use backend='numpy' for the reference implementation."
         )
     raise BackendUnavailableError(f"Unknown backend: {name!r}")
