@@ -201,6 +201,7 @@ class RenewableHuberRegressor:
     def _restore_state(self, state: RenewableHuberState) -> None:
         state.validate()
         config = self._config()
+        config.validate()
         if state.fit_intercept != config.fit_intercept:
             raise ValidationError("checkpoint fit_intercept does not match configuration")
         self._backend = resolve_backend(config.backend, device=config.device, dtype=config.dtype)

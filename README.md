@@ -4,6 +4,8 @@
 
 目前版本是 **v0.5.0 pre-alpha**：提供 NumPy/CPU、CuPy/CUDA、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 scikit-learn Pipeline 與模型選擇工具。
 
+`backend="auto"` 採用可預期的裝置規則：一般情況固定選擇 NumPy/CPU，只有明確指定 `device="cuda"` 才選擇 CuPy。它不會根據傳入的 PyTorch 或 TensorFlow tensor 自動猜測 backend；需要這些框架時請明確設定 `backend="torch"` 或 `backend="tensorflow"`。完整支援範圍請見[支援矩陣](docs/support-matrix.md)。
+
 ## 安裝
 
 開發中的本地安裝：
@@ -62,7 +64,7 @@ import torch
 
 torch_model = RenewableHuberRegressor(backend="torch", device="cuda", dtype="float32")
 torch_model.partial_fit(torch.as_tensor(X_batch, device="cuda"), torch.as_tensor(y_batch, device="cuda"))
-torch_prediction = torch_model.predict(torch.as_tensor(X_test, device="cuda"))  # torch.Tensor
+torch_prediction = torch_model.predict(torch.as_tensor(X_test, device="cuda"))  # detached torch.Tensor
 ```
 
 TensorFlow backend 使用 eager execution，並同樣支援原生 `tf.Tensor`：
@@ -100,6 +102,8 @@ prediction = pipeline.predict(X_test)
 
 `numpy.ndarray` 與具有 `.to_numpy()` 的表格物件（如 `pandas.DataFrame` / `Series`）可直接作為輸入。`fit(X, y)` 會重置模型後處理單一批次；真正的串流工作流應重複呼叫 `partial_fit(X_batch, y_batch)`。
 
+PyTorch 輸入會先 `detach`，本套件不是 autograd layer；TensorFlow backend 僅支援 eager execution，不能直接放入 `tf.function`。串流更新會使用前一批的係數與資訊矩陣，因此批次切法與資料順序屬於計算的一部分，不保證與整批 `fit` 或另一種排列得到逐位元相同的結果。
+
 ## 專案結構
 
 ```text
@@ -114,10 +118,12 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 ## 文件與研究來源
 
 - [公開 API 與 state 合約](docs/api.md)
-- [架構與 GPU 後端規劃](docs/architecture.md)
+- [支援矩陣與限制](docs/support-matrix.md)
+- [套件架構與運算路徑](docs/architecture.md)
+- [CUDA 效能路徑](docs/gpu-performance.md)
 - [發布前檢查表](docs/release-checklist.md)
-- [技術報告](docs/reports/Technical_Report.pdf)
-- [Renewable Huber 原始論文](docs/references/Jiang_Liang_Yu_2024_Renewable_Huber_Estimation.pdf)
+- 技術報告 `docs/reports/Technical_Report.pdf` 是本機專案資料，刻意排除於 Git repository 與發佈套件之外；請向專案維護者取得。
+- [Renewable Huber 原始論文（Electronic Journal of Statistics，DOI）](https://doi.org/10.1214/24-EJS2223)
 
 ## 開發與驗證
 

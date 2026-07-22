@@ -45,9 +45,9 @@ class RenewableHuberRegressorTests(unittest.TestCase):
         rng = np.random.default_rng(7)
         X = rng.normal(size=(180, 12))
         y = 3.0 * X[:, 0] - 2.0 * X[:, 1] + 1.0
-        model = RenewableHuberRegressor(
-            penalty="l1", lambda_scale=1.0, max_iter=150, tol=1e-7
-        ).fit(X, y)
+        model = RenewableHuberRegressor(penalty="l1", lambda_scale=1.0, max_iter=150, tol=1e-7).fit(
+            X, y
+        )
 
         self.assertGreater(model.diagnostics_.lambda_value, 0.0)
         self.assertGreaterEqual(np.count_nonzero(np.abs(model.coef_) < 1e-10), 8)

@@ -7,7 +7,12 @@ import numpy as np
 
 from renewable_huber import RenewableHuberRegressor
 from renewable_huber.backends.cupy_backend import CuPyBackend
-from renewable_huber.core.loss import huber_loss, smoothed_score_and_curvature
+from renewable_huber.core.loss import (
+    huber_loss,
+    huber_score,
+    smoothed_curvature,
+    smoothed_score_and_curvature,
+)
 
 
 def _cupy_ready() -> bool:
@@ -30,7 +35,7 @@ class CudaKernelTests(unittest.TestCase):
     def test_fused_terms_match_generic_cupy_at_piecewise_boundaries(self) -> None:
         tau = 1.25
         bandwidth = 0.2
-        h = min(bandwidth, tau * 0.5)
+        h = min(bandwidth, tau)
         values = np.asarray(
             [
                 -3.0,
@@ -62,6 +67,21 @@ class CudaKernelTests(unittest.TestCase):
                     actual_loss, huber_loss(residual, tau, self.cp), rtol=2e-6, atol=2e-6
                 )
 
+                current_terms = backend.cuda_huber_score_and_smoothed_curvature(
+                    residual, tau, bandwidth
+                )
+                self.assertIsNotNone(current_terms)
+                current_score, historical_curvature = current_terms
+                self.cp.testing.assert_allclose(
+                    current_score, huber_score(residual, tau, self.cp), rtol=2e-6, atol=2e-6
+                )
+                self.cp.testing.assert_allclose(
+                    historical_curvature,
+                    smoothed_curvature(residual, tau, bandwidth, self.cp),
+                    rtol=2e-6,
+                    atol=2e-6,
+                )
+
     def test_unpenalized_gpu_update_reuses_one_weighted_gram_workspace(self) -> None:
         from renewable_huber.core import update
 
@@ -83,6 +103,7 @@ class CudaKernelTests(unittest.TestCase):
         workspace = observed_workspaces[0]
         self.assertIsInstance(workspace, self.cp.ndarray)
         self.assertTrue(all(candidate is workspace for candidate in observed_workspaces))
+
 
 if __name__ == "__main__":
     unittest.main()

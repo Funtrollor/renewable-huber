@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from math import isfinite
+from numbers import Integral, Real
 from typing import Literal
 
 from .exceptions import ValidationError
@@ -34,28 +36,40 @@ class EstimatorConfig:
     dtype: DTypeName = "float64"
 
     def validate(self) -> None:
-        if self.tau <= 0:
+        if not _is_finite_real(self.tau) or self.tau <= 0:
             raise ValidationError("tau must be greater than zero")
-        if self.penalty not in {"none", "l1"}:
+        if self.penalty not in ("none", "l1"):
             raise ValidationError("penalty must be either 'none' or 'l1'")
-        if self.lambda_scale < 0:
+        if not _is_finite_real(self.lambda_scale) or self.lambda_scale < 0:
             raise ValidationError("lambda_scale must be non-negative")
-        if self.bandwidth_scale <= 0:
+        if not _is_finite_real(self.bandwidth_scale) or self.bandwidth_scale <= 0:
             raise ValidationError("bandwidth_scale must be greater than zero")
-        if self.max_iter < 1:
+        if (
+            isinstance(self.max_iter, bool)
+            or not isinstance(self.max_iter, Integral)
+            or self.max_iter < 1
+        ):
             raise ValidationError("max_iter must be at least one")
-        if self.tol <= 0:
+        if not isinstance(self.fit_intercept, bool):
+            raise ValidationError("fit_intercept must be a boolean")
+        if not _is_finite_real(self.tol) or self.tol <= 0:
             raise ValidationError("tol must be greater than zero")
-        if self.ridge < 0:
+        if not _is_finite_real(self.ridge) or self.ridge < 0:
             raise ValidationError("ridge must be non-negative")
-        if self.backend not in {"auto", "numpy", "cupy", "torch", "tensorflow"}:
+        if self.backend not in ("auto", "numpy", "cupy", "torch", "tensorflow"):
             raise ValidationError("unsupported backend")
-        if self.device not in {"auto", "cpu", "cuda"}:
+        if self.device not in ("auto", "cpu", "cuda"):
             raise ValidationError("device must be 'auto', 'cpu', or 'cuda'")
-        if self.dtype not in {"float32", "float64"}:
+        if self.dtype not in ("float32", "float64"):
             raise ValidationError("dtype must be either 'float32' or 'float64'")
 
     def to_dict(self) -> dict[str, object]:
         """Return JSON-compatible configuration metadata."""
 
         return asdict(self)
+
+
+def _is_finite_real(value: object) -> bool:
+    """Reject booleans, non-numeric values, NaN, and infinities uniformly."""
+
+    return isinstance(value, Real) and not isinstance(value, bool) and isfinite(float(value))

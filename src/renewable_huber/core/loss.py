@@ -18,19 +18,30 @@ def huber_loss(residual: Any, tau: float, xp: Any) -> Any:
     )
 
 
+def huber_score(residual: Any, tau: float, xp: Any) -> Any:
+    """Return the ordinary Huber score used for the arriving batch."""
+
+    if xp is np:
+        return np.clip(residual, -tau, tau)
+    absolute = xp.abs(residual)
+    return xp.where(absolute <= tau, residual, tau * xp.sign(residual))
+
+
 def smoothed_score(residual: Any, tau: float, bandwidth: float, xp: Any) -> Any:
     """Smooth the Huber score over a bandwidth around ``±tau``.
 
-    The piecewise-linear transition is continuous with the ordinary score and
-    has a bounded second derivative, which is required for the renewable update.
+    The quadratic transition from Jiang, Liang, and Yu (2024), equation (2.1),
+    is continuous with the ordinary score and has continuous bounded curvature.
     """
 
     if xp is np:
         return _numpy_smoothed_score(residual, tau, bandwidth)
 
-    h = min(bandwidth, tau * 0.5)
-    left = 0.5 * (residual - tau + h)
-    right = 0.5 * (residual + tau - h)
+    h = min(bandwidth, tau)
+    negative_offset = residual + tau
+    positive_offset = tau - residual
+    left = h / 4.0 - tau + 0.5 * negative_offset + negative_offset**2 / (4.0 * h)
+    right = -(h / 4.0 - tau + 0.5 * positive_offset + positive_offset**2 / (4.0 * h))
     return xp.where(
         residual < -tau - h,
         -tau,
@@ -48,16 +59,21 @@ def smoothed_curvature(residual: Any, tau: float, bandwidth: float, xp: Any) -> 
     if xp is np:
         return _numpy_smoothed_curvature(residual, tau, bandwidth)
 
-    h = min(bandwidth, tau * 0.5)
-    in_transition = ((residual >= -tau - h) & (residual <= -tau + h)) | (
-        (residual >= tau - h) & (residual <= tau + h)
-    )
-    in_center = (residual > -tau + h) & (residual < tau - h)
-    zeros = xp.zeros_like(residual)
+    h = min(bandwidth, tau)
+    left = 0.5 + (residual + tau) / (2.0 * h)
+    right = 0.5 - (residual - tau) / (2.0 * h)
     return xp.where(
-        in_center,
-        xp.ones_like(residual),
-        xp.where(in_transition, 0.5 * xp.ones_like(residual), zeros),
+        residual < -tau - h,
+        xp.zeros_like(residual),
+        xp.where(
+            residual <= -tau + h,
+            left,
+            xp.where(
+                residual < tau - h,
+                xp.ones_like(residual),
+                xp.where(residual <= tau + h, right, xp.zeros_like(residual)),
+            ),
+        ),
     )
 
 
@@ -75,28 +91,30 @@ def smoothed_score_and_curvature(
 
 
 def _numpy_smoothed_score(residual: np.ndarray, tau: float, bandwidth: float) -> np.ndarray:
-    """Compute the piecewise score without nested temporary ``where`` arrays."""
+    """Compute the paper's quadratic transition score without nested ``where`` arrays."""
 
-    h = min(bandwidth, tau * 0.5)
+    h = min(bandwidth, tau)
     score = np.clip(residual, -tau, tau)
     left = (residual >= -tau - h) & (residual <= -tau + h)
     right = (residual >= tau - h) & (residual <= tau + h)
-    score[left] = 0.5 * (residual[left] - tau + h)
-    score[right] = 0.5 * (residual[right] + tau - h)
+    negative_offset = residual[left] + tau
+    positive_offset = tau - residual[right]
+    score[left] = h / 4.0 - tau + 0.5 * negative_offset + negative_offset**2 / (4.0 * h)
+    score[right] = -(h / 4.0 - tau + 0.5 * positive_offset + positive_offset**2 / (4.0 * h))
     return score
 
 
 def _numpy_smoothed_curvature(residual: np.ndarray, tau: float, bandwidth: float) -> np.ndarray:
-    """Compute curvature in place with one mask at a time."""
+    """Compute the continuous transition curvature in place one mask at a time."""
 
-    h = min(bandwidth, tau * 0.5)
+    h = min(bandwidth, tau)
     curvature = np.zeros_like(residual)
     center = (residual > -tau + h) & (residual < tau - h)
     curvature[center] = 1.0
     left = (residual >= -tau - h) & (residual <= -tau + h)
     right = (residual >= tau - h) & (residual <= tau + h)
-    curvature[left] = 0.5
-    curvature[right] = 0.5
+    curvature[left] = 0.5 + (residual[left] + tau) / (2.0 * h)
+    curvature[right] = 0.5 - (residual[right] - tau) / (2.0 * h)
     return curvature
 
 
@@ -105,17 +123,19 @@ def _numpy_smoothed_score_and_curvature(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute both NumPy terms while sharing the transition masks."""
 
-    h = min(bandwidth, tau * 0.5)
+    h = min(bandwidth, tau)
     score = np.clip(residual, -tau, tau)
     curvature = np.zeros_like(residual)
     center = (residual > -tau + h) & (residual < tau - h)
     curvature[center] = 1.0
     left = (residual >= -tau - h) & (residual <= -tau + h)
     right = (residual >= tau - h) & (residual <= tau + h)
-    score[left] = 0.5 * (residual[left] - tau + h)
-    score[right] = 0.5 * (residual[right] + tau - h)
-    curvature[left] = 0.5
-    curvature[right] = 0.5
+    negative_offset = residual[left] + tau
+    positive_offset = tau - residual[right]
+    score[left] = h / 4.0 - tau + 0.5 * negative_offset + negative_offset**2 / (4.0 * h)
+    score[right] = -(h / 4.0 - tau + 0.5 * positive_offset + positive_offset**2 / (4.0 * h))
+    curvature[left] = 0.5 + negative_offset / (2.0 * h)
+    curvature[right] = 0.5 + positive_offset / (2.0 * h)
     return score, curvature
 
 

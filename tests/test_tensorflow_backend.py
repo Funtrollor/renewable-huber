@@ -29,9 +29,7 @@ class TensorFlowBackendTests(unittest.TestCase):
 
     def test_cpu_tensors_match_numpy_streamed_updates(self) -> None:
         numpy_model = RenewableHuberRegressor(max_iter=100)
-        tensorflow_model = RenewableHuberRegressor(
-            backend="tensorflow", device="cpu", max_iter=100
-        )
+        tensorflow_model = RenewableHuberRegressor(backend="tensorflow", device="cpu", max_iter=100)
         for X_batch, y_batch in ((self.X[:80], self.y[:80]), (self.X[80:], self.y[80:])):
             numpy_model.partial_fit(X_batch, y_batch)
             tensorflow_model.partial_fit(

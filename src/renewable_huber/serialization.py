@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .exceptions import ValidationError
 from .state import RenewableHuberState
 
 if TYPE_CHECKING:
@@ -47,19 +48,39 @@ def load_model(path: str | Path) -> RenewableHuberRegressor:
     from .estimator import RenewableHuberRegressor
 
     source = Path(path)
-    with np.load(source, allow_pickle=False) as archive:
-        metadata = json.loads(str(archive["metadata"].item()))
-        if metadata.get("format_version") != FORMAT_VERSION:
-            raise ValueError("Unsupported renewable-huber checkpoint format")
-        state = RenewableHuberState(
-            coefficients=np.asarray(archive["coefficients"], dtype=np.float64),
-            information=np.asarray(archive["information"], dtype=np.float64),
-            n_samples_seen=int(metadata["n_samples_seen"]),
-            batch_count=int(metadata["batch_count"]),
-            previous_lambda=float(metadata["previous_lambda"]),
-            n_features_in=int(metadata["n_features_in"]),
-            fit_intercept=bool(metadata["fit_intercept"]),
-        )
-    model = RenewableHuberRegressor(**metadata["config"])
+    try:
+        with np.load(source, allow_pickle=False) as archive:
+            metadata = json.loads(str(archive["metadata"].item()))
+            if metadata.get("format_version") != FORMAT_VERSION:
+                raise ValidationError("Unsupported renewable-huber checkpoint format")
+            state = RenewableHuberState(
+                coefficients=np.asarray(archive["coefficients"], dtype=np.float64),
+                information=np.asarray(archive["information"], dtype=np.float64),
+                n_samples_seen=int(metadata["n_samples_seen"]),
+                batch_count=int(metadata["batch_count"]),
+                previous_lambda=float(metadata["previous_lambda"]),
+                n_features_in=int(metadata["n_features_in"]),
+                fit_intercept=bool(metadata["fit_intercept"]),
+            )
+    except FileNotFoundError:
+        raise
+    except ValidationError:
+        raise
+    except (
+        AttributeError,
+        EOFError,
+        IndexError,
+        KeyError,
+        OSError,
+        OverflowError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise ValidationError("Invalid or corrupted renewable-huber checkpoint") from error
+
+    try:
+        model = RenewableHuberRegressor(**metadata["config"])
+    except (KeyError, TypeError) as error:
+        raise ValidationError("Invalid renewable-huber checkpoint configuration") from error
     model._restore_state(state)
     return model

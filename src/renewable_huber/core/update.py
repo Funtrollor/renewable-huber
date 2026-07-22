@@ -11,9 +11,8 @@ from ..config import EstimatorConfig
 from ..state import RenewableHuberState
 from .loss import (
     huber_loss,
+    huber_score,
     smoothed_curvature,
-    smoothed_score,
-    smoothed_score_and_curvature,
     soft_threshold,
 )
 
@@ -29,8 +28,10 @@ class UpdateDiagnostics:
     bandwidth: float
 
 
-def _bandwidth(n_total: int, n_predictors: int, scale: float) -> float:
-    return scale / (sqrt(n_total) * log(max(n_predictors, 2)))
+def _bandwidth(n_total: int, n_predictors: int, scale: float, tau: float) -> float:
+    """Return the paper bandwidth, capped only where its transition regions meet."""
+
+    return min(scale / (sqrt(n_total) * log(max(n_predictors, 2))), tau)
 
 
 def _lambda(n_total: int, n_predictors: int, config: EstimatorConfig) -> float:
@@ -71,28 +72,29 @@ def _gradient_from_score(
     score: Any,
     beta: Any,
     state: RenewableHuberState,
+    config: EstimatorConfig,
     backend: ArrayBackend,
 ) -> Any:
     """Evaluate the smooth surrogate gradient after the score is available."""
 
     xp = backend.xp
-    n_batch = X.shape[0]
+    n_total = state.n_samples_seen + X.shape[0]
     delta = beta - state.coefficients
     transposed = xp.transpose(X)
-    return -xp.matmul(transposed, score) / n_batch + xp.matmul(state.information, delta) / n_batch
+    gradient = (-xp.matmul(transposed, score) + xp.matmul(state.information, delta)) / n_total
+    if config.penalty == "l1" and state.n_samples_seen:
+        mask = _penalty_mask(state.coefficients, state.fit_intercept, xp)
+        historical_subgradient = xp.sign(state.coefficients) * mask
+        gradient = gradient - (
+            state.n_samples_seen / n_total * state.previous_lambda * historical_subgradient
+        )
+    return gradient
 
 
-def _smoothed_score(
-    residual: Any, config: EstimatorConfig, bandwidth: float, backend: ArrayBackend
-) -> Any:
-    """Use a fused CUDA C++ score kernel when the active backend provides one."""
+def _huber_score(residual: Any, tau: float, backend: ArrayBackend) -> Any:
+    """Return the ordinary Huber score for the current batch."""
 
-    accelerated_score = getattr(backend, "cuda_smoothed_score", None)
-    if accelerated_score is not None:
-        score = accelerated_score(residual, config.tau, bandwidth)
-        if score is not None:
-            return score
-    return smoothed_score(residual, config.tau, bandwidth, backend.xp)
+    return huber_score(residual, tau, backend.xp)
 
 
 def _huber_loss(residual: Any, tau: float, backend: ArrayBackend) -> Any:
@@ -119,17 +121,20 @@ def _smoothed_curvature(
     return smoothed_curvature(residual, config.tau, bandwidth, backend.xp)
 
 
-def _smoothed_score_and_curvature(
+def _huber_score_and_smoothed_curvature(
     residual: Any, config: EstimatorConfig, bandwidth: float, backend: ArrayBackend
 ) -> tuple[Any, Any]:
-    """Use one fused CUDA C++ launch for both smoothed Huber terms when available."""
+    """Evaluate the paper's current score and historical-information curvature."""
 
-    accelerated_terms = getattr(backend, "cuda_smoothed_terms", None)
+    accelerated_terms = getattr(backend, "cuda_huber_score_and_smoothed_curvature", None)
     if accelerated_terms is not None:
         terms = accelerated_terms(residual, config.tau, bandwidth)
         if terms is not None:
             return terms
-    return smoothed_score_and_curvature(residual, config.tau, bandwidth, backend.xp)
+    return (
+        _huber_score(residual, config.tau, backend),
+        smoothed_curvature(residual, config.tau, bandwidth, backend.xp),
+    )
 
 
 def _gradient(
@@ -138,15 +143,14 @@ def _gradient(
     beta: Any,
     state: RenewableHuberState,
     config: EstimatorConfig,
-    bandwidth: float,
     backend: ArrayBackend,
 ) -> Any:
     """Evaluate only the gradient needed by the L1 proximal solver."""
 
     xp = backend.xp
     residual = y - xp.matmul(X, beta)
-    score = _smoothed_score(residual, config, bandwidth, backend)
-    return _gradient_from_score(X, score, beta, state, backend)
+    score = _huber_score(residual, config.tau, backend)
+    return _gradient_from_score(X, score, beta, state, config, backend)
 
 
 def _smooth_objective(
@@ -155,16 +159,25 @@ def _smooth_objective(
     beta: Any,
     state: RenewableHuberState,
     config: EstimatorConfig,
-    bandwidth: float,
     backend: ArrayBackend,
 ) -> float:
     xp = backend.xp
-    n_batch = X.shape[0]
+    n_total = state.n_samples_seen + X.shape[0]
     residual = y - xp.matmul(X, beta)
-    current_loss = xp.mean(_huber_loss(residual, config.tau, backend))
+    current_loss = xp.sum(_huber_loss(residual, config.tau, backend)) / n_total
     delta = beta - state.coefficients
-    historical_loss = 0.5 * xp.matmul(xp.matmul(delta, state.information), delta) / n_batch
-    return backend.scalar(current_loss + historical_loss)
+    historical_loss = 0.5 * xp.matmul(xp.matmul(delta, state.information), delta) / n_total
+    objective = current_loss + historical_loss
+    if config.penalty == "l1" and state.n_samples_seen:
+        mask = _penalty_mask(state.coefficients, state.fit_intercept, xp)
+        historical_subgradient = xp.sign(state.coefficients) * mask
+        objective = objective - (
+            state.n_samples_seen
+            / n_total
+            * state.previous_lambda
+            * xp.matmul(delta, historical_subgradient)
+        )
+    return backend.scalar(objective)
 
 
 def _gradient_and_hessian(
@@ -180,11 +193,12 @@ def _gradient_and_hessian(
 ) -> tuple[Any, Any]:
     xp = backend.xp
     n_batch, n_parameters = X.shape
+    n_total = state.n_samples_seen + n_batch
     residual = y - xp.matmul(X, beta)
-    score, curvature = _smoothed_score_and_curvature(residual, config, bandwidth, backend)
-    gradient = _gradient_from_score(X, score, beta, state, backend)
+    score, curvature = _huber_score_and_smoothed_curvature(residual, config, bandwidth, backend)
+    gradient = _gradient_from_score(X, score, beta, state, config, backend)
     hessian = _weighted_gram(X, curvature, backend, workspace=workspace) + state.information
-    hessian = hessian / n_batch
+    hessian = hessian / n_total
     hessian = hessian + config.ridge * xp.eye(n_parameters, dtype=beta.dtype)
     return gradient, hessian
 
@@ -200,7 +214,7 @@ def _solve_unpenalized(
     workspace: Any | None = None,
 ) -> tuple[Any, int, bool, float]:
     beta = backend.copy(state.coefficients)
-    objective = _smooth_objective(X, y, beta, state, config, bandwidth, backend)
+    objective = _smooth_objective(X, y, beta, state, config, backend)
     for iteration in range(1, config.max_iter + 1):
         gradient, hessian = _gradient_and_hessian(
             X, y, beta, state, config, bandwidth, backend, workspace=workspace
@@ -209,9 +223,7 @@ def _solve_unpenalized(
         step = 1.0
         while step >= 1e-8:
             candidate = beta - step * direction
-            candidate_objective = _smooth_objective(
-                X, y, candidate, state, config, bandwidth, backend
-            )
+            candidate_objective = _smooth_objective(X, y, candidate, state, config, backend)
             if candidate_objective <= objective:
                 break
             step *= 0.5
@@ -240,11 +252,11 @@ def _solve_l1(
     xp = backend.xp
     beta = backend.copy(state.coefficients)
     mask = _penalty_mask(beta, state.fit_intercept, xp)
-    smooth_objective = _smooth_objective(X, y, beta, state, config, bandwidth, backend)
+    smooth_objective = _smooth_objective(X, y, beta, state, config, backend)
     phi = 1.0
 
     for iteration in range(1, config.max_iter + 1):
-        gradient = _gradient(X, y, beta, state, config, bandwidth, backend)
+        gradient = _gradient(X, y, beta, state, config, backend)
         for _ in range(40):
             threshold = (lambda_value / phi) * mask
             candidate = soft_threshold(beta - gradient / phi, threshold, xp)
@@ -254,7 +266,7 @@ def _solve_l1(
                 + backend.scalar(xp.matmul(gradient, difference))
                 + 0.5 * phi * backend.norm(difference) ** 2
             )
-            candidate_smooth = _smooth_objective(X, y, candidate, state, config, bandwidth, backend)
+            candidate_smooth = _smooth_objective(X, y, candidate, state, config, backend)
             if candidate_smooth <= upper_bound + 1e-12:
                 break
             phi *= 2.0
@@ -282,7 +294,7 @@ def renewable_update(
     n_batch = X.shape[0]
     n_total = state.n_samples_seen + n_batch
     n_predictors = state.n_features_in
-    bandwidth = _bandwidth(n_total, n_predictors, config.bandwidth_scale)
+    bandwidth = _bandwidth(n_total, n_predictors, config.bandwidth_scale, config.tau)
     lambda_value = _lambda(n_total, n_predictors, config)
     workspace = None
     if config.penalty == "none" and backend.name in {"numpy", "cupy"}:
