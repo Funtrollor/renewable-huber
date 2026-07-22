@@ -19,8 +19,8 @@ class RenewableHuberRegressor:
     """Robust linear regression that can be updated one batch at a time.
 
     Parameters mirror :class:`~renewable_huber.config.EstimatorConfig`.  The
-    estimator executes on NumPy, CuPy/CUDA, or PyTorch tensors on CPU/CUDA.
-    TensorFlow remains reserved for a subsequent release.
+    estimator executes on NumPy, CuPy/CUDA, PyTorch, or TensorFlow tensors on
+    CPU/CUDA. TensorFlow is supported in its default eager-execution mode.
 
     Notes
     -----
@@ -142,7 +142,7 @@ class RenewableHuberRegressor:
         state = self._require_state()
         backend = self._require_backend()
         X_array = self._validate_features(X, state.n_features_in, backend)
-        return self._design_matrix(X_array) @ state.coefficients
+        return backend.xp.matmul(self._design_matrix(X_array), state.coefficients)
 
     def score(self, X: ArrayLike, y: ArrayLike) -> float:
         """Return the ordinary coefficient of determination (R²)."""
@@ -246,7 +246,7 @@ class RenewableHuberRegressor:
         if hasattr(X, "to_numpy"):
             X = X.to_numpy()  # type: ignore[union-attr]
         X_array = backend.asarray(X)
-        if X_array.ndim != 2:
+        if len(X_array.shape) != 2:
             raise ValidationError("X must be a two-dimensional numeric array")
         if X_array.shape[0] == 0 or X_array.shape[1] == 0:
             raise ValidationError("X must contain at least one sample and one feature")
@@ -260,7 +260,7 @@ class RenewableHuberRegressor:
     def _validate_target(y: ArrayLike, expected_samples: int, backend: ArrayBackend) -> Any:
         if hasattr(y, "to_numpy"):
             y = y.to_numpy()  # type: ignore[union-attr]
-        y_array = backend.asarray(y).reshape(-1)
+        y_array = backend.reshape(backend.asarray(y), (-1,))
         if y_array.shape[0] != expected_samples:
             raise ValidationError("X and y must contain the same number of samples")
         if not backend.is_finite(y_array):

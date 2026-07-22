@@ -17,9 +17,8 @@ DTypeName = Literal["float32", "float64"]
 class EstimatorConfig:
     """Numerical settings for :class:`RenewableHuberRegressor`.
 
-    The first release implements the ``numpy`` backend.  The backend and device
-    fields are intentionally part of the stable public contract so GPU backends
-    can be introduced without changing estimator construction.
+    Backends share the same numerical contract, allowing CPU and GPU execution
+    without changing estimator construction.
     """
 
     tau: float = 1.345

@@ -69,4 +69,7 @@ def _copy_array(value: Any) -> Any:
 
     if clone := getattr(value, "clone", None):
         return clone()
-    return value.copy()
+    if copy := getattr(value, "copy", None):
+        return copy()
+    # TensorFlow tensors are immutable, so sharing their value is safe.
+    return value

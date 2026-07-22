@@ -26,6 +26,12 @@ class _TorchNamespace:
     def eye(self, size: int, *, dtype: Any = None) -> Any:
         return self._torch.eye(size, dtype=dtype, device=self._device)
 
+    def concatenate(self, values: tuple[Any, ...]) -> Any:
+        return self._torch.cat(values)
+
+    def transpose(self, value: Any) -> Any:
+        return value.T
+
 
 class TorchBackend:
     """Eager PyTorch backend for native CPU and CUDA tensor workflows.
@@ -70,6 +76,9 @@ class TorchBackend:
 
     def copy(self, value: Any) -> Any:
         return value.clone()
+
+    def reshape(self, value: Any, shape: tuple[int, ...]) -> Any:
+        return value.reshape(shape)
 
     def to_numpy(self, value: Any) -> Any:
         return value.detach().cpu().numpy()
