@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  baseline:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -29,3 +29,28 @@ jobs:
         run: ruff check src tests scripts/renewable_huber
       - name: Build distributions
         run: python -m build
+
+  optional-backend:
+    name: ${{ matrix.name }} CPU
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: PyTorch
+            extra: gpu-torch
+            test-module: tests.test_torch_backend
+          - name: TensorFlow
+            extra: gpu-tensorflow
+            test-module: tests.test_tensorflow_backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package and ${{ matrix.name }}
+        run: python -m pip install ".[dev,${{ matrix.extra }}]"
+      - name: Run ${{ matrix.name }} backend tests
+        env:
+          TF_CPP_MIN_LOG_LEVEL: "2"
+        run: python -m unittest ${{ matrix.test-module }} -v
