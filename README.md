@@ -100,7 +100,27 @@ pipeline.fit(X_train, y_train)
 prediction = pipeline.predict(X_test)
 ```
 
-`numpy.ndarray` 與具有 `.to_numpy()` 的表格物件（如 `pandas.DataFrame` / `Series`）可直接作為輸入。`fit(X, y)` 會重置模型後處理單一批次；真正的串流工作流應重複呼叫 `partial_fit(X_batch, y_batch)`。
+`numpy.ndarray` 與具有 `.to_numpy()` 的表格物件（如 `pandas.DataFrame` / `Series`）可直接作為輸入。DataFrame 以字串命名欄位時，後續 DataFrame 批次與預測必須維持相同名稱和順序。`fit`、`partial_fit` 與 `score` 支援非負 `sample_weight`：
+
+```python
+model.partial_fit(X_batch, y_batch, sample_weight=batch_weights)
+weighted_r2 = model.score(X_test, y_test, sample_weight=test_weights)
+```
+
+權重採 frequency-weight 語意，整數權重等價於重複觀測；全零批次會被拒絕。SciPy sparse matrix 不會被暗中展開，請評估記憶體後明確呼叫 `X.toarray()`。
+
+Checkpoint 預設還原原 backend，也可明確遷移到 CPU 或另一個 dtype：
+
+```python
+cpu_model = RenewableHuberRegressor.load(
+    "checkpoints/gpu-model.npz",
+    backend="numpy",
+    device="cpu",
+    dtype="float64",
+)
+```
+
+`fit(X, y)` 會重置模型後處理單一批次；真正的串流工作流應重複呼叫 `partial_fit(X_batch, y_batch)`。
 
 PyTorch 輸入會先 `detach`，本套件不是 autograd layer；TensorFlow backend 僅支援 eager execution，不能直接放入 `tf.function`。串流更新會使用前一批的係數與資訊矩陣，因此批次切法與資料順序屬於計算的一部分，不保證與整批 `fit` 或另一種排列得到逐位元相同的結果。
 
@@ -130,6 +150,7 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 ```powershell
 python -m unittest discover -s tests -v
 python -m build
+python scripts/benchmarks/benchmark_numpy_cupy.py --output benchmark.json
 ```
 
 GitHub repository 已設定為 `Funtrollor/renewable-huber`。在公開 PyPI 前，請先決定授權條款，並確認 `renewable-huber` 的 PyPI 名稱可用。

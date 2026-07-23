@@ -33,17 +33,20 @@
 | 輸入／整合 | v0.5 狀態 | 限制 |
 | --- | --- | --- |
 | NumPy array／一般 array-like | 支援 | `X` 必須為非空二維有限數值，`y` 會 reshape 成一維且長度必須相同。 |
-| pandas DataFrame／Series | 支援 `.to_numpy()` 轉換；可安裝 `pandas` extra | 訓練時記錄 DataFrame 欄名，但預測只檢查欄數；不驗證名稱或順序。GPU backend 會先經 NumPy，再複製到裝置。 |
+| pandas DataFrame／Series | 支援 `.to_numpy()` 轉換；可安裝 `pandas` extra | 若 DataFrame 欄名全為字串，第一次訓練會記錄欄名，後續 DataFrame 批次與預測會驗證名稱及順序。未命名 array 仍按位置處理。GPU backend 會先經 NumPy，再複製到裝置。 |
 | PyTorch tensor | 明確選擇 `backend="torch"` 時原生支援 | 輸入會 detach；不保留梯度圖。 |
 | TensorFlow tensor | 明確選擇 `backend="tensorflow"` 時原生支援 | 只支援 eager tensor。 |
-| SciPy／pandas sparse | 未支援 | v0.5 公開 API 要求 dense 二維輸入。 |
-| `sample_weight` | 未支援 | `fit`／`partial_fit` 尚無此參數。 |
-| scikit-learn adapter | 安裝 `sklearn` extra 後支援 | `SklearnRenewableHuberRegressor` 提供 Pipeline、clone、GridSearchCV 與 cross-validation 介面；框架的完整 estimator check 範圍仍以測試文件為準。 |
+| SciPy sparse | 明確拒絕 | 不會隱式 densify；呼叫端必須評估記憶體後明確使用 `X.toarray()`。 |
+| pandas sparse | 經 pandas `.to_numpy()` 轉為 dense | 轉換可能配置完整 dense array，大型資料應先評估記憶體。 |
+| `sample_weight` | `fit`、`partial_fit`、`score` 支援 | 必須是一維、有限、非負且至少一個正值；採 frequency-weight 語意，整數權重等價於重複該列。 |
+| scikit-learn adapter | 安裝 `sklearn` extra 後支援 | 提供 Pipeline、clone、GridSearchCV、cross-validation、`sample_weight`，CI 會對安裝到的支援版本執行完整 `check_estimator`。 |
 
 ## Checkpoint 與重現性
 
 - `.npz` 不使用 pickle，數值陣列以 NumPy 格式保存；checkpoint 不包含歷史 `X`／`y`。
-- `backend`、`device` 與 `dtype` 會隨設定保存。`load` 依原設定重建 backend，不會自動從 CUDA 降級至 CPU，也不提供 backend override。
-- 載入非 NumPy checkpoint 需要相同 optional dependency；載入 CUDA checkpoint 需要可用的相容 GPU。
+- `backend`、`device` 與 `dtype` 會隨設定保存。`load(path)` 依原設定重建 backend，不會無聲降級。
+- `load(path, backend=..., device=..., dtype=...)` 可明確覆寫還原目標；因此 GPU checkpoint 可在沒有 GPU extra 的環境遷移至 NumPy CPU。
+- 未提供 override 時，載入非 NumPy checkpoint 需要相同 optional dependency；CUDA 設定也需要可用的相容 GPU。
+- v2 checkpoint 保存累積權重與 DataFrame 欄名；v1 checkpoint 仍可讀取，並將每列視為單位權重。
 - 以相同 backend、dtype、批次順序與後續資料續跑，才是預期的可重現流程。不同 backend 或 dtype 只保證合理數值容差內的一致性，不保證逐位元一致。
 - Renewable 更新依賴前一批 state，因此資料分批方式與順序可能影響有限樣本及浮點結果；一次 `fit`、不同 batch 切法或重新排序不保證產生相同模型。

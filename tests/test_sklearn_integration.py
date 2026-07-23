@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from importlib.util import find_spec
+from pathlib import Path
 
 import numpy as np
 
@@ -53,6 +55,21 @@ class SklearnIntegrationTests(unittest.TestCase):
 
         self.assertGreater(search.best_score_, 0.97)
         self.assertEqual(search.predict(self.X).shape, (self.X.shape[0],))
+
+    def test_full_estimator_contract(self) -> None:
+        from sklearn.utils.estimator_checks import check_estimator
+
+        check_estimator(self.Regressor(max_iter=40))
+
+    def test_checkpoint_preserves_adapter_type(self) -> None:
+        model = self.Regressor(max_iter=80).fit(self.X, self.y)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "sklearn-adapter.npz"
+            model.save(checkpoint)
+            restored = self.Regressor.load(checkpoint)
+
+        self.assertIsInstance(restored, self.Regressor)
+        np.testing.assert_allclose(restored.predict(self.X), model.predict(self.X))
 
 
 if __name__ == "__main__":

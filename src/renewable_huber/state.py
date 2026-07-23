@@ -26,6 +26,7 @@ class RenewableHuberState:
     previous_lambda: float
     n_features_in: int
     fit_intercept: bool
+    weight_sum: float | None = None
 
     @classmethod
     def empty(
@@ -40,6 +41,7 @@ class RenewableHuberState:
             previous_lambda=0.0,
             n_features_in=n_features_in,
             fit_intercept=fit_intercept,
+            weight_sum=0.0,
         )
 
     def copy(self) -> RenewableHuberState:
@@ -53,7 +55,14 @@ class RenewableHuberState:
             previous_lambda=self.previous_lambda,
             n_features_in=self.n_features_in,
             fit_intercept=self.fit_intercept,
+            weight_sum=self.weight_sum,
         )
+
+    @property
+    def effective_weight(self) -> float:
+        """Return accumulated frequency weight, including legacy state fallback."""
+
+        return float(self.n_samples_seen if self.weight_sum is None else self.weight_sum)
 
     def validate(self) -> None:
         """Check the invariant required for safe continuation of a stream."""
@@ -67,6 +76,10 @@ class RenewableHuberState:
             raise ValidationError("state counters must be non-negative")
         if not isfinite(self.previous_lambda) or self.previous_lambda < 0:
             raise ValidationError("state previous lambda must be finite and non-negative")
+        if not isfinite(self.effective_weight) or self.effective_weight < 0:
+            raise ValidationError("state weight sum must be finite and non-negative")
+        if self.n_samples_seen > 0 and self.effective_weight == 0:
+            raise ValidationError("state weight sum must be positive after observing samples")
         # Checkpoint arrays are decoded through NumPy. Restrict the value scan
         # to NumPy-backed state so regular validation never copies a full GPU
         # information matrix back to the host.

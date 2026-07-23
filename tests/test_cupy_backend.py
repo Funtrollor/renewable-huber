@@ -82,6 +82,26 @@ class CuPyBackendTests(unittest.TestCase):
             self.cp.asnumpy(gpu_model.coef_), cpu_model.coef_, rtol=2e-5, atol=2e-5
         )
 
+    def test_weighted_gpu_update_and_cpu_checkpoint_migration(self) -> None:
+        weights = np.linspace(0.2, 1.8, self.X.shape[0])
+        cpu_model = RenewableHuberRegressor(max_iter=100).fit(self.X, self.y, sample_weight=weights)
+        gpu_model = RenewableHuberRegressor(backend="cupy", device="cuda", max_iter=100).fit(
+            self.cp.asarray(self.X),
+            self.cp.asarray(self.y),
+            sample_weight=self.cp.asarray(weights),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "cupy-to-numpy.npz"
+            gpu_model.save(checkpoint)
+            restored = RenewableHuberRegressor.load(checkpoint, backend="numpy", device="cpu")
+
+        np.testing.assert_allclose(
+            self.cp.asnumpy(gpu_model.coef_), cpu_model.coef_, rtol=2e-5, atol=2e-5
+        )
+        np.testing.assert_allclose(
+            restored.predict(self.X), cpu_model.predict(self.X), rtol=2e-5, atol=2e-5
+        )
+
     def test_singular_design_falls_back_to_a_finite_least_squares_solution(self) -> None:
         x = self.cp.linspace(-5.0, 5.0, 101)
         X = self.cp.column_stack((x, x))
