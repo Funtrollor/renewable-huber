@@ -4,6 +4,7 @@ from __future__ import annotations
 
 try:
     from sklearn.base import BaseEstimator, RegressorMixin
+    from sklearn.utils.validation import check_is_fitted, column_or_1d
 except ImportError as error:  # pragma: no cover - depends on an optional package
     raise ImportError(
         "scikit-learn integration requires scikit-learn. "
@@ -20,6 +21,30 @@ class SklearnRenewableHuberRegressor(RegressorMixin, RenewableHuberRegressor, Ba
     regressor tags and base-estimator behaviour so that ``clone``, ``Pipeline``,
     ``GridSearchCV``, and cross-validation treat it as a regressor.
     """
+
+    def fit(self, X, y, sample_weight=None):
+        """Fit after applying scikit-learn's one-dimensional target contract."""
+
+        return super().fit(
+            X,
+            column_or_1d(y, warn=True),
+            sample_weight=sample_weight,
+        )
+
+    def partial_fit(self, X, y, sample_weight=None):
+        """Update after applying scikit-learn's target-shape contract."""
+
+        return super().partial_fit(
+            X,
+            column_or_1d(y, warn=True),
+            sample_weight=sample_weight,
+        )
+
+    def predict(self, X):
+        """Predict after applying scikit-learn's fitted-state contract."""
+
+        check_is_fitted(self)
+        return super().predict(X)
 
 
 __all__ = ["SklearnRenewableHuberRegressor"]

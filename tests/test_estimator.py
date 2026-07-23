@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 
-from renewable_huber import BackendUnavailableError, NotFittedError, RenewableHuberRegressor
+from renewable_huber import (
+    BackendUnavailableError,
+    NotFittedError,
+    RenewableHuberRegressor,
+    ValidationError,
+)
 
 
 class _TableLike:
@@ -58,8 +64,54 @@ class RenewableHuberRegressorTests(unittest.TestCase):
 
         np.testing.assert_array_equal(model.feature_names_in_, ["feature_a", "feature_b"])
 
+    def test_integer_sample_weight_matches_explicit_row_replication(self) -> None:
+        X = self.X[:40]
+        y = self.y[:40]
+        weights = np.tile(np.asarray([0, 1, 2, 3]), 10)
+        repeated = np.repeat(np.arange(X.shape[0]), weights)
+
+        weighted = RenewableHuberRegressor(max_iter=120, tol=1e-9).fit(X, y, sample_weight=weights)
+        replicated = RenewableHuberRegressor(max_iter=120, tol=1e-9).fit(X[repeated], y[repeated])
+
+        np.testing.assert_allclose(weighted.coef_, replicated.coef_, rtol=1e-9, atol=1e-9)
+        self.assertAlmostEqual(weighted.intercept_, replicated.intercept_, delta=1e-9)
+        np.testing.assert_allclose(
+            weighted.state_.information,
+            replicated.state_.information,
+            rtol=1e-9,
+            atol=1e-9,
+        )
+        self.assertEqual(weighted.state_.n_samples_seen, X.shape[0])
+        self.assertEqual(weighted.state_.effective_weight, float(weights.sum()))
+
+    def test_weighted_score_matches_manual_r2(self) -> None:
+        weights = np.linspace(0.2, 2.0, self.X.shape[0])
+        model = RenewableHuberRegressor().fit(self.X, self.y, sample_weight=weights)
+        prediction = model.predict(self.X)
+        mean = np.average(self.y, weights=weights)
+        expected = 1.0 - np.sum(weights * (self.y - prediction) ** 2) / np.sum(
+            weights * (self.y - mean) ** 2
+        )
+
+        self.assertAlmostEqual(
+            model.score(self.X, self.y, sample_weight=weights), expected, places=12
+        )
+
+    def test_invalid_sample_weight_is_rejected(self) -> None:
+        invalid_weights = (
+            np.ones(self.X.shape[0] - 1),
+            np.full(self.X.shape[0], -1.0),
+            np.zeros(self.X.shape[0]),
+            np.full(self.X.shape[0], np.nan),
+        )
+        for weights in invalid_weights:
+            with self.subTest(weights=weights[:2]):
+                with self.assertRaises(ValidationError):
+                    RenewableHuberRegressor().fit(self.X, self.y, sample_weight=weights)
+
     def test_checkpoint_round_trip(self) -> None:
-        model = RenewableHuberRegressor().fit(self.X, self.y)
+        weights = np.linspace(0.5, 1.5, self.X.shape[0])
+        model = RenewableHuberRegressor().fit(_TableLike(self.X), self.y, sample_weight=weights)
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = Path(directory) / "model.npz"
             model.save(checkpoint)
@@ -67,6 +119,70 @@ class RenewableHuberRegressorTests(unittest.TestCase):
 
         np.testing.assert_allclose(restored.predict(self.X), model.predict(self.X))
         self.assertEqual(restored.state_.n_samples_seen, model.state_.n_samples_seen)
+        self.assertEqual(restored.state_.effective_weight, model.state_.effective_weight)
+        np.testing.assert_array_equal(restored.feature_names_in_, ["feature_a", "feature_b"])
+
+    def test_checkpoint_can_migrate_backend_device_and_dtype(self) -> None:
+        model = RenewableHuberRegressor(dtype="float64").fit(self.X, self.y)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "portable-model.npz"
+            model.save(checkpoint)
+            restored = RenewableHuberRegressor.load(
+                checkpoint, backend="numpy", device="cpu", dtype="float32"
+            )
+
+        self.assertEqual(restored.backend_, "numpy")
+        self.assertEqual(restored.device_, "cpu")
+        self.assertEqual(restored.dtype, "float32")
+        self.assertEqual(restored.coef_.dtype, np.dtype("float32"))
+        np.testing.assert_allclose(
+            restored.predict(self.X), model.predict(self.X), rtol=3e-5, atol=3e-5
+        )
+
+    def test_weighted_checkpoint_resume_matches_uninterrupted_stream(self) -> None:
+        weights = np.linspace(0.2, 1.8, self.X.shape[0])
+        uninterrupted = RenewableHuberRegressor()
+        uninterrupted.partial_fit(self.X[:120], self.y[:120], sample_weight=weights[:120])
+        uninterrupted.partial_fit(self.X[120:], self.y[120:], sample_weight=weights[120:])
+
+        resumable = RenewableHuberRegressor().partial_fit(
+            self.X[:120], self.y[:120], sample_weight=weights[:120]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "weighted-stream.npz"
+            resumable.save(checkpoint)
+            resumed = RenewableHuberRegressor.load(checkpoint)
+            resumed.partial_fit(self.X[120:], self.y[120:], sample_weight=weights[120:])
+
+        np.testing.assert_array_equal(resumed.coef_, uninterrupted.coef_)
+        self.assertEqual(resumed.intercept_, uninterrupted.intercept_)
+        np.testing.assert_array_equal(resumed.state_.information, uninterrupted.state_.information)
+        self.assertEqual(resumed.state_.effective_weight, uninterrupted.state_.effective_weight)
+
+    def test_v1_checkpoint_loads_with_unit_weight_fallback(self) -> None:
+        model = RenewableHuberRegressor().fit(self.X, self.y)
+        payload = model.state_dict()
+        metadata = {
+            "format_version": 1,
+            "config": payload["config"],
+            "n_samples_seen": payload["n_samples_seen"],
+            "batch_count": payload["batch_count"],
+            "previous_lambda": payload["previous_lambda"],
+            "n_features_in": payload["n_features_in"],
+            "fit_intercept": payload["fit_intercept"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "legacy-v1.npz"
+            np.savez_compressed(
+                checkpoint,
+                coefficients=payload["coefficients"],
+                information=payload["information"],
+                metadata=np.asarray(json.dumps(metadata)),
+            )
+            restored = RenewableHuberRegressor.load(checkpoint)
+
+        self.assertEqual(restored.state_.effective_weight, float(restored.state_.n_samples_seen))
+        np.testing.assert_allclose(restored.predict(self.X), model.predict(self.X))
 
     def test_not_fitted_and_unavailable_backend_errors_are_explicit(self) -> None:
         with self.assertRaises(NotFittedError):

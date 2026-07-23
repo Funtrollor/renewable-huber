@@ -28,13 +28,13 @@ class UpdateDiagnostics:
     bandwidth: float
 
 
-def _bandwidth(n_total: int, n_predictors: int, scale: float, tau: float) -> float:
+def _bandwidth(n_total: float, n_predictors: int, scale: float, tau: float) -> float:
     """Return the paper bandwidth, capped only where its transition regions meet."""
 
     return min(scale / (sqrt(n_total) * log(max(n_predictors, 2))), tau)
 
 
-def _lambda(n_total: int, n_predictors: int, config: EstimatorConfig) -> float:
+def _lambda(n_total: float, n_predictors: int, config: EstimatorConfig) -> float:
     if config.penalty == "none":
         return 0.0
     return config.lambda_scale * config.tau * sqrt(log(max(n_predictors, 2)) / n_total)
@@ -49,9 +49,14 @@ def _penalty_mask(reference: Any, fit_intercept: bool, xp: Any) -> Any:
 
 
 def _weighted_gram(
-    X: Any, curvature: Any, backend: ArrayBackend, *, workspace: Any | None = None
+    X: Any,
+    curvature: Any,
+    backend: ArrayBackend,
+    *,
+    sample_weight: Any | None = None,
+    workspace: Any | None = None,
 ) -> Any:
-    """Return ``X.T @ (X * curvature[:, None])`` with an optional work buffer.
+    """Return the weighted curvature Gram matrix with an optional work buffer.
 
     NumPy's BLAS call is already the efficient dense implementation.  In a
     Newton update it is invoked several times for the same batch, however, so
@@ -61,6 +66,8 @@ def _weighted_gram(
     """
 
     xp = backend.xp
+    if sample_weight is not None:
+        curvature = curvature * sample_weight
     if workspace is not None:
         xp.multiply(X, curvature[:, None], out=workspace)
         return xp.matmul(xp.transpose(X), workspace)
@@ -74,11 +81,18 @@ def _gradient_from_score(
     state: RenewableHuberState,
     config: EstimatorConfig,
     backend: ArrayBackend,
+    *,
+    sample_weight: Any | None = None,
+    batch_weight: float | None = None,
 ) -> Any:
     """Evaluate the smooth surrogate gradient after the score is available."""
 
     xp = backend.xp
-    n_total = state.n_samples_seen + X.shape[0]
+    if batch_weight is None:
+        batch_weight = float(X.shape[0])
+    n_total = state.effective_weight + batch_weight
+    if sample_weight is not None:
+        score = score * sample_weight
     delta = beta - state.coefficients
     transposed = xp.transpose(X)
     gradient = (-xp.matmul(transposed, score) + xp.matmul(state.information, delta)) / n_total
@@ -86,7 +100,7 @@ def _gradient_from_score(
         mask = _penalty_mask(state.coefficients, state.fit_intercept, xp)
         historical_subgradient = xp.sign(state.coefficients) * mask
         gradient = gradient - (
-            state.n_samples_seen / n_total * state.previous_lambda * historical_subgradient
+            state.effective_weight / n_total * state.previous_lambda * historical_subgradient
         )
     return gradient
 
@@ -144,13 +158,25 @@ def _gradient(
     state: RenewableHuberState,
     config: EstimatorConfig,
     backend: ArrayBackend,
+    *,
+    sample_weight: Any | None = None,
+    batch_weight: float | None = None,
 ) -> Any:
     """Evaluate only the gradient needed by the L1 proximal solver."""
 
     xp = backend.xp
     residual = y - xp.matmul(X, beta)
     score = _huber_score(residual, config.tau, backend)
-    return _gradient_from_score(X, score, beta, state, config, backend)
+    return _gradient_from_score(
+        X,
+        score,
+        beta,
+        state,
+        config,
+        backend,
+        sample_weight=sample_weight,
+        batch_weight=batch_weight,
+    )
 
 
 def _smooth_objective(
@@ -160,11 +186,19 @@ def _smooth_objective(
     state: RenewableHuberState,
     config: EstimatorConfig,
     backend: ArrayBackend,
+    *,
+    sample_weight: Any | None = None,
+    batch_weight: float | None = None,
 ) -> float:
     xp = backend.xp
-    n_total = state.n_samples_seen + X.shape[0]
+    if batch_weight is None:
+        batch_weight = float(X.shape[0])
+    n_total = state.effective_weight + batch_weight
     residual = y - xp.matmul(X, beta)
-    current_loss = xp.sum(_huber_loss(residual, config.tau, backend)) / n_total
+    current_loss_values = _huber_loss(residual, config.tau, backend)
+    if sample_weight is not None:
+        current_loss_values = current_loss_values * sample_weight
+    current_loss = xp.sum(current_loss_values) / n_total
     delta = beta - state.coefficients
     historical_loss = 0.5 * xp.matmul(xp.matmul(delta, state.information), delta) / n_total
     objective = current_loss + historical_loss
@@ -172,7 +206,7 @@ def _smooth_objective(
         mask = _penalty_mask(state.coefficients, state.fit_intercept, xp)
         historical_subgradient = xp.sign(state.coefficients) * mask
         objective = objective - (
-            state.n_samples_seen
+            state.effective_weight
             / n_total
             * state.previous_lambda
             * xp.matmul(delta, historical_subgradient)
@@ -189,15 +223,37 @@ def _gradient_and_hessian(
     bandwidth: float,
     backend: ArrayBackend,
     *,
+    sample_weight: Any | None = None,
+    batch_weight: float | None = None,
     workspace: Any | None = None,
 ) -> tuple[Any, Any]:
     xp = backend.xp
     n_batch, n_parameters = X.shape
-    n_total = state.n_samples_seen + n_batch
+    if batch_weight is None:
+        batch_weight = float(n_batch)
+    n_total = state.effective_weight + batch_weight
     residual = y - xp.matmul(X, beta)
     score, curvature = _huber_score_and_smoothed_curvature(residual, config, bandwidth, backend)
-    gradient = _gradient_from_score(X, score, beta, state, config, backend)
-    hessian = _weighted_gram(X, curvature, backend, workspace=workspace) + state.information
+    gradient = _gradient_from_score(
+        X,
+        score,
+        beta,
+        state,
+        config,
+        backend,
+        sample_weight=sample_weight,
+        batch_weight=batch_weight,
+    )
+    hessian = (
+        _weighted_gram(
+            X,
+            curvature,
+            backend,
+            sample_weight=sample_weight,
+            workspace=workspace,
+        )
+        + state.information
+    )
     hessian = hessian / n_total
     hessian = hessian + config.ridge * xp.eye(n_parameters, dtype=beta.dtype)
     return gradient, hessian
@@ -211,19 +267,48 @@ def _solve_unpenalized(
     bandwidth: float,
     backend: ArrayBackend,
     *,
+    sample_weight: Any | None = None,
+    batch_weight: float | None = None,
     workspace: Any | None = None,
 ) -> tuple[Any, int, bool, float]:
     beta = backend.copy(state.coefficients)
-    objective = _smooth_objective(X, y, beta, state, config, backend)
+    objective = _smooth_objective(
+        X,
+        y,
+        beta,
+        state,
+        config,
+        backend,
+        sample_weight=sample_weight,
+        batch_weight=batch_weight,
+    )
     for iteration in range(1, config.max_iter + 1):
         gradient, hessian = _gradient_and_hessian(
-            X, y, beta, state, config, bandwidth, backend, workspace=workspace
+            X,
+            y,
+            beta,
+            state,
+            config,
+            bandwidth,
+            backend,
+            sample_weight=sample_weight,
+            batch_weight=batch_weight,
+            workspace=workspace,
         )
         direction = backend.solve(hessian, gradient)
         step = 1.0
         while step >= 1e-8:
             candidate = beta - step * direction
-            candidate_objective = _smooth_objective(X, y, candidate, state, config, backend)
+            candidate_objective = _smooth_objective(
+                X,
+                y,
+                candidate,
+                state,
+                config,
+                backend,
+                sample_weight=sample_weight,
+                batch_weight=batch_weight,
+            )
             if candidate_objective <= objective:
                 break
             step *= 0.5
@@ -246,17 +331,38 @@ def _solve_l1(
     bandwidth: float,
     lambda_value: float,
     backend: ArrayBackend,
+    *,
+    sample_weight: Any | None = None,
+    batch_weight: float | None = None,
 ) -> tuple[Any, int, bool, float]:
     """Solve the penalised surrogate with LAMM/proximal-gradient steps."""
 
     xp = backend.xp
     beta = backend.copy(state.coefficients)
     mask = _penalty_mask(beta, state.fit_intercept, xp)
-    smooth_objective = _smooth_objective(X, y, beta, state, config, backend)
+    smooth_objective = _smooth_objective(
+        X,
+        y,
+        beta,
+        state,
+        config,
+        backend,
+        sample_weight=sample_weight,
+        batch_weight=batch_weight,
+    )
     phi = 1.0
 
     for iteration in range(1, config.max_iter + 1):
-        gradient = _gradient(X, y, beta, state, config, backend)
+        gradient = _gradient(
+            X,
+            y,
+            beta,
+            state,
+            config,
+            backend,
+            sample_weight=sample_weight,
+            batch_weight=batch_weight,
+        )
         for _ in range(40):
             threshold = (lambda_value / phi) * mask
             candidate = soft_threshold(beta - gradient / phi, threshold, xp)
@@ -266,7 +372,16 @@ def _solve_l1(
                 + backend.scalar(xp.matmul(gradient, difference))
                 + 0.5 * phi * backend.norm(difference) ** 2
             )
-            candidate_smooth = _smooth_objective(X, y, candidate, state, config, backend)
+            candidate_smooth = _smooth_objective(
+                X,
+                y,
+                candidate,
+                state,
+                config,
+                backend,
+                sample_weight=sample_weight,
+                batch_weight=batch_weight,
+            )
             if candidate_smooth <= upper_bound + 1e-12:
                 break
             phi *= 2.0
@@ -287,12 +402,18 @@ def renewable_update(
     state: RenewableHuberState,
     config: EstimatorConfig,
     backend: ArrayBackend,
+    *,
+    sample_weight: Any | None = None,
+    batch_weight: float | None = None,
 ) -> tuple[RenewableHuberState, UpdateDiagnostics]:
     """Process exactly one data batch and return the next sufficient state."""
 
     state.validate()
     n_batch = X.shape[0]
-    n_total = state.n_samples_seen + n_batch
+    n_samples_total = state.n_samples_seen + n_batch
+    if batch_weight is None:
+        batch_weight = float(n_batch)
+    n_total = state.effective_weight + batch_weight
     n_predictors = state.n_features_in
     bandwidth = _bandwidth(n_total, n_predictors, config.bandwidth_scale, config.tau)
     lambda_value = _lambda(n_total, n_predictors, config)
@@ -302,25 +423,48 @@ def renewable_update(
 
     if config.penalty == "l1":
         coefficients, iterations, converged, smooth_objective = _solve_l1(
-            X, y, state, config, bandwidth, lambda_value, backend
+            X,
+            y,
+            state,
+            config,
+            bandwidth,
+            lambda_value,
+            backend,
+            sample_weight=sample_weight,
+            batch_weight=batch_weight,
         )
     else:
         coefficients, iterations, converged, smooth_objective = _solve_unpenalized(
-            X, y, state, config, bandwidth, backend, workspace=workspace
+            X,
+            y,
+            state,
+            config,
+            bandwidth,
+            backend,
+            sample_weight=sample_weight,
+            batch_weight=batch_weight,
+            workspace=workspace,
         )
 
     xp = backend.xp
     residual = y - xp.matmul(X, coefficients)
     curvature = _smoothed_curvature(residual, config, bandwidth, backend)
-    information = state.information + _weighted_gram(X, curvature, backend, workspace=workspace)
+    information = state.information + _weighted_gram(
+        X,
+        curvature,
+        backend,
+        sample_weight=sample_weight,
+        workspace=workspace,
+    )
     new_state = RenewableHuberState(
         coefficients=backend.copy(coefficients),
         information=backend.copy(information),
-        n_samples_seen=n_total,
+        n_samples_seen=n_samples_total,
         batch_count=state.batch_count + 1,
         previous_lambda=lambda_value,
         n_features_in=state.n_features_in,
         fit_intercept=state.fit_intercept,
+        weight_sum=n_total,
     )
     diagnostics = UpdateDiagnostics(
         iterations=iterations,

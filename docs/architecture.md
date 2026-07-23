@@ -32,11 +32,13 @@ Backend 只在第一次 `fit`／`partial_fit` 時解析：
 
 依原論文 Eq. (2.8) 與 Eq. (3.9)，新到批次的 estimating equation 使用 ordinary Huber score（將殘差截在 `[-tau, tau]`）；Eq. (2.1) 的平滑 score 導數只用來建立並累積歷史資訊矩陣 `J`。兩者不可互換，否則求解的 estimating equation 會改變。RPSHE 更新另保留上一批的 lambda subgradient，並以目前累積樣本數正規化歷史與當前項。
 
+提供 `sample_weight` 時，current loss、score 與 curvature 都乘上該列權重，歷史資訊矩陣也累積加權 curvature。正規化、bandwidth 與 lambda 使用 `weight_sum`；`n_samples_seen` 仍保存實際列數。這使整數權重與明確重複列具有相同數值語意。
+
 ## State 與同步邊界
 
 係數和累積資訊矩陣在更新、預測期間留在選定 backend。`predict` 直接回傳該 backend 的陣列；套件不會自動把 CUDA 預測複製回 NumPy。收斂判斷、公開 scalar 屬性及 checkpoint serialization 是允許的同步邊界。
 
-`.npz` checkpoint 會把數值 state 轉為 NumPy 儲存，但同時保留原始 `backend`、`device` 與 `dtype` 設定。`load` 會依這些設定重建原 backend，因此載入環境仍須安裝對應 extra 並具備所需硬體；v0.5 沒有自動從 GPU checkpoint 降級至 NumPy 的公開 API。
+`.npz` checkpoint 會把數值 state 轉為 NumPy 儲存，但同時保留原始 `backend`、`device` 與 `dtype` 設定。`load(path)` 依原設定重建 backend；`load(..., backend=..., device=..., dtype=...)` 則提供顯式且可測試的遷移邊界。套件不會在缺少 GPU 時靜默降級。
 
 ## 效能原則
 

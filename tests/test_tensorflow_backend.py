@@ -71,6 +71,45 @@ class TensorFlowBackendTests(unittest.TestCase):
             atol=3e-5,
         )
 
+    def test_weighted_eager_tensors_match_numpy(self) -> None:
+        weights = np.linspace(0.2, 1.8, self.X.shape[0])
+        numpy_model = RenewableHuberRegressor(max_iter=100).fit(
+            self.X, self.y, sample_weight=weights
+        )
+        tensorflow_model = RenewableHuberRegressor(
+            backend="tensorflow", device="cpu", max_iter=100
+        ).fit(
+            self.tf.convert_to_tensor(self.X),
+            self.tf.convert_to_tensor(self.y),
+            sample_weight=self.tf.convert_to_tensor(weights),
+        )
+
+        self.assertTrue(self.tf.executing_eagerly())
+        np.testing.assert_allclose(
+            tensorflow_model.predict(self.tf.convert_to_tensor(self.X)).numpy(),
+            numpy_model.predict(self.X),
+            rtol=2e-8,
+            atol=2e-8,
+        )
+        self.assertAlmostEqual(
+            tensorflow_model.state_.effective_weight, float(weights.sum()), places=12
+        )
+
+    def test_tensorflow_checkpoint_can_restore_to_numpy(self) -> None:
+        model = RenewableHuberRegressor(backend="tensorflow", device="cpu").fit(self.X, self.y)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "tensorflow-to-numpy.npz"
+            model.save(checkpoint)
+            restored = RenewableHuberRegressor.load(checkpoint, backend="numpy", device="cpu")
+
+        self.assertEqual(restored.backend_, "numpy")
+        np.testing.assert_allclose(
+            restored.predict(self.X),
+            model.predict(self.tf.convert_to_tensor(self.X)).numpy(),
+            rtol=2e-8,
+            atol=2e-8,
+        )
+
     def test_cuda_tensors_match_numpy_when_available(self) -> None:
         if not self.tf.config.list_physical_devices("GPU"):
             self.skipTest("a GPU-enabled TensorFlow build is required")

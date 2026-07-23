@@ -14,7 +14,7 @@ from .state import RenewableHuberState
 if TYPE_CHECKING:
     from .estimator import RenewableHuberRegressor
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 
 def save_model(model: RenewableHuberRegressor, path: str | Path) -> Path:
@@ -31,6 +31,8 @@ def save_model(model: RenewableHuberRegressor, path: str | Path) -> Path:
         "previous_lambda": payload["previous_lambda"],
         "n_features_in": payload["n_features_in"],
         "fit_intercept": payload["fit_intercept"],
+        "weight_sum": payload["weight_sum"],
+        "feature_names_in": payload["feature_names_in"],
     }
     with target.open("wb") as file_handle:
         np.savez_compressed(
@@ -42,7 +44,14 @@ def save_model(model: RenewableHuberRegressor, path: str | Path) -> Path:
     return target
 
 
-def load_model(path: str | Path) -> RenewableHuberRegressor:
+def load_model(
+    path: str | Path,
+    *,
+    backend: str | None = None,
+    device: str | None = None,
+    dtype: str | None = None,
+    estimator_class: type[RenewableHuberRegressor] | None = None,
+) -> RenewableHuberRegressor:
     """Load a checkpoint made by :func:`save_model` without enabling pickle."""
 
     from .estimator import RenewableHuberRegressor
@@ -51,7 +60,8 @@ def load_model(path: str | Path) -> RenewableHuberRegressor:
     try:
         with np.load(source, allow_pickle=False) as archive:
             metadata = json.loads(str(archive["metadata"].item()))
-            if metadata.get("format_version") != FORMAT_VERSION:
+            format_version = metadata.get("format_version")
+            if format_version not in (1, FORMAT_VERSION):
                 raise ValidationError("Unsupported renewable-huber checkpoint format")
             state = RenewableHuberState(
                 coefficients=np.asarray(archive["coefficients"], dtype=np.float64),
@@ -61,6 +71,7 @@ def load_model(path: str | Path) -> RenewableHuberRegressor:
                 previous_lambda=float(metadata["previous_lambda"]),
                 n_features_in=int(metadata["n_features_in"]),
                 fit_intercept=bool(metadata["fit_intercept"]),
+                weight_sum=float(metadata.get("weight_sum", metadata["n_samples_seen"])),
             )
     except FileNotFoundError:
         raise
@@ -79,8 +90,18 @@ def load_model(path: str | Path) -> RenewableHuberRegressor:
         raise ValidationError("Invalid or corrupted renewable-huber checkpoint") from error
 
     try:
-        model = RenewableHuberRegressor(**metadata["config"])
+        config = dict(metadata["config"])
+        if backend is not None:
+            config["backend"] = backend
+            if device is None:
+                config["device"] = "auto"
+        if device is not None:
+            config["device"] = device
+        if dtype is not None:
+            config["dtype"] = dtype
+        model_type = RenewableHuberRegressor if estimator_class is None else estimator_class
+        model = model_type(**config)
     except (KeyError, TypeError) as error:
         raise ValidationError("Invalid renewable-huber checkpoint configuration") from error
-    model._restore_state(state)
+    model._restore_state(state, feature_names=metadata.get("feature_names_in"))
     return model

@@ -55,8 +55,8 @@ jobs:
             extra: gpu-tensorflow
             test-module: tests.test_tensorflow_backend
           - name: scikit-learn
-            extra: sklearn
-            test-module: tests.test_sklearn_integration
+            extra: sklearn,pandas
+            test-module: tests.test_sklearn_integration tests.test_data_integrations
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

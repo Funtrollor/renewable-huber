@@ -69,6 +69,40 @@ class TorchBackendTests(unittest.TestCase):
             atol=3e-5,
         )
 
+    def test_weighted_tensors_are_detached_and_match_numpy(self) -> None:
+        weights = np.linspace(0.2, 1.8, self.X.shape[0])
+        numpy_model = RenewableHuberRegressor(max_iter=100).fit(
+            self.X, self.y, sample_weight=weights
+        )
+        X_tensor = self.torch.tensor(self.X, dtype=self.torch.float64, requires_grad=True)
+        y_tensor = self.torch.tensor(self.y, dtype=self.torch.float64, requires_grad=True)
+        weight_tensor = self.torch.tensor(weights, dtype=self.torch.float64, requires_grad=True)
+        torch_model = RenewableHuberRegressor(backend="torch", device="cpu", max_iter=100).fit(
+            X_tensor, y_tensor, sample_weight=weight_tensor
+        )
+        prediction = torch_model.predict(X_tensor)
+
+        self.assertFalse(prediction.requires_grad)
+        np.testing.assert_allclose(
+            prediction.numpy(), numpy_model.predict(self.X), rtol=2e-8, atol=2e-8
+        )
+        self.assertAlmostEqual(torch_model.state_.effective_weight, float(weights.sum()), places=12)
+
+    def test_torch_checkpoint_can_restore_to_numpy(self) -> None:
+        model = RenewableHuberRegressor(backend="torch", device="cpu").fit(self.X, self.y)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "torch-to-numpy.npz"
+            model.save(checkpoint)
+            restored = RenewableHuberRegressor.load(checkpoint, backend="numpy", device="cpu")
+
+        self.assertEqual(restored.backend_, "numpy")
+        np.testing.assert_allclose(
+            restored.predict(self.X),
+            model.predict(self.torch.as_tensor(self.X)).numpy(),
+            rtol=2e-8,
+            atol=2e-8,
+        )
+
     @unittest.skipUnless(_torch_ready(), "PyTorch is required")
     def test_cuda_tensors_match_numpy_when_available(self) -> None:
         if not self.torch.cuda.is_available():

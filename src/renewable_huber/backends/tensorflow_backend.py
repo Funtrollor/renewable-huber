@@ -32,6 +32,9 @@ class _TensorFlowNamespace:
     def mean(self, value: Any) -> Any:
         return self._tf.reduce_mean(value)
 
+    def min(self, value: Any) -> Any:
+        return self._tf.reduce_min(value)
+
     def sum(self, value: Any) -> Any:
         return self._tf.reduce_sum(value)
 
