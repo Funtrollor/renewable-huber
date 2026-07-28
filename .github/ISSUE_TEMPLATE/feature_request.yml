@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a focused API, backend, performance, or documentation improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What use case is blocked or unnecessarily difficult?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the API or behavior, including a small usage example where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Explain current workarounds and important tradeoffs.
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and performance
+      description: Note effects on backends, devices, dtype, checkpoints, dependencies, or performance.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I can help test or implement this proposal.
+          required: false
