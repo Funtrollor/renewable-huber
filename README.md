@@ -145,6 +145,8 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 - [支援矩陣與限制](docs/support-matrix.md)
 - [套件架構與運算路徑](docs/architecture.md)
 - [CUDA 效能路徑](docs/gpu-performance.md)
+- [Rust/CUDA native-core RFC](docs/native-core-rfc.md)
+- [Native-core P0 效能基線](docs/native-core-p0-baseline.md)
 - [發布前檢查表](docs/release-checklist.md)
 - [版本與 GitHub Release 流程](docs/release-process.md)
 - [貢獻指南](CONTRIBUTING.md)
