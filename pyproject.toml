@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "renewable-huber"
-version = "0.5.0"
+dynamic = ["version"]
 description = "Renewable Huber regression for robust streaming-data estimation."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,12 +31,16 @@ gpu-tensorflow = ["tensorflow>=2.16"]
 dev = ["build>=1.2", "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.8"]
 
 [project.urls]
+Changelog = "https://github.com/Funtrollor/renewable-huber/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/Funtrollor/renewable-huber#readme"
 Issues = "https://github.com/Funtrollor/renewable-huber/issues"
 Source = "https://github.com/Funtrollor/renewable-huber"
 
 [project.scripts]
 renewable-huber = "renewable_huber.cli:main"
+
+[tool.hatch.version]
+path = "src/renewable_huber/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/renewable_huber"]
@@ -46,7 +50,11 @@ include = [
   "/src/renewable_huber",
   "/tests",
   "/docs/*.md",
+  "/CHANGELOG.md",
+  "/CITATION.cff",
+  "/CONTRIBUTING.md",
   "/README.md",
+  "/SECURITY.md",
   "/pyproject.toml",
 ]
 exclude = [

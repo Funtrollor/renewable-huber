@@ -1,0 +1,36 @@
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Python 3.10 on ubuntu-latest",
+      "Python 3.10 on windows-latest",
+      "Python 3.10 on macos-latest",
+      "Python 3.11 on ubuntu-latest",
+      "Python 3.11 on windows-latest",
+      "Python 3.11 on macos-latest",
+      "Python 3.12 on ubuntu-latest",
+      "Python 3.12 on windows-latest",
+      "Python 3.12 on macos-latest",
+      "Lint and formatting",
+      "PyTorch CPU",
+      "TensorFlow CPU",
+      "scikit-learn CPU",
+      "Wheel and sdist smoke tests"
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 0,
+    "require_last_push_approval": false
+  },
+  "restrictions": null,
+  "required_linear_history": false,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "block_creations": false,
+  "required_conversation_resolution": true,
+  "lock_branch": false,
+  "allow_fork_syncing": true
+}

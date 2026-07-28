@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the preferred research article."
+title: "renewable-huber"
+type: software
+authors:
+  - name: "Funtrollor"
+repository-code: "https://github.com/Funtrollor/renewable-huber"
+url: "https://github.com/Funtrollor/renewable-huber"
+abstract: >-
+  A CPU- and GPU-capable implementation of renewable Huber regression for
+  robust estimation over streaming datasets.
+keywords:
+  - robust regression
+  - streaming data
+  - Huber loss
+  - online learning
+preferred-citation:
+  type: article
+  title: "Renewable Huber estimation method for streaming datasets"
+  authors:
+    - family-names: "Jiang"
+      given-names: "Rong"
+    - family-names: "Liang"
+      given-names: "Lei"
+    - family-names: "Yu"
+      given-names: "Keming"
+  journal: "Electronic Journal of Statistics"
+  year: 2024
+  volume: 18
+  issue: 1
+  start: 674
+  end: 705
+  doi: "10.1214/24-EJS2223"

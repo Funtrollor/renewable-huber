@@ -1,0 +1,73 @@
+name: Bug report
+description: Report reproducible incorrect behavior or a regression.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include security vulnerabilities here; use the
+        private reporting link in SECURITY.md.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include a self-contained code sample and the complete error traceback.
+      render: python
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - NumPy
+        - CuPy
+        - PyTorch
+        - TensorFlow
+        - scikit-learn adapter
+        - Not backend-specific
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "renewable-huber --version or git rev-parse HEAD"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python, dtype, device, dependency versions, and GPU/driver details if relevant.
+      placeholder: |
+        OS:
+        Python:
+        renewable-huber:
+        NumPy/CuPy/PyTorch/TensorFlow:
+        Device and driver:
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add logs, numerical tolerances, screenshots, or related issues if useful.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: This report does not disclose a security vulnerability.
+          required: true

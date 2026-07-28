@@ -1,8 +1,11 @@
 # renewable-huber
 
+[![CI](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml/badge.svg)](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml)
+[![Python 3.10–3.12](https://img.shields.io/badge/Python-3.10%E2%80%933.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+
 `renewable-huber` 是一個針對串流資料的 Renewable Huber Regression 套件。它實作以 Huber loss 為基礎的穩健線性迴歸，處理批次資料時只保留係數與累積資訊矩陣，而非保留所有歷史觀測值。
 
-目前版本是 **v0.5.0 pre-alpha**：提供 NumPy/CPU、CuPy/CUDA、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 scikit-learn Pipeline 與模型選擇工具。
+目前處於 **pre-alpha** 開發階段：提供 NumPy/CPU、CuPy/CUDA、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 scikit-learn Pipeline 與模型選擇工具。套件版號由單一原始碼檔管理，可用 `renewable-huber --version` 查詢。
 
 `backend="auto"` 採用可預期的裝置規則：一般情況固定選擇 NumPy/CPU，只有明確指定 `device="cuda"` 才選擇 CuPy。它不會根據傳入的 PyTorch 或 TensorFlow tensor 自動猜測 backend；需要這些框架時請明確設定 `backend="torch"` 或 `backend="tensorflow"`。完整支援範圍請見[支援矩陣](docs/support-matrix.md)。
 
@@ -142,6 +145,10 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 - [套件架構與運算路徑](docs/architecture.md)
 - [CUDA 效能路徑](docs/gpu-performance.md)
 - [發布前檢查表](docs/release-checklist.md)
+- [版本與 GitHub Release 流程](docs/release-process.md)
+- [貢獻指南](CONTRIBUTING.md)
+- [安全政策](SECURITY.md)
+- [變更紀錄](CHANGELOG.md)
 - 技術報告 `docs/reports/Technical_Report.pdf` 是本機專案資料，刻意排除於 Git repository 與發佈套件之外；請向專案維護者取得。
 - [Renewable Huber 原始論文（Electronic Journal of Statistics，DOI）](https://doi.org/10.1214/24-EJS2223)
 
@@ -149,8 +156,10 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 
 ```powershell
 python -m unittest discover -s tests -v
+ruff check src tests scripts
+ruff format --check src tests scripts
 python -m build
 python scripts/benchmarks/benchmark_numpy_cupy.py --output benchmark.json
 ```
 
-GitHub repository 已設定為 `Funtrollor/renewable-huber`。在公開 PyPI 前，請先決定授權條款，並確認 `renewable-huber` 的 PyPI 名稱可用。
+GitHub repository 已設定為 `Funtrollor/renewable-huber`。問題回報、功能提案與 Pull Request 請使用 repository 內的模板；安全漏洞請依 [SECURITY.md](SECURITY.md) 私下回報。PyPI 發布會等公開 API、效能與文件穩定後再啟用。

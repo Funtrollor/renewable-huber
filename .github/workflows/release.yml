@@ -1,0 +1,60 @@
+name: GitHub Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Validate, build, and create release
+    if: github.repository == 'Funtrollor/renewable-huber'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Require a release commit from main
+        shell: bash
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Require tag and package versions to match
+        shell: bash
+        run: |
+          package_version="$(python -c "import runpy; print(runpy.run_path('src/renewable_huber/_version.py')['__version__'])")"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "$tag_version" != "$package_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $package_version"
+            exit 1
+          fi
+      - name: Install release tools and project
+        run: python -m pip install ".[dev]" twine
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Lint
+        run: ruff check src tests scripts
+      - name: Check formatting
+        run: ruff format --check src tests scripts
+      - name: Build wheel and sdist
+        run: python -m build
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
+      - name: Preserve release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: renewable-huber-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "renewable-huber $GITHUB_REF_NAME"
