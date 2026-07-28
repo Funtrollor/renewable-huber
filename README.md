@@ -1,27 +1,43 @@
 # renewable-huber
 
 [![CI](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml/badge.svg)](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml)
-[![Python 3.10–3.12](https://img.shields.io/badge/Python-3.10%E2%80%933.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/renewable-huber.svg)](https://pypi.org/project/renewable-huber/)
+[![Python versions](https://img.shields.io/pypi/pyversions/renewable-huber.svg)](https://pypi.org/project/renewable-huber/)
+[![GitHub Release](https://img.shields.io/github/v/release/Funtrollor/renewable-huber)](https://github.com/Funtrollor/renewable-huber/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-D22128.svg)](LICENSE)
 
 `renewable-huber` 是一個針對串流資料的 Renewable Huber Regression 套件。它實作以 Huber loss 為基礎的穩健線性迴歸，處理批次資料時只保留係數與累積資訊矩陣，而非保留所有歷史觀測值。
 
-目前處於 **pre-alpha** 開發階段：提供 NumPy/CPU、CuPy/CUDA、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 scikit-learn Pipeline 與模型選擇工具。套件版號由單一原始碼檔管理，可用 `renewable-huber --version` 查詢。
+目前最新版本為 **0.5.1**，已發布至 [PyPI](https://pypi.org/project/renewable-huber/)，但仍處於 **pre-alpha** 開發階段。套件提供 NumPy/CPU、CuPy/CUDA、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 pandas 與 scikit-learn Pipeline／模型選擇工具。可用 `renewable-huber --version` 查詢已安裝版本。
 
 `backend="auto"` 採用可預期的裝置規則：一般情況固定選擇 NumPy/CPU，只有明確指定 `device="cuda"` 才選擇 CuPy。它不會根據傳入的 PyTorch 或 TensorFlow tensor 自動猜測 backend；需要這些框架時請明確設定 `backend="torch"` 或 `backend="tensorflow"`。完整支援範圍請見[支援矩陣](docs/support-matrix.md)。
 
 ## 安裝
 
-開發中的本地安裝：
+需要 Python 3.10–3.12。基本安裝只依賴 NumPy：
 
 ```powershell
-python -m pip install -e .
+python -m pip install renewable-huber
+renewable-huber --version
 ```
 
-發布至 PyPI 後將可使用：
+依使用情境安裝對應 extra：
+
+| 使用情境 | 安裝指令 |
+| --- | --- |
+| pandas 輸入 | `python -m pip install "renewable-huber[pandas]"` |
+| scikit-learn adapter | `python -m pip install "renewable-huber[sklearn]"` |
+| CuPy / CUDA 12 | `python -m pip install "renewable-huber[gpu-cupy]"` |
+| PyTorch | `python -m pip install "renewable-huber[gpu-torch]"` |
+| TensorFlow | `python -m pip install "renewable-huber[gpu-tensorflow]"` |
+
+GPU extra 只安裝對應框架，不會替你安裝 NVIDIA driver 或 CUDA runtime。請先確認框架、
+作業系統、Python 與 GPU driver 的相容性；詳細限制請見[支援矩陣](docs/support-matrix.md)。
+
+從原始碼進行開發時：
 
 ```powershell
-pip install renewable-huber
+python -m pip install -e ".[dev]"
 ```
 
 ## 快速開始
@@ -45,10 +61,6 @@ assert np.allclose(prediction, restored.predict(X_test))
 
 GPU 執行時請安裝 CUDA 12 版 CuPy extra，並將批次與 state 留在 CUDA：
 
-```powershell
-pip install "renewable-huber[gpu-cupy]"
-```
-
 ```python
 import cupy as cp
 
@@ -59,10 +71,6 @@ gpu_prediction = gpu_model.predict(cp.asarray(X_test))  # cupy.ndarray，未回�
 
 PyTorch 可在 CPU 或明確指定的 CUDA 裝置上使用原生 `torch.Tensor`：
 
-```powershell
-pip install "renewable-huber[gpu-torch]"
-```
-
 ```python
 import torch
 
@@ -72,10 +80,6 @@ torch_prediction = torch_model.predict(torch.as_tensor(X_test, device="cuda"))  
 ```
 
 TensorFlow backend 使用 eager execution，並同樣支援原生 `tf.Tensor`：
-
-```powershell
-pip install "renewable-huber[gpu-tensorflow]"
-```
 
 ```python
 import tensorflow as tf
@@ -89,10 +93,6 @@ tensorflow_prediction = tensorflow_model.predict(tf.convert_to_tensor(X_test))  
 ```
 
 scikit-learn adapter 可直接使用 Pipeline、clone 與 GridSearchCV：
-
-```powershell
-pip install "renewable-huber[sklearn]"
-```
 
 ```python
 from sklearn.pipeline import make_pipeline
@@ -165,4 +165,4 @@ python -m build
 python scripts/benchmarks/benchmark_numpy_cupy.py --output benchmark.json
 ```
 
-GitHub repository 已設定為 `Funtrollor/renewable-huber`。問題回報、功能提案與 Pull Request 請使用 repository 內的模板；安全漏洞請依 [SECURITY.md](SECURITY.md) 私下回報。PyPI 發布會等公開 API、效能與文件穩定後再啟用。
+GitHub repository 已設定為 `Funtrollor/renewable-huber`。問題回報、功能提案與 Pull Request 請使用 repository 內的模板；安全漏洞請依 [SECURITY.md](SECURITY.md) 私下回報。版本由 Git tag 驅動 GitHub Release，並透過 PyPI Trusted Publishing（OIDC）發布，不在 repository 保存長效 PyPI token。
