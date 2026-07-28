@@ -1,4 +1,4 @@
-name: GitHub Release
+name: Release
 
 on:
   push:
@@ -6,11 +6,11 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: Validate, build, and create release
+  build:
+    name: Validate and build distributions
     if: github.repository == 'Funtrollor/renewable-huber'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -50,11 +50,50 @@ jobs:
       - name: Preserve release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: renewable-huber-${{ github.ref_name }}
+          name: python-distributions
           path: dist/*
           if-no-files-found: error
           retention-days: 30
+
+  github-release:
+    name: Create GitHub Release
+    needs: build
+    if: github.repository == 'Funtrollor/renewable-huber'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "renewable-huber $GITHUB_REF_NAME"
+
+  publish-pypi:
+    name: Publish distributions to PyPI
+    needs:
+      - build
+      - github-release
+    if: github.repository == 'Funtrollor/renewable-huber'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/renewable-huber
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

@@ -8,6 +8,8 @@ stabilised.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-28
+
 ### Added
 
 - NumPy, CuPy/CUDA, PyTorch, and TensorFlow computation backends.
@@ -26,4 +28,5 @@ stabilised.
 
 - Documented private vulnerability reporting and supported-version policy.
 
-[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/main...HEAD
+[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Funtrollor/renewable-huber/releases/tag/v0.5.0

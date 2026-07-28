@@ -1,0 +1,60 @@
+name: TestPyPI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Validate and build distributions
+    if: github.repository == 'Funtrollor/renewable-huber' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install release tools and project
+        run: python -m pip install ".[dev]" twine
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Lint
+        run: ruff check src tests scripts
+      - name: Check formatting
+        run: ruff format --check src tests scripts
+      - name: Build wheel and sdist
+        run: python -m build
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
+      - name: Preserve release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-pypi-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-test-pypi:
+    name: Publish distributions to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/renewable-huber
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: test-pypi-distributions
+          path: dist
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
