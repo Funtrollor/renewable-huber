@@ -2,6 +2,10 @@
 
 v0.5 將「公開估計器」、「可共用演算法核心」與「陣列後端」分離。四個正式 backend 共用同一份 RHE Newton／RPSHE LAMM 更新邏輯；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
 
+後續 native engine 的正式邊界、相容性契約與遷移門檻已定義於
+[native-core RFC](native-core-rfc.md)；重構前的 golden corpus、shape sweep
+與 Nsight 結果則記錄於 [P0 baseline](native-core-p0-baseline.md)。
+
 ```text
 RenewableHuberRegressor
         │

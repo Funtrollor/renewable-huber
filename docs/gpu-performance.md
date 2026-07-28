@@ -57,3 +57,18 @@ a device-side implementation.
 For hardware validation, the repository includes a manual-only GitHub Actions
 workflow (`GPU validation`). Attach a trusted self-hosted runner with the labels
 `self-hosted`, `windows`, `x64`, and `gpu`; it never runs on pull-request events.
+
+The native-engine migration has a broader shape sweep and an NVTX-instrumented
+profiling workload:
+
+```powershell
+python scripts/benchmarks/benchmark_shape_sweep.py `
+  --profile standard --backend both --penalty both --dtype both `
+  --output artifacts/shape-sweep.json
+
+.\scripts\profiling\run_nsight_systems.ps1 -Python python
+```
+
+See the [native-core RFC](native-core-rfc.md) for the accepted migration
+boundary and the [P0 baseline](native-core-p0-baseline.md) for the committed
+pre-native measurements and profiler findings.

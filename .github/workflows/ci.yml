@@ -43,6 +43,8 @@ jobs:
         run: ruff check src tests scripts
       - name: Check formatting
         run: ruff format --check src tests scripts
+      - name: Verify native-core golden corpus
+        run: python scripts/generate_native_golden.py --check
 
   optional-backend:
     name: ${{ matrix.name }} CPU

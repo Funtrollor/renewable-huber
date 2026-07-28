@@ -25,3 +25,19 @@ jobs:
         run: python -m pip install ".[dev,gpu-cupy]"
       - name: Run CUDA C++ kernel and CuPy integration tests
         run: python -m unittest tests.test_cuda_kernels tests.test_cupy_backend -v
+      - name: Capture CUDA shape-sweep smoke baseline
+        run: >
+          python scripts/benchmarks/benchmark_shape_sweep.py
+          --profile smoke --backend both --penalty both --dtype both
+          --warmup 1 --repeats 3
+          --output artifacts/gpu-shape-sweep-smoke.json
+      - name: Capture NVTX workload metadata
+        run: >
+          python scripts/profiling/profile_cuda_update.py
+          --samples 8192 --features 32 --batch-size 4096
+          --warmup 1 --repeats 1
+          --metadata-output artifacts/gpu-profile-smoke.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpu-p0-baseline
+          path: artifacts/*.json
