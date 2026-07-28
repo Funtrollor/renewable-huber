@@ -8,6 +8,13 @@ stabilised.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-28
+
+### Fixed
+
+- Check out the tagged repository before verifying and creating a GitHub Release.
+- Make GitHub Release artifact uploads safe to rerun after a partial release failure.
+
 ## [0.5.0] - 2026-07-28
 
 ### Added
@@ -28,5 +35,6 @@ stabilised.
 
 - Documented private vulnerability reporting and supported-version policy.
 
-[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Funtrollor/renewable-huber/releases/tag/v0.5.0
