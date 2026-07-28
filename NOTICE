@@ -1,0 +1,18 @@
+renewable-huber
+Copyright 2026 Funtrollor and renewable-huber contributors
+
+This software is an independent implementation informed by:
+
+Rong Jiang, Lei Liang, and Keming Yu,
+"Renewable Huber estimation method for streaming datasets,"
+Electronic Journal of Statistics 18(1), 674-705, 2024.
+https://doi.org/10.1214/24-EJS2223
+
+The research article is distributed under the Creative Commons
+Attribution 4.0 International license:
+https://creativecommons.org/licenses/by/4.0/
+
+The article's authors and their institutions did not create, sponsor,
+approve, or endorse this software. They are not listed as software
+authors or copyright holders. This notice is informational and does not
+modify the Apache License, Version 2.0, that covers renewable-huber.

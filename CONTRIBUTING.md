@@ -61,5 +61,5 @@ CPU integration checks, package smoke tests, and resolved review conversations. 
 branch deletion are disabled. The applied settings are recorded in
 `.github/branch-protection.json`.
 
-By submitting a contribution, you agree that it may be distributed under the repository's chosen
-license once that license is added.
+Unless explicitly marked otherwise, contributions intentionally submitted for inclusion are
+distributed under the Apache License, Version 2.0, as described in section 5 of that license.

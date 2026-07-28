@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.26"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,6 +8,8 @@ dynamic = ["version"]
 description = "Renewable Huber regression for robust streaming-data estimation."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Renewable Huber contributors" }]
 keywords = ["robust-regression", "streaming-data", "huber", "online-learning"]
 classifiers = [
@@ -53,6 +55,8 @@ include = [
   "/CHANGELOG.md",
   "/CITATION.cff",
   "/CONTRIBUTING.md",
+  "/LICENSE",
+  "/NOTICE",
   "/README.md",
   "/SECURITY.md",
   "/pyproject.toml",

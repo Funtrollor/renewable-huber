@@ -2,6 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite both the software and the preferred research article."
 title: "renewable-huber"
 type: software
+license: "Apache-2.0"
 authors:
   - name: "Funtrollor"
 repository-code: "https://github.com/Funtrollor/renewable-huber"
