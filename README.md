@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml/badge.svg)](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml)
 [![Python 3.10–3.12](https://img.shields.io/badge/Python-3.10%E2%80%933.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-D22128.svg)](LICENSE)
 
 `renewable-huber` 是一個針對串流資料的 Renewable Huber Regression 套件。它實作以 Huber loss 為基礎的穩健線性迴歸，處理批次資料時只保留係數與累積資訊矩陣，而非保留所有歷史觀測值。
 
@@ -151,6 +152,8 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 - [變更紀錄](CHANGELOG.md)
 - 技術報告 `docs/reports/Technical_Report.pdf` 是本機專案資料，刻意排除於 Git repository 與發佈套件之外；請向專案維護者取得。
 - [Renewable Huber 原始論文（Electronic Journal of Statistics，DOI）](https://doi.org/10.1214/24-EJS2223)
+
+本專案是依據上述論文方法撰寫的獨立軟體實作，並非論文作者或其任職機構建立、贊助、核准或背書的官方套件。研究文章採 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)；本專案原始碼則採 [Apache License 2.0](LICENSE)，詳細歸屬聲明請見 [NOTICE](NOTICE)。
 
 ## 開發與驗證
 

@@ -16,6 +16,7 @@ stabilised.
 - Versioned checkpoints with explicit backend, device, and dtype migration.
 - CPU and GPU benchmark tools, cross-platform CI, and manual self-hosted GPU validation.
 - Community health files, dependency automation, citation metadata, and release automation.
+- Apache-2.0 licensing and an independent-implementation attribution notice.
 
 ### Changed
 

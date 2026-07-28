@@ -3,6 +3,7 @@
 ## 已完成的發布基礎
 
 - [x] 使用 `src/renewable_huber/_version.py` 作為唯一版號來源。
+- [x] 採用 Apache-2.0，並提供論文歸屬與獨立實作聲明。
 - [x] 將 GitHub 連結指向 `Funtrollor/renewable-huber`。
 - [x] 排除資料、模型、研究 PDF、legacy 程式與本機工具狀態。
 - [x] 在 Windows、Linux、macOS 與 Python 3.10–3.12 執行 CI。
@@ -13,7 +14,6 @@
 
 ## 第一次正式發布前
 
-- [ ] 決定並加入開源授權條款與 `pyproject.toml` license metadata。
 - [ ] 凍結公開 API，完成效能基準與論文／legacy golden-case 驗證。
 - [ ] 更新 `CHANGELOG.md` 的 `Unreleased` 項目並決定正式版號。
 - [ ] 在 `_version.py` 更新版號，確認工作樹乾淨且 `main` CI 全數通過。
