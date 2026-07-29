@@ -1,0 +1,12 @@
+[package]
+name = "rh-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portable algorithm contracts for Renewable Huber native engines."
+
+[dependencies]
+num-traits.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "renewable-huber-native-cpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PyO3 bindings for the optional Renewable Huber Rust CPU engine."
+
+[lib]
+name = "_renewable_huber_native_cpu"
+crate-type = ["cdylib"]
+
+[dependencies]
+numpy.workspace = true
+pyo3.workspace = true
+rh-core = { path = "../rh-core" }
+rh-cpu = { path = "../rh-cpu" }

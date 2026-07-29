@@ -73,13 +73,14 @@ From a PowerShell prompt:
 
 ```powershell
 python -m pip install "maturin>=1.8,<2"
-.\scripts\native\build_native.ps1 -Python python
+.\scripts\native\build_native_cuda.ps1 -Python python
 ```
 
 The build script enters the Visual Studio x64 environment, asks Maturin to
-compile the `cuda` feature, and installs `renewable_huber._native_cuda` into
-the selected Python environment. This is a developer/source build; the base
-PyPI wheel continues to require neither Rust nor CUDA.
+compile the `cuda` feature, and installs `_renewable_huber_native_cuda`; the
+base package shim exposes it as `renewable_huber._native_cuda`. This is a
+developer/source build; the base PyPI wheel continues to require neither Rust
+nor CUDA.
 
 ## Use
 

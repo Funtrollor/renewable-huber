@@ -8,10 +8,22 @@ stabilised.
 
 ## [Unreleased]
 
+The next minor release is `0.6.0`; the published stable package remains
+`0.5.1` until this native-core work is released.
+
 ### Added
 
+- An opt-in `native_cpu` backend built from the `rh-core`, `rh-cpu`, and
+  `rh-python-cpu` Rust crates.
+- Whole-batch native CPU Newton and LAMM solvers for contiguous NumPy
+  `float32`/`float64` inputs, including portable checkpoints and
+  minimum-norm singular-system fallback.
 - An opt-in Rust/PyO3 and CUDA C++ whole-batch engine for unpenalized
   Renewable Huber updates, with persistent device state and workspaces.
+- A unified Rust workspace and separate compatible CPU/CUDA native wheel
+  projects for the `renewable-huber` 0.6 API.
+- Cross-platform native CPU CI, golden-corpus differential tests, clean native
+  wheel installation checks, and NumPy/native shape-sweep benchmarking.
 - Native CUDA golden differential tests, shape-sweep support, profiling
   support, and a reproducible Windows source-build script.
 

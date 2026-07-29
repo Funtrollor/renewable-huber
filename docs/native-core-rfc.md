@@ -106,18 +106,35 @@ native/
   crates/
     rh-core/          algorithm types, state invariants, error model
     rh-cpu/           CPU solver, BLAS/LAPACK dispatch, fused loops
-    rh-python/        PyO3 module, NumPy and DLPack adapters
     rh-cuda-ffi/      safe Rust wrapper over the C ABI
+    rh-python-cpu/    CPU PyO3 module and NumPy adapter
+    rh-python-cuda/   CUDA PyO3 module and host NumPy adapter
   cuda/
     include/rh_cuda.h
     src/engine.cu
     src/huber_kernels.cu
     src/linalg.cpp
+  python-cpu/         CPU wheel metadata and legal files
+  python-cuda/        CUDA wheel metadata and legal files
 ```
 
 `rh-core` must not depend on Python or CUDA. The Python extension will release
 the GIL while an update is executing. C++ implementation details must not cross
 the CUDA C ABI.
+
+### P1 CPU implementation amendment
+
+P1 is delivered as an independently installable
+`renewable-huber-native-cpu` distribution. Its extension module is
+`_renewable_huber_native_cpu`, and users opt in with
+`backend="native_cpu"`. The automatic CPU selector remains NumPy until
+published benchmark records justify promotion.
+
+The P1 dense-solver boundary uses a portable partial-pivot LU implementation
+with a minimum-norm SVD fallback. The provider is replaceable without changing
+`rh-core`, the PyO3 ABI, or checkpoint layout. A future static BLAS/LAPACK
+provider must pass the same golden corpus and avoid oversubscription before it
+can become a wheel default.
 
 ## Native update boundary
 

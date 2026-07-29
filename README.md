@@ -21,6 +21,24 @@ python -m pip install renewable-huber
 renewable-huber --version
 ```
 
+### 選用的 Rust CPU 核心
+
+P1 native CPU 核心採明確 opt-in，並與純 Python 基礎套件分開發行。安裝或在本機
+建置 `renewable-huber-native-cpu` 後，可用以下方式選取：
+
+```python
+native_model = RenewableHuberRegressor(
+    backend="native_cpu",
+    device="cpu",
+    dtype="float64",
+)
+native_model.fit(X_train, y_train)
+```
+
+它支援 `penalty="none"` 與 `penalty="l1"`，輸入為 C-contiguous NumPy
+`float32`／`float64`。P1 階段的 `backend="auto"` 在 CPU 上仍維持使用 NumPy。
+建置、正確性與 benchmark 細節請見 [Native-core P1](docs/native-core-p1.md)。
+
 依使用情境安裝對應 extra：
 
 | 使用情境 | 安裝指令 |
@@ -75,8 +93,12 @@ PyTorch 可在 CPU 或明確指定的 CUDA 裝置上使用原生 `torch.Tensor`�
 import torch
 
 torch_model = RenewableHuberRegressor(backend="torch", device="cuda", dtype="float32")
-torch_model.partial_fit(torch.as_tensor(X_batch, device="cuda"), torch.as_tensor(y_batch, device="cuda"))
-torch_prediction = torch_model.predict(torch.as_tensor(X_test, device="cuda"))  # detached torch.Tensor
+torch_model.partial_fit(
+    torch.as_tensor(X_batch, device="cuda"), torch.as_tensor(y_batch, device="cuda")
+)
+torch_prediction = torch_model.predict(
+    torch.as_tensor(X_test, device="cuda")
+)  # detached torch.Tensor
 ```
 
 TensorFlow backend 使用 eager execution，並同樣支援原生 `tf.Tensor`：

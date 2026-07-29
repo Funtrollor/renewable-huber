@@ -1,4 +1,4 @@
-"""Opt-in bridge to the Rust/PyO3 and CUDA C++ native engine."""
+"""Opt-in bridge to the Rust/PyO3 native CPU engine."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..exceptions import BackendUnavailableError, ValidationError
+from ..exceptions import BackendUnavailableError
 from .numpy_backend import NumPyBackend
 
 if TYPE_CHECKING:
@@ -18,30 +18,29 @@ _EXPECTED_ABI_VERSION = 1
 _EXPECTED_PYTHON_API_VERSION = 1
 
 
-class NativeCudaBackend(NumPyBackend):
-    """Host-input adapter for the whole-batch native CUDA solver.
+class NativeCpuBackend(NumPyBackend):
+    """Host-state adapter for the whole-batch native Rust CPU solver.
 
-    Validation and checkpoint data intentionally remain NumPy-backed. The
-    opaque native engine keeps its numerical state, CUDA handles, and reusable
-    workspaces resident on one GPU across ``partial_fit`` calls.
+    The public estimator keeps validation, feature names, and portable state
+    in NumPy. One opaque engine per estimator reuses Rust workspaces across
+    batches while the NumPy state remains authoritative for checkpoints.
     """
 
-    name = "native_cuda"
-    device = "cuda"
+    name = "native_cpu"
+    device = "cpu"
 
-    def __init__(self, dtype: str = "float64", *, device_id: int = 0) -> None:
+    def __init__(self, dtype: str = "float64") -> None:
         super().__init__(dtype)
         try:
-            from renewable_huber import _native_cuda
+            from renewable_huber import _native_cpu
         except (ImportError, OSError) as error:
             raise BackendUnavailableError(
-                "backend='native_cuda' requires the separately built Rust/CUDA extension. "
-                "Build it with scripts/native/build_native_cuda.ps1 and ensure the matching "
-                "CUDA Toolkit runtime is installed."
+                "backend='native_cpu' requires the separately built Rust extension. "
+                "Install renewable-huber-native-cpu or build it with Maturin."
             ) from error
 
         try:
-            version = _native_cuda.version()
+            version = _native_cpu.version()
             compatible = (
                 isinstance(version, dict)
                 and version.get("abi_version") == _EXPECTED_ABI_VERSION
@@ -49,37 +48,21 @@ class NativeCudaBackend(NumPyBackend):
             )
         except Exception as error:
             raise BackendUnavailableError(
-                "The native CUDA extension did not provide compatible version metadata"
+                "The native CPU extension did not provide compatible version metadata"
             ) from error
         if not compatible:
             raise BackendUnavailableError(
-                "The native CUDA extension is incompatible with this renewable-huber build; "
+                "The native CPU extension is incompatible with this renewable-huber build; "
                 f"expected ABI {_EXPECTED_ABI_VERSION} and Python API "
                 f"{_EXPECTED_PYTHON_API_VERSION}, received {version!r}"
             )
-        try:
-            available = bool(_native_cuda.is_available())
-            device_count = int(_native_cuda.device_count())
-        except Exception as error:
-            raise BackendUnavailableError(
-                "The native CUDA extension could not query the CUDA runtime"
-            ) from error
-        if not available:
-            raise BackendUnavailableError(
-                "The renewable-huber native extension was built without CUDA support"
-            )
-        if device_id < 0 or device_id >= device_count:
-            raise BackendUnavailableError(
-                f"CUDA device {device_id} is unavailable; detected {device_count}"
-            )
-        self._native_module = _native_cuda
-        self._device_id = device_id
+        self._native_module = _native_cpu
         self._engine: Any | None = None
         self._engine_batch_count: int | None = None
 
     @property
     def native_version(self) -> str:
-        """Return the loaded native ABI version."""
+        """Return the loaded native version metadata."""
 
         return str(self._native_module.version())
 
@@ -93,17 +76,9 @@ class NativeCudaBackend(NumPyBackend):
         sample_weight: np.ndarray | None,
         batch_weight: float,
     ) -> tuple[RenewableHuberState, UpdateDiagnostics]:
-        """Run one complete unpenalized update without a Python solver loop."""
+        """Run one complete update without returning to the Python solver loop."""
 
-        if config.penalty != "none":
-            raise ValidationError(
-                "backend='native_cuda' currently supports penalty='none'; "
-                "use backend='cupy' for the L1 solver"
-            )
-
-        n_parameters = int(X.shape[1])
-        self.restore_native_state(state, n_parameters=n_parameters)
-
+        self.restore_native_state(state, n_parameters=int(X.shape[1]))
         weights = (
             None if sample_weight is None else np.ascontiguousarray(sample_weight, dtype=self.dtype)
         )
@@ -113,36 +88,30 @@ class NativeCudaBackend(NumPyBackend):
                 np.ascontiguousarray(y, dtype=self.dtype),
                 weights,
                 batch_weight=float(batch_weight),
-                n_features_in=state.n_features_in,
+                n_features_in=int(state.n_features_in),
+                fit_intercept=bool(state.fit_intercept),
                 tau=float(config.tau),
+                penalty=str(config.penalty),
+                lambda_scale=float(config.lambda_scale),
                 bandwidth_scale=float(config.bandwidth_scale),
                 max_iter=int(config.max_iter),
                 tol=float(config.tol),
                 ridge=float(config.ridge),
             )
         except Exception:
-            # A hard native error may leave a CUDA stream or scratch buffer in
-            # an unusable state. The authoritative host state was not advanced,
-            # so discard the opaque engine and recreate it from that mirror on
-            # the next call instead of attempting a silent continuation.
-            self._engine = None
-            self._engine_batch_count = None
+            self._discard_engine()
             raise
         self._engine_batch_count = int(result["batch_count"])
         return self._decode_result(result, state)
 
     def native_predict(self, X: np.ndarray, state: RenewableHuberState) -> np.ndarray:
-        """Predict through the resident CUDA coefficient vector."""
+        """Predict through the resident native coefficient vector."""
 
-        if self._engine is None:
-            self.restore_native_state(state)
-        elif self._engine_batch_count != state.batch_count:
-            self.restore_native_state(state)
+        self.restore_native_state(state)
         try:
             prediction = self._engine.predict(np.ascontiguousarray(X, dtype=self.dtype))
         except Exception:
-            self._engine = None
-            self._engine_batch_count = None
+            self._discard_engine()
             raise
         return np.asarray(prediction, dtype=self.dtype)
 
@@ -152,27 +121,21 @@ class NativeCudaBackend(NumPyBackend):
         *,
         n_parameters: int | None = None,
     ) -> None:
-        """Restore portable state while retaining an existing engine workspace.
-
-        This internal hook is also used by the benchmark harness to measure a
-        repeatable steady-state transition without timing handle creation.
-        """
+        """Restore portable state if the engine mirror is absent or stale."""
 
         if self._engine is None:
             if n_parameters is None:
                 n_parameters = int(state.coefficients.shape[0])
             try:
-                self._engine = self._native_module.NativeCudaEngine(
-                    self.dtype.name, n_parameters, self._device_id
-                )
+                self._engine = self._native_module.NativeCpuEngine(self.dtype.name, n_parameters)
             except Exception as error:
-                self._engine = None
-                self._engine_batch_count = None
+                self._discard_engine()
                 raise BackendUnavailableError(
-                    "The native CUDA engine could not initialize on the requested device"
+                    "The native CPU engine could not initialize"
                 ) from error
         elif self._engine_batch_count == state.batch_count:
             return
+
         try:
             self._engine.restore(
                 np.ascontiguousarray(state.coefficients, dtype=self.dtype),
@@ -183,10 +146,13 @@ class NativeCudaBackend(NumPyBackend):
                 float(state.effective_weight),
             )
         except Exception:
-            self._engine = None
-            self._engine_batch_count = None
+            self._discard_engine()
             raise
-        self._engine_batch_count = state.batch_count
+        self._engine_batch_count = int(state.batch_count)
+
+    def _discard_engine(self) -> None:
+        self._engine = None
+        self._engine_batch_count = None
 
     def _decode_result(
         self, result: dict[str, Any], previous_state: RenewableHuberState

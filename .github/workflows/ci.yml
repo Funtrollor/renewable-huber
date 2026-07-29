@@ -11,6 +11,78 @@ permissions:
   contents: read
 
 jobs:
+  rust-quality:
+    name: Rust CPU core quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check Rust formatting
+        working-directory: native
+        run: cargo fmt --all -- --check
+      - name: Check Rust workspace
+        working-directory: native
+        run: cargo check --locked --workspace --all-targets
+      - name: Test Rust workspace
+        working-directory: native
+        run: cargo test --locked --workspace --all-targets
+      - name: Lint Rust workspace
+        working-directory: native
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  rust-msrv:
+    name: Rust CPU core MSRV 1.82
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.82
+      - name: Check locked workspace at the declared MSRV
+        working-directory: native
+        run: cargo check --locked --workspace --all-targets
+
+  native-cpu:
+    name: Native CPU on ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install package and native build frontend
+        run: python -m pip install ".[dev]" maturin
+      - name: Build matching base wheel
+        run: python -m build --wheel --outdir dist-base
+      - name: Build native CPU wheel
+        working-directory: native/python-cpu
+        run: python -m maturin build --release --out ../../dist-native-cpu
+      - name: Smoke-test matching wheels in a clean environment
+        run: >-
+          python scripts/native/smoke_test_cpu_wheels.py
+          --base-dir dist-base
+          --native-dir dist-native-cpu
+      - name: Install native CPU wheel
+        run: >-
+          python -c "import glob, subprocess, sys;
+          wheels=glob.glob('dist-native-cpu/*.whl');
+          assert len(wheels)==1, wheels;
+          subprocess.check_call([sys.executable, '-m', 'pip', 'install', wheels[0]])"
+      - name: Run native CPU differential tests
+        run: >-
+          python -m unittest
+          tests.test_native_cpu_backend
+          tests.test_native_golden -v
+
   baseline:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

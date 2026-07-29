@@ -84,7 +84,7 @@ $maturinArguments = @(
     "maturin",
     "develop",
     "--manifest-path",
-    "crates/rh-python/Cargo.toml",
+    "crates/rh-python-cuda/Cargo.toml",
     "--features",
     "cuda"
 )
@@ -103,4 +103,4 @@ finally {
     Pop-Location
 }
 
-Write-Host "Installed renewable_huber._native_cuda into the selected Python environment."
+Write-Host "Installed _renewable_huber_native_cuda for the renewable_huber._native_cuda shim."

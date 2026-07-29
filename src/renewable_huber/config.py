@@ -10,7 +10,15 @@ from typing import Literal
 from .exceptions import ValidationError
 
 Penalty = Literal["none", "l1"]
-BackendName = Literal["auto", "numpy", "cupy", "native_cuda", "torch", "tensorflow"]
+BackendName = Literal[
+    "auto",
+    "numpy",
+    "native_cpu",
+    "cupy",
+    "native_cuda",
+    "torch",
+    "tensorflow",
+]
 DeviceName = Literal["auto", "cpu", "cuda"]
 DTypeName = Literal["float32", "float64"]
 
@@ -59,6 +67,7 @@ class EstimatorConfig:
         if self.backend not in (
             "auto",
             "numpy",
+            "native_cpu",
             "cupy",
             "native_cuda",
             "torch",
