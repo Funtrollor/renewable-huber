@@ -94,6 +94,24 @@ Benchmark records include engine initialization. NumPy and native CPU both
 construct a new estimator for each timed repeat, so the comparison uses the
 same estimator lifecycle.
 
+The checked-in Windows/CPython 3.11 baseline at commit `4ea5ff7` is
+[`benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json`](../benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json).
+The table reports `NumPy median / native median`; values above 1 mean the
+native engine is faster.
+
+| Standard shape | penalty | float32 | float64 |
+| --- | --- | ---: | ---: |
+| latency (4,096 × 16) | none | 1.69× | 1.56× |
+| reference (100,000 × 90) | none | 0.84× | 0.60× |
+| wide (16,384 × 256) | none | 25.68× | 19.65× |
+| streaming (1,000,000 × 32) | none | 0.97× | 0.79× |
+
+The optimized weighted Gram path makes the wide unpenalized case substantially
+faster, while reference/streaming shapes and most L1 cases remain slower than
+this host's NumPy build. Those results define optimization targets rather than
+being hidden: reducing dense-solver allocation and LAMM overhead is the next
+CPU-provider work.
+
 The portable P1 dense solver currently allocates nalgebra matrix/vector
 storage per solve. Reusing factorization storage or selecting a tuned
 BLAS/LAPACK provider is intentionally left as the next CPU-provider
