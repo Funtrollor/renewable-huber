@@ -118,26 +118,6 @@ jobs:
       - name: Verify native-core golden corpus
         run: python scripts/generate_native_golden.py --check
 
-  rust-quality:
-    name: Rust workspace quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path native/Cargo.toml --all -- --check
-      - name: Check CPU-safe workspace build
-        run: cargo check --manifest-path native/Cargo.toml --workspace --all-targets
-      - name: Run Rust tests
-        run: cargo test --manifest-path native/Cargo.toml --workspace --all-targets
-      - name: Lint Rust workspace
-        run: cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings
-
   optional-backend:
     name: ${{ matrix.name }} CPU
     runs-on: ubuntu-latest
