@@ -66,7 +66,7 @@ def main() -> int:
                     "from renewable_huber import RenewableHuberRegressor, __version__; "
                     "from renewable_huber import _native_cuda; "
                     "assert __version__.startswith('0.6.'); "
-                    "assert _native_cuda.version()['python_api_version']==1; "
+                    "assert _native_cuda.version()['python_api_version']==2; "
                     "assert _native_cuda.is_available(); "
                     "X=np.arange(24,dtype=np.float32).reshape(8,3); "
                     "y=np.arange(8,dtype=np.float32); "

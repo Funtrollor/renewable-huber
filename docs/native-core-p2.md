@@ -35,8 +35,8 @@ scalars to the C++ host between iterations. Eliminating those synchronization
 points with device-side decisions is a measured follow-up optimization, not a
 claim of this baseline.
 
-The separately built extension reports both C ABI version 1 and Python payload
-API version 1. The base package checks both before creating an engine, so an
+The separately built extension reports C ABI version 1 and Python payload API
+version 2. The base package checks both before creating an engine, so an
 older or unrelated native module fails explicitly instead of reaching a
 method or result-dictionary mismatch later.
 

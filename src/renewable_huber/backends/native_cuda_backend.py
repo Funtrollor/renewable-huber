@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from ..state import RenewableHuberState
 
 _EXPECTED_ABI_VERSION = 1
-_EXPECTED_PYTHON_API_VERSION = 1
+_EXPECTED_PYTHON_API_VERSION = 2
 
 
 class NativeCudaBackend(NumPyBackend):
@@ -114,6 +114,7 @@ class NativeCudaBackend(NumPyBackend):
                 weights,
                 batch_weight=float(batch_weight),
                 n_features_in=state.n_features_in,
+                fit_intercept=state.fit_intercept,
                 tau=float(config.tau),
                 bandwidth_scale=float(config.bandwidth_scale),
                 max_iter=int(config.max_iter),

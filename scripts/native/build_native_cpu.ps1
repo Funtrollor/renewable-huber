@@ -27,11 +27,14 @@ $env:VIRTUAL_ENV = $pythonEnvironment
 $maturinArguments = @(
     "-m",
     "maturin",
-    "develop"
+    "build"
 )
 if (-not $Development) {
     $maturinArguments += "--release"
 }
+$wheelDirectory = Join-Path $projectRoot "build\native-cpu-wheel"
+New-Item -ItemType Directory -Path $wheelDirectory -Force | Out-Null
+$maturinArguments += @("--out", $wheelDirectory)
 
 Push-Location (Join-Path $projectRoot "native\python-cpu")
 try {
@@ -42,6 +45,17 @@ try {
 }
 finally {
     Pop-Location
+}
+
+$wheel = Get-ChildItem -LiteralPath $wheelDirectory -Filter "renewable_huber_native_cpu-*.whl" |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1
+if (-not $wheel) {
+    throw "Maturin did not produce a renewable-huber-native-cpu wheel."
+}
+& $Python -m pip install --disable-pip-version-check --force-reinstall --no-deps $wheel.FullName
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not install the native CPU wheel."
 }
 
 Write-Host "Installed _renewable_huber_native_cpu into the selected Python environment."

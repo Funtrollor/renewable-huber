@@ -15,7 +15,7 @@ use rh_cuda_ffi::{
     StateMetadata, UnpenalizedConfig,
 };
 
-const PYTHON_API_VERSION: u32 = 1;
+const PYTHON_API_VERSION: u32 = 2;
 
 /// Host-fed adapter for one persistent, single-device native CUDA engine.
 ///
@@ -109,6 +109,7 @@ impl NativeCudaEngine {
         sample_weight,
         batch_weight,
         n_features_in,
+        fit_intercept,
         tau,
         bandwidth_scale,
         max_iter,
@@ -124,6 +125,7 @@ impl NativeCudaEngine {
         sample_weight: Option<&Bound<'py, PyAny>>,
         batch_weight: f64,
         n_features_in: i64,
+        fit_intercept: bool,
         tau: f64,
         bandwidth_scale: f64,
         max_iter: i64,
@@ -132,6 +134,7 @@ impl NativeCudaEngine {
     ) -> PyResult<Bound<'py, PyDict>> {
         let config = UnpenalizedConfig {
             n_features_in,
+            fit_intercept,
             tau,
             bandwidth_scale,
             max_iter,
@@ -206,6 +209,7 @@ fn version<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
     result.set_item("abi_version", rh_cuda_ffi::ABI_VERSION)?;
     result.set_item("python_api_version", PYTHON_API_VERSION)?;
+    result.set_item("engine_version", env!("CARGO_PKG_VERSION"))?;
     result.set_item("cuda_available", cuda_is_available())?;
     match runtime_info() {
         Ok(info) => {

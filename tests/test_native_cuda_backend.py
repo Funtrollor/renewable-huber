@@ -35,12 +35,22 @@ def _native_cuda_ready() -> bool:
         return False
 
 
+def _native_cpu_ready() -> bool:
+    try:
+        from renewable_huber import _native_cpu
+
+        version = _native_cpu.version()
+        return version.get("abi_version") == 1 and version.get("python_api_version") == 1
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
 class NativeCudaSelectionTests(unittest.TestCase):
     def test_explicit_native_request_never_falls_back(self) -> None:
         unavailable = types.SimpleNamespace(
             is_available=lambda: False,
             device_count=lambda: 0,
-            version=lambda: {"abi_version": 1, "python_api_version": 1},
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": unavailable}),
@@ -76,7 +86,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=BrokenEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 1},
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -124,13 +134,23 @@ class NativeCudaSelectionTests(unittest.TestCase):
                 sample_weight: np.ndarray | None,
                 batch_weight: float,
                 n_features_in: int,
+                fit_intercept: bool,
                 tau: float,
                 bandwidth_scale: float,
                 max_iter: int,
                 tol: float,
                 ridge: float,
             ) -> dict[str, object]:
-                del y, sample_weight, n_features_in, tau, bandwidth_scale, max_iter, ridge
+                del (
+                    y,
+                    sample_weight,
+                    n_features_in,
+                    fit_intercept,
+                    tau,
+                    bandwidth_scale,
+                    max_iter,
+                    ridge,
+                )
                 self.calls += 1
                 self.coefficients = np.arange(self.n_parameters, dtype=self.dtype)
                 self.information = self.information + np.eye(self.n_parameters, dtype=self.dtype)
@@ -159,7 +179,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=FakeEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 1},
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -244,7 +264,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=RecoveringEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 1},
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -359,6 +379,44 @@ class NativeCudaGoldenTests(unittest.TestCase):
                 resumed.predict(probe),
                 rtol=float(case["rtol"]),
                 atol=float(case["atol"]),
+            )
+
+    @unittest.skipUnless(
+        _native_cpu_ready(), "the Rust native CPU extension is required for cross-engine migration"
+    )
+    def test_checkpoint_migrates_between_native_cpu_and_cuda(self) -> None:
+        rng = np.random.default_rng(91)
+        X = rng.normal(size=(64, 5))
+        y = X @ np.array([0.8, -1.2, 0.0, 2.1, -0.4]) + rng.normal(scale=0.05, size=64)
+        probe = rng.normal(size=(11, 5))
+        cpu = RenewableHuberRegressor(
+            backend="native_cpu",
+            device="cpu",
+            fit_intercept=False,
+            dtype="float64",
+            max_iter=50,
+        ).fit(X, y)
+
+        with TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "native-cross-engine.npz"
+            cpu.save(checkpoint)
+            cuda = RenewableHuberRegressor.load(checkpoint, backend="native_cuda", device="cuda")
+            np.testing.assert_allclose(
+                cuda.predict(probe),
+                cpu.predict(probe),
+                rtol=2e-8,
+                atol=3e-9,
+            )
+
+            cuda.save(checkpoint)
+            restored_cpu = RenewableHuberRegressor.load(
+                checkpoint, backend="native_cpu", device="cpu"
+            )
+            np.testing.assert_allclose(
+                restored_cpu.predict(probe),
+                cuda.predict(probe),
+                rtol=2e-8,
+                atol=3e-9,
             )
 
     def test_checkpoint_information_uses_logical_row_major_layout(self) -> None:

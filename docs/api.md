@@ -79,7 +79,7 @@ model = RenewableHuberRegressor.load(
 
 ## Backend 與資料順序語意
 
-`backend="auto"` 不檢查輸入型別：`device="auto"` 或 `"cpu"` 使用 NumPy，只有 `device="cuda"` 使用 CuPy。Rust CPU P1 必須明確設定 `backend="native_cpu"`，並安裝獨立的 native wheel。Torch／TensorFlow tensor 工作流也必須明確指定對應 backend。PyTorch 輸入會 detach，因此輸出不屬於呼叫端的 autograd graph；TensorFlow backend 要求 eager execution。
+`backend="auto"` 不檢查輸入型別：`device="auto"` 或 `"cpu"` 使用 NumPy，只有 `device="cuda"` 使用 CuPy。Rust CPU P1 必須明確設定 `backend="native_cpu"` 並安裝 `renewable-huber-native-cpu`；Rust/CUDA P2 必須明確設定 `backend="native_cuda"` 並安裝與基礎套件版本相容的 `renewable-huber-native-cuda`。兩個 native engine 都不會由 `auto` 選取。Torch／TensorFlow tensor 工作流也必須明確指定對應 backend。PyTorch 輸入會 detach，因此輸出不屬於呼叫端的 autograd graph；TensorFlow backend 要求 eager execution。
 
 Renewable 更新使用上一批的係數與累積資訊矩陣。批次邊界與觀測順序因此是運算語意的一部分；不同分批、重排後的串流與一次性 `fit` 不保證逐位元相同。需要可重現續跑時，應固定 backend、dtype、批次切法、順序，並由 checkpoint 後接續相同的剩餘批次。
 
