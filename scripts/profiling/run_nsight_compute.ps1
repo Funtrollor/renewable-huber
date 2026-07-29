@@ -8,10 +8,15 @@ param(
     [string]$DType = "float32",
     [ValidateSet("none", "l1")]
     [string]$Penalty = "none",
+    [ValidateSet("cupy", "native_cuda")]
+    [string]$Engine = "cupy",
     [int]$LaunchCount = 50
 )
 
 $ErrorActionPreference = "Stop"
+if (($Engine -eq "native_cuda") -and ($Penalty -ne "none")) {
+    throw "The P2 native CUDA engine supports penalty='none' only."
+}
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $profiler = Get-Command ncu -ErrorAction SilentlyContinue
 if ($null -eq $profiler) {
@@ -20,8 +25,10 @@ if ($null -eq $profiler) {
 
 $outputPath = Join-Path $projectRoot $OutputDirectory
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-$reportPrefix = Join-Path $outputPath "native-core-p0-compute"
-$metadataPath = Join-Path $outputPath "native-core-p0-compute.json"
+$profileName = if ($Engine -eq "native_cuda") { "native-core-p2-native" } else { "native-core-p0-cupy" }
+$inputLocation = if ($Engine -eq "native_cuda") { "host" } else { "device" }
+$reportPrefix = Join-Path $outputPath "$profileName-compute"
+$metadataPath = Join-Path $outputPath "$profileName-compute.json"
 $workload = Join-Path $PSScriptRoot "profile_cuda_update.py"
 
 & $profiler.Source `
@@ -36,7 +43,8 @@ $workload = Join-Path $PSScriptRoot "profile_cuda_update.py"
     --batch-size $BatchSize `
     --dtype $DType `
     --penalty $Penalty `
-    --input-location device `
+    --engine $Engine `
+    --input-location $inputLocation `
     --warmup 1 `
     --repeats 1 `
     --metadata-output $metadataPath

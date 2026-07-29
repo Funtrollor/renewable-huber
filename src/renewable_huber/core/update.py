@@ -26,6 +26,7 @@ class UpdateDiagnostics:
     objective: float
     lambda_value: float
     bandwidth: float
+    used_regularized_fallback: bool = False
 
 
 def _bandwidth(n_total: float, n_predictors: int, scale: float, tau: float) -> float:
@@ -409,6 +410,19 @@ def renewable_update(
     """Process exactly one data batch and return the next sufficient state."""
 
     state.validate()
+    native_update = getattr(backend, "renewable_update", None)
+    if native_update is not None:
+        if batch_weight is None:
+            batch_weight = float(X.shape[0])
+        return native_update(
+            X,
+            y,
+            state,
+            config,
+            sample_weight=sample_weight,
+            batch_weight=batch_weight,
+        )
+
     n_batch = X.shape[0]
     n_samples_total = state.n_samples_seen + n_batch
     if batch_weight is None:

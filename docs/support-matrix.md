@@ -8,6 +8,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `numpy` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；三者均進行基線 CI | 無（基礎安裝） | `numpy.ndarray` | `device="cuda"` 會直接報錯；效能取決於 NumPy 連結的 BLAS/LAPACK。 |
 | `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；專案 GPU workflow 為 Windows self-hosted runner | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
+| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | Windows source build in P2 | separately built Rust/CUDA extension | `numpy.ndarray` | Opt-in host-input whole-batch engine; `penalty="none"` only in P2; explicit requests never silently fall back. |
 | `torch` | 是 | NVIDIA CUDA | `float32`, `float64` | CPU：Linux／Windows／macOS；CUDA：依 PyTorch wheel 支援的 Linux／Windows | `gpu-torch` | `torch.Tensor` | `device="auto"` 使用 CPU；輸入會 detach、移至指定裝置並轉 dtype，不提供 autograd layer，也不支援 MPS device。 |
 | `tensorflow` | 是 | TensorFlow 可見的 CUDA GPU | `float32`, `float64` | 依 TensorFlow wheel；CPU backend CI 在 Linux，CUDA 通常為 Linux／WSL2 環境 | `gpu-tensorflow` | `tensorflow.Tensor` | 僅 eager execution，不可直接在 `tf.function` 內使用；`device="auto"` 使用 CPU；不支援 Metal/MPS device。 |
 
@@ -22,6 +23,7 @@
 | `backend="auto", device="cuda"` | CuPy / 目前 CUDA device |
 | `backend="numpy", device="auto"` | NumPy / CPU |
 | `backend="cupy", device="auto"` | CuPy / 目前 CUDA device |
+| `backend="native_cuda", device="auto"` | Native CUDA / device 0 (explicit opt-in) |
 | `backend="torch", device="auto"` | Torch / CPU |
 | `backend="tensorflow", device="auto"` | TensorFlow / CPU |
 | 明確 backend + `device="cuda"` | 僅在該 backend 能看到 CUDA GPU 時成立，否則拋出 `BackendUnavailableError` |

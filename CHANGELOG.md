@@ -8,6 +8,19 @@ stabilised.
 
 ## [Unreleased]
 
+### Added
+
+- An opt-in Rust/PyO3 and CUDA C++ whole-batch engine for unpenalized
+  Renewable Huber updates, with persistent device state and workspaces.
+- Native CUDA golden differential tests, shape-sweep support, profiling
+  support, and a reproducible Windows source-build script.
+
+### Changed
+
+- Explicit `backend="native_cuda"` requests now use the native engine and fail
+  clearly when its extension or requested capability is unavailable; automatic
+  backend selection remains unchanged.
+
 ## [0.5.1] - 2026-07-28
 
 ### Fixed

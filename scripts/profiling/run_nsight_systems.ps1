@@ -7,10 +7,15 @@ param(
     [ValidateSet("float32", "float64")]
     [string]$DType = "float32",
     [ValidateSet("none", "l1")]
-    [string]$Penalty = "none"
+    [string]$Penalty = "none",
+    [ValidateSet("cupy", "native_cuda")]
+    [string]$Engine = "cupy"
 )
 
 $ErrorActionPreference = "Stop"
+if (($Engine -eq "native_cuda") -and ($Penalty -ne "none")) {
+    throw "The P2 native CUDA engine supports penalty='none' only."
+}
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $profiler = Get-Command nsys -ErrorAction SilentlyContinue
 if ($null -eq $profiler) {
@@ -29,9 +34,11 @@ if ($null -eq $profiler) {
 
 $outputPath = Join-Path $projectRoot $OutputDirectory
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-$reportPrefix = Join-Path $outputPath "native-core-p0-systems"
-$metadataPath = Join-Path $outputPath "native-core-p0-systems.json"
-$summaryPath = Join-Path $outputPath "native-core-p0-summary.json"
+$profileName = if ($Engine -eq "native_cuda") { "native-core-p2-native" } else { "native-core-p0-cupy" }
+$inputLocation = if ($Engine -eq "native_cuda") { "host" } else { "device" }
+$reportPrefix = Join-Path $outputPath "$profileName-systems"
+$metadataPath = Join-Path $outputPath "$profileName-systems.json"
+$summaryPath = Join-Path $outputPath "$profileName-summary.json"
 $workload = Join-Path $PSScriptRoot "profile_cuda_update.py"
 $summarizer = Join-Path $PSScriptRoot "summarize_nsys_sqlite.py"
 
@@ -46,7 +53,8 @@ $summarizer = Join-Path $PSScriptRoot "summarize_nsys_sqlite.py"
     --batch-size $BatchSize `
     --dtype $DType `
     --penalty $Penalty `
-    --input-location device `
+    --engine $Engine `
+    --input-location $inputLocation `
     --warmup 2 `
     --repeats 3 `
     --metadata-output $metadataPath

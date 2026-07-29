@@ -1,0 +1,22 @@
+[package]
+name = "rh-cuda-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+description = "Safe Rust ownership wrapper for the Renewable Huber CUDA C ABI."
+
+[features]
+default = []
+# Builds and links native/cuda through its CMake project.  The default feature
+# set deliberately remains CUDA-free so the Python source package is usable on
+# hosts without a Toolkit.
+cuda = []
+
+[dependencies]
+thiserror.workspace = true
+
+[build-dependencies]
+cmake = "0.1"

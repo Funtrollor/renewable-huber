@@ -12,32 +12,61 @@ jobs:
     # Deliberately manual: public pull requests must not execute arbitrary
     # contributor code on a self-hosted machine with access to a GPU.
     runs-on: [self-hosted, windows, x64, gpu]
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
       - name: Show CUDA device
         shell: pwsh
         run: nvidia-smi
-      - name: Install CUDA backend and test tools
-        run: python -m pip install ".[dev,gpu-cupy]"
-      - name: Run CUDA C++ kernel and CuPy integration tests
-        run: python -m unittest tests.test_cuda_kernels tests.test_cupy_backend -v
+      - name: Install CUDA backends and test tools
+        run: python -m pip install ".[dev,gpu-cupy,native-build]"
+      - name: Build and run direct CUDA C ABI smoke test
+        shell: pwsh
+        run: |
+          cmake -S native/cuda -B build/native-cuda-smoke `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DRH_CUDA_BUILD_SHARED=OFF `
+            -DRH_CUDA_BUILD_TESTS=ON `
+            -DCMAKE_CUDA_ARCHITECTURES=native
+          cmake --build build/native-cuda-smoke --config Release --parallel
+          ctest --test-dir build/native-cuda-smoke -C Release --output-on-failure
+      - name: Build Rust/CUDA native extension
+        shell: pwsh
+        run: .\scripts\native\build_native.ps1 -Python python
+      - name: Run CUDA kernel, CuPy, and native integration tests
+        run: >
+          python -m unittest tests.test_cuda_kernels tests.test_cupy_backend
+          tests.test_native_cuda_backend -v
       - name: Capture CUDA shape-sweep smoke baseline
         run: >
           python scripts/benchmarks/benchmark_shape_sweep.py
           --profile smoke --backend both --penalty both --dtype both
           --warmup 1 --repeats 3
           --output artifacts/gpu-shape-sweep-smoke.json
+      - name: Capture native CUDA shape-sweep smoke baseline
+        run: >
+          python scripts/benchmarks/benchmark_shape_sweep.py
+          --profile smoke --backend native_cuda --penalty none --dtype both
+          --warmup 1 --repeats 3
+          --output artifacts/native-p2-shape-sweep-smoke.json
       - name: Capture NVTX workload metadata
         run: >
           python scripts/profiling/profile_cuda_update.py
           --samples 8192 --features 32 --batch-size 4096
           --warmup 1 --repeats 1
           --metadata-output artifacts/gpu-profile-smoke.json
+      - name: Capture native CUDA NVTX workload metadata
+        run: >
+          python scripts/profiling/profile_cuda_update.py
+          --engine native_cuda --input-location host --penalty none
+          --samples 8192 --features 32 --batch-size 4096
+          --warmup 1 --repeats 1
+          --metadata-output artifacts/native-p2-profile-smoke.json
       - uses: actions/upload-artifact@v4
         with:
-          name: gpu-p0-baseline
+          name: gpu-p2-validation
           path: artifacts/*.json

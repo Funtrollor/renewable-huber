@@ -10,7 +10,7 @@ from typing import Literal
 from .exceptions import ValidationError
 
 Penalty = Literal["none", "l1"]
-BackendName = Literal["auto", "numpy", "cupy", "torch", "tensorflow"]
+BackendName = Literal["auto", "numpy", "cupy", "native_cuda", "torch", "tensorflow"]
 DeviceName = Literal["auto", "cpu", "cuda"]
 DTypeName = Literal["float32", "float64"]
 
@@ -56,7 +56,14 @@ class EstimatorConfig:
             raise ValidationError("tol must be greater than zero")
         if not _is_finite_real(self.ridge) or self.ridge < 0:
             raise ValidationError("ridge must be non-negative")
-        if self.backend not in ("auto", "numpy", "cupy", "torch", "tensorflow"):
+        if self.backend not in (
+            "auto",
+            "numpy",
+            "cupy",
+            "native_cuda",
+            "torch",
+            "tensorflow",
+        ):
             raise ValidationError("unsupported backend")
         if self.device not in ("auto", "cpu", "cuda"):
             raise ValidationError("device must be 'auto', 'cpu', or 'cuda'")

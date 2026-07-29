@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from renewable_huber import RenewableHuberRegressor  # noqa: E402
+from renewable_huber.state import RenewableHuberState  # noqa: E402
 
 
 def _git_revision() -> str:
@@ -62,17 +63,20 @@ def _fit(
     max_iter: int,
     tol: float,
     annotate_batches: bool,
+    backend: str,
+    model: RenewableHuberRegressor | None = None,
 ) -> tuple[int, bool]:
     from cupyx.profiler import time_range
 
-    model = RenewableHuberRegressor(
-        backend="cupy",
-        device="cuda",
-        dtype=dtype,
-        penalty=penalty,
-        max_iter=max_iter,
-        tol=tol,
-    )
+    if model is None:
+        model = RenewableHuberRegressor(
+            backend=backend,
+            device="cuda",
+            dtype=dtype,
+            penalty=penalty,
+            max_iter=max_iter,
+            tol=tol,
+        )
     iterations = 0
     converged = True
     for batch_index, (X_batch, y_batch) in enumerate(batches):
@@ -86,6 +90,20 @@ def _fit(
     return iterations, converged
 
 
+def _restore_empty_native_model(
+    model: RenewableHuberRegressor,
+    empty_state: RenewableHuberState,
+) -> None:
+    """Reset one resident native engine without timing handle construction."""
+
+    model._backend.restore_native_state(empty_state)
+    model._state = empty_state.copy()
+    model._diagnostics = None
+    model.n_samples_seen_ = 0
+    model.n_iter_ = 0
+    model._sync_public_coefficients()
+
+
 def _metadata(
     cp: Any,
     args: argparse.Namespace,
@@ -97,7 +115,7 @@ def _metadata(
     name = properties["name"]
     if isinstance(name, bytes):
         name = name.decode(errors="replace")
-    return {
+    metadata = {
         "schema": "renewable-huber-nsight-profile",
         "schema_version": 1,
         "git_revision": _git_revision(),
@@ -116,16 +134,28 @@ def _metadata(
             "dtype": args.dtype,
             "penalty": args.penalty,
             "input_location": args.input_location,
+            "engine": args.engine,
             "warmup": args.warmup,
             "repeats": args.repeats,
             "max_iter": args.max_iter,
             "tol": args.tol,
             "seed": args.seed,
+            "resident_engine": args.engine == "native_cuda",
+            "includes_engine_initialization": args.engine != "native_cuda",
+            "engine_prime_runs": 1 if args.engine == "native_cuda" else 0,
+            "repeat_state_reset": (
+                "restore_empty_portable_state" if args.engine == "native_cuda" else "new_estimator"
+            ),
         },
         "elapsed_seconds": elapsed,
         "iteration_counts": iteration_counts,
         "all_batches_converged": all(convergence),
     }
+    if args.engine == "native_cuda":
+        from renewable_huber import _native_cuda
+
+        metadata["native_cuda_abi"] = _native_cuda.version()
+    return metadata
 
 
 def main() -> int:
@@ -135,6 +165,7 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=32_768)
     parser.add_argument("--dtype", choices=("float32", "float64"), default="float32")
     parser.add_argument("--penalty", choices=("none", "l1"), default="none")
+    parser.add_argument("--engine", choices=("cupy", "native_cuda"), default="cupy")
     parser.add_argument("--input-location", choices=("host", "device"), default="device")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=3)
@@ -151,6 +182,10 @@ def main() -> int:
         or args.repeats < 1
     ):
         parser.error("sizes and repeats must be positive; warmup must be non-negative")
+    if args.engine == "native_cuda" and args.penalty != "none":
+        parser.error("the P2 native CUDA engine currently supports only penalty='none'")
+    if args.engine == "native_cuda" and args.input_location != "host":
+        parser.error("the P2 native CUDA engine accepts host input; use --input-location host")
 
     try:
         import cupy as cp
@@ -171,8 +206,21 @@ def main() -> int:
         batches = host_batches
     cp.cuda.get_current_stream().synchronize()
 
+    native_model = None
+    native_empty_state = None
     with time_range("warmup", color_id=7):
-        for _ in range(args.warmup):
+        if args.engine == "native_cuda":
+            native_model = RenewableHuberRegressor(
+                backend=args.engine,
+                device="cuda",
+                dtype=args.dtype,
+                penalty=args.penalty,
+                max_iter=args.max_iter,
+                tol=args.tol,
+            )
+            # Prime CUDA handles and the maximum batch workspace once. This
+            # mirrors the shape-sweep protocol and is deliberately outside
+            # every measured repeat, even when --warmup=0.
             _fit(
                 batches,
                 dtype=args.dtype,
@@ -180,13 +228,46 @@ def main() -> int:
                 max_iter=args.max_iter,
                 tol=args.tol,
                 annotate_batches=False,
+                backend=args.engine,
+                model=native_model,
             )
+            native_empty_state = RenewableHuberState.empty(
+                native_model.n_features_in_,
+                fit_intercept=native_model.fit_intercept,
+                xp=np,
+                dtype=np.dtype(args.dtype),
+            )
+            for _ in range(args.warmup):
+                _restore_empty_native_model(native_model, native_empty_state)
+                _fit(
+                    batches,
+                    dtype=args.dtype,
+                    penalty=args.penalty,
+                    max_iter=args.max_iter,
+                    tol=args.tol,
+                    annotate_batches=False,
+                    backend=args.engine,
+                    model=native_model,
+                )
+        else:
+            for _ in range(args.warmup):
+                _fit(
+                    batches,
+                    dtype=args.dtype,
+                    penalty=args.penalty,
+                    max_iter=args.max_iter,
+                    tol=args.tol,
+                    annotate_batches=False,
+                    backend=args.engine,
+                )
         cp.cuda.get_current_stream().synchronize()
 
     elapsed = []
     iteration_counts = []
     convergence = []
     for repeat in range(args.repeats):
+        if native_model is not None and native_empty_state is not None:
+            _restore_empty_native_model(native_model, native_empty_state)
         start = perf_counter()
         with time_range(f"profile/repeat-{repeat}", color_id=repeat % 6):
             iterations, converged = _fit(
@@ -196,6 +277,8 @@ def main() -> int:
                 max_iter=args.max_iter,
                 tol=args.tol,
                 annotate_batches=True,
+                backend=args.engine,
+                model=native_model,
             )
             cp.cuda.get_current_stream().synchronize()
         seconds = perf_counter() - start

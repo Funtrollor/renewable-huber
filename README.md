@@ -147,6 +147,7 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 - [CUDA 效能路徑](docs/gpu-performance.md)
 - [Rust/CUDA native-core RFC](docs/native-core-rfc.md)
 - [Native-core P0 效能基線](docs/native-core-p0-baseline.md)
+- [Native-core P2 CUDA engine](docs/native-core-p2.md)
 - [發布前檢查表](docs/release-checklist.md)
 - [版本與 GitHub Release 流程](docs/release-process.md)
 - [貢獻指南](CONTRIBUTING.md)

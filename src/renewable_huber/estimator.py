@@ -139,7 +139,6 @@ class RenewableHuberRegressor:
                 xp=backend.xp,
                 dtype=backend.dtype,
             )
-            self._state = state
         elif X_array.shape[1] != self.n_features_in_:
             raise ValidationError(
                 f"X has {X_array.shape[1]} features, but RenewableHuberRegressor is expecting "
@@ -168,7 +167,11 @@ class RenewableHuberRegressor:
         backend = self._require_backend()
         self._validate_feature_names(X)
         X_array = self._validate_features(X, state.n_features_in, backend)
-        return backend.xp.matmul(self._design_matrix(X_array), state.coefficients)
+        design = self._design_matrix(X_array)
+        native_predict = getattr(backend, "native_predict", None)
+        if native_predict is not None:
+            return native_predict(design, state)
+        return backend.xp.matmul(design, state.coefficients)
 
     def score(self, X: ArrayLike, y: ArrayLike, sample_weight: ArrayLike | None = None) -> float:
         """Return the ordinary coefficient of determination (R²)."""

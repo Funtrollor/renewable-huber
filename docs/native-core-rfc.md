@@ -188,6 +188,17 @@ factorization must enter a tested QR/least-squares fallback. A custom weighted
 Gram kernel is considered only if Nsight Compute shows that row weighting plus
 vendor GEMM is a material bottleneck.
 
+### P2 implementation amendment
+
+The P2 compatibility engine uses pivoted cuSOLVER LU for its regular dense
+solve, with a minimum-norm SVD fallback for singular systems. Portable
+checkpoints may contain a general, slightly asymmetric information matrix, so
+mirroring one triangle through Cholesky would change valid state. A future
+Cholesky fast path requires an explicit symmetric-state invariant and
+differential evidence that it preserves the NumPy contract. P2 also starts
+with contiguous host NumPy transport; zero-copy DLPack and device-side
+convergence decisions remain P3 work.
+
 ## DLPack and stream ownership
 
 The first native tensor adapter accepts a single-device, contiguous,
