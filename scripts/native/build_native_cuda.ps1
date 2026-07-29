@@ -82,17 +82,16 @@ $env:VIRTUAL_ENV = $pythonEnvironment
 $maturinArguments = @(
     "-m",
     "maturin",
-    "develop",
-    "--manifest-path",
-    "crates/rh-python/Cargo.toml",
-    "--features",
-    "cuda"
+    "build"
 )
 if (-not $Development) {
     $maturinArguments += "--release"
 }
+$wheelDirectory = Join-Path $projectRoot "build\native-cuda-wheel"
+New-Item -ItemType Directory -Path $wheelDirectory -Force | Out-Null
+$maturinArguments += @("--out", $wheelDirectory)
 
-Push-Location (Join-Path $projectRoot "native")
+Push-Location (Join-Path $projectRoot "native\python-cuda")
 try {
     & $Python @maturinArguments
     if ($LASTEXITCODE -ne 0) {
@@ -103,4 +102,15 @@ finally {
     Pop-Location
 }
 
-Write-Host "Installed renewable_huber._native_cuda into the selected Python environment."
+$wheel = Get-ChildItem -LiteralPath $wheelDirectory -Filter "renewable_huber_native_cuda-*.whl" |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1
+if (-not $wheel) {
+    throw "Maturin did not produce a renewable-huber-native-cuda wheel."
+}
+& $Python -m pip install --disable-pip-version-check --force-reinstall --no-deps $wheel.FullName
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not install the native CUDA wheel."
+}
+
+Write-Host "Installed _renewable_huber_native_cuda for the renewable_huber._native_cuda shim."

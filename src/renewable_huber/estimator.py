@@ -118,9 +118,6 @@ class RenewableHuberRegressor:
         backend = getattr(self, "_backend", None)
         if backend is None:
             backend = resolve_backend(config.backend, device=config.device, dtype=config.dtype)
-            self._backend = backend
-            self.backend_ = backend.name
-            self.device_ = backend.device
 
         state = getattr(self, "_state", None)
         if state is not None:
@@ -130,11 +127,13 @@ class RenewableHuberRegressor:
             sample_weight, X_array.shape[0], backend
         )
 
+        first_batch = state is None
+        feature_names = None
         if state is None:
-            self.n_features_in_ = X_array.shape[1]
-            self._capture_feature_names(X)
+            n_features_in = X_array.shape[1]
+            feature_names = self._feature_names(X)
             state = RenewableHuberState.empty(
-                self.n_features_in_,
+                n_features_in,
                 fit_intercept=config.fit_intercept,
                 xp=backend.xp,
                 dtype=backend.dtype,
@@ -145,8 +144,8 @@ class RenewableHuberRegressor:
                 f"{self.n_features_in_} features as input"
             )
 
-        design = self._design_matrix(X_array)
-        self._state, self._diagnostics = renewable_update(
+        design = self._design_matrix(X_array, backend=backend)
+        next_state, diagnostics = renewable_update(
             design,
             y_array,
             state,
@@ -155,8 +154,17 @@ class RenewableHuberRegressor:
             sample_weight=weights,
             batch_weight=batch_weight,
         )
-        self.n_samples_seen_ = self._state.n_samples_seen
-        self.n_iter_ = self._diagnostics.iterations
+        self._backend = backend
+        self.backend_ = backend.name
+        self.device_ = backend.device
+        self._state = next_state
+        self._diagnostics = diagnostics
+        if first_batch:
+            self.n_features_in_ = next_state.n_features_in
+            if feature_names is not None:
+                self.feature_names_in_ = feature_names
+        self.n_samples_seen_ = next_state.n_samples_seen
+        self.n_iter_ = diagnostics.iterations
         self._sync_public_coefficients()
         return self
 
@@ -395,16 +403,12 @@ class RenewableHuberRegressor:
             raise ValidationError("sample_weight cannot be all zero")
         return weights, weight_sum
 
-    def _design_matrix(self, X: Any) -> Any:
+    def _design_matrix(self, X: Any, *, backend: ArrayBackend | None = None) -> Any:
         if self.fit_intercept:
-            backend = self._require_backend()
+            if backend is None:
+                backend = self._require_backend()
             return backend.xp.column_stack((X, backend.xp.ones(X.shape[0], dtype=backend.dtype)))
         return X
-
-    def _capture_feature_names(self, X: Any) -> None:
-        names = self._feature_names(X)
-        if names is not None:
-            self.feature_names_in_ = names
 
     def _validate_feature_names(self, X: Any) -> None:
         incoming = self._feature_names(X)

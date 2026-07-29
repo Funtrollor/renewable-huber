@@ -1,7 +1,10 @@
 [workspace]
 members = [
+  "crates/rh-core",
+  "crates/rh-cpu",
   "crates/rh-cuda-ffi",
-  "crates/rh-python",
+  "crates/rh-python-cpu",
+  "crates/rh-python-cuda",
 ]
 resolver = "2"
 
@@ -13,6 +16,8 @@ license = "Apache-2.0"
 repository = "https://github.com/Funtrollor/renewable-huber"
 
 [workspace.dependencies]
+nalgebra = { version = "0.33", default-features = false, features = ["std"] }
 numpy = "0.23"
+num-traits = "0.2"
 pyo3 = { version = "0.23", features = ["extension-module"] }
 thiserror = "2.0"

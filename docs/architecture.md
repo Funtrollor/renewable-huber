@@ -16,7 +16,9 @@ RenewableHuberRegressor
              ├── NumPy      (CPU / BLAS / LAPACK)
              ├── CuPy       (CUDA C++ kernels / cuBLAS / cuSOLVER)
              ├── PyTorch    (CPU / CUDA tensors)
-             └── TensorFlow (CPU / CUDA tensors，eager only)
+             ├── TensorFlow (CPU / CUDA tensors，eager only)
+             ├── Native CPU (Rust / PyO3 whole-batch engine)
+             └── Native CUDA (Rust / CUDA C++ whole-batch engine)
 ```
 
 ## Backend 邊界
@@ -27,6 +29,10 @@ Backend 只在第一次 `fit`／`partial_fit` 時解析：
 
 - `backend="auto", device="auto"` 與 `backend="auto", device="cpu"` 固定解析成 NumPy。
 - `backend="auto", device="cuda"` 解析成 CuPy，且需要可用的 NVIDIA CUDA 裝置。
+- `backend="native_cpu"` 明確選擇選用的 Rust/PyO3 whole-batch CPU 核心；
+  P1 不會由 `auto` 自動選取。
+- `backend="native_cuda"` 明確選擇選用的 Rust/CUDA whole-batch GPU 核心；
+  P2 不會由 `auto` 自動選取，且目前只支援 `penalty="none"`。
 - `backend="torch"` 與 `backend="tensorflow"` 必須由呼叫端明確選擇；不會依輸入 tensor 推斷。
 - `device="auto"` 對 Torch 與 TensorFlow 也選擇 CPU；CUDA 必須明確要求。
 

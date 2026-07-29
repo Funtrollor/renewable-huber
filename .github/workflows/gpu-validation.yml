@@ -24,6 +24,8 @@ jobs:
         run: nvidia-smi
       - name: Install CUDA backends and test tools
         run: python -m pip install ".[dev,gpu-cupy,native-build]"
+      - name: Build matching base wheel
+        run: python -m build --wheel --outdir dist-base
       - name: Build and run direct CUDA C ABI smoke test
         shell: pwsh
         run: |
@@ -34,9 +36,23 @@ jobs:
             -DCMAKE_CUDA_ARCHITECTURES=native
           cmake --build build/native-cuda-smoke --config Release --parallel
           ctest --test-dir build/native-cuda-smoke -C Release --output-on-failure
-      - name: Build Rust/CUDA native extension
-        shell: pwsh
-        run: .\scripts\native\build_native.ps1 -Python python
+      - name: Build non-release native CUDA validation wheel
+        working-directory: native/python-cuda
+        env:
+          RH_CUDA_ARCHITECTURES: native
+        run: python -m maturin build --release --out ../../dist-native-cuda
+      - name: Smoke-test matching CUDA wheels in a clean environment
+        run: >-
+          python scripts/native/smoke_test_cuda_wheels.py
+          --base-dir dist-base
+          --native-dir dist-native-cuda
+      - name: Install native CUDA validation wheel
+        run: >-
+          python -c "import glob, subprocess, sys;
+          wheels=glob.glob('dist-native-cuda/*.whl');
+          assert len(wheels)==1, wheels;
+          subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall',
+          '--no-deps', wheels[0]])"
       - name: Run CUDA kernel, CuPy, and native integration tests
         run: >
           python -m unittest tests.test_cuda_kernels tests.test_cupy_backend
@@ -70,3 +86,7 @@ jobs:
         with:
           name: gpu-p2-validation
           path: artifacts/*.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nonrelease-native-cuda-validation-wheel
+          path: dist-native-cuda/*.whl

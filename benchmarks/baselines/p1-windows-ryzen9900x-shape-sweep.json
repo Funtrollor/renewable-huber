@@ -1,0 +1,1153 @@
+{
+  "arguments": {
+    "max_iter": 100,
+    "repeats": 3,
+    "seed": 42,
+    "tol": 1e-06,
+    "warmup": 1
+  },
+  "cases": [
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.0016012999694794416,
+        "median_iterations": 5,
+        "median_samples_per_second": 2650446.27041106,
+        "median_seconds": 0.0015454001259058714,
+        "minimum_seconds": 0.0011581000871956348,
+        "resident_engine": false,
+        "seconds": [
+          0.0011581000871956348,
+          0.0015454001259058714,
+          0.0016012999694794416
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.0009431999642401934,
+        "median_iterations": 5,
+        "median_samples_per_second": 4489750.793498914,
+        "median_seconds": 0.0009123000781983137,
+        "minimum_seconds": 0.0008992999792098999,
+        "resident_engine": true,
+        "seconds": [
+          0.0009431999642401934,
+          0.0008992999792098999,
+          0.0009123000781983137
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          6,
+          6,
+          6
+        ],
+        "maximum_seconds": 0.0009379000402987003,
+        "median_iterations": 6,
+        "median_samples_per_second": 4839892.386828545,
+        "median_seconds": 0.0008462998084723949,
+        "minimum_seconds": 0.0008253001142293215,
+        "resident_engine": false,
+        "seconds": [
+          0.0009379000402987003,
+          0.0008462998084723949,
+          0.0008253001142293215
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          9,
+          9,
+          9
+        ],
+        "maximum_seconds": 0.0009353000205010176,
+        "median_iterations": 9,
+        "median_samples_per_second": 4560231.131288268,
+        "median_seconds": 0.000898200087249279,
+        "minimum_seconds": 0.0008950999472290277,
+        "resident_engine": true,
+        "seconds": [
+          0.0009353000205010176,
+          0.0008950999472290277,
+          0.000898200087249279
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.0018095998093485832,
+        "median_iterations": 5,
+        "median_samples_per_second": 2285331.662448963,
+        "median_seconds": 0.0017923000268638134,
+        "minimum_seconds": 0.001663499977439642,
+        "resident_engine": false,
+        "seconds": [
+          0.0017923000268638134,
+          0.0018095998093485832,
+          0.001663499977439642
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.0011489000171422958,
+        "median_iterations": 5,
+        "median_samples_per_second": 3572300.353615007,
+        "median_seconds": 0.001146600116044283,
+        "minimum_seconds": 0.0011311001144349575,
+        "resident_engine": true,
+        "seconds": [
+          0.0011311001144349575,
+          0.001146600116044283,
+          0.0011489000171422958
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          8,
+          8,
+          8
+        ],
+        "maximum_seconds": 0.0013707999605685472,
+        "median_iterations": 8,
+        "median_samples_per_second": 3506248.786850351,
+        "median_seconds": 0.001168200047686696,
+        "minimum_seconds": 0.001079800073057413,
+        "resident_engine": false,
+        "seconds": [
+          0.0013707999605685472,
+          0.001168200047686696,
+          0.001079800073057413
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          8,
+          8,
+          8
+        ],
+        "maximum_seconds": 0.0009419999551028013,
+        "median_iterations": 8,
+        "median_samples_per_second": 4475524.5544279795,
+        "median_seconds": 0.0009151999838650227,
+        "minimum_seconds": 0.0008978999685496092,
+        "resident_engine": true,
+        "seconds": [
+          0.0009419999551028013,
+          0.0008978999685496092,
+          0.0009151999838650227
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.07518679997883737,
+        "median_iterations": 13,
+        "median_samples_per_second": 1366564.5380719283,
+        "median_seconds": 0.07317620003595948,
+        "minimum_seconds": 0.07284089992754161,
+        "resident_engine": false,
+        "seconds": [
+          0.07284089992754161,
+          0.07317620003595948,
+          0.07518679997883737
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.08852720004506409,
+        "median_iterations": 13,
+        "median_samples_per_second": 1145012.384183015,
+        "median_seconds": 0.08733529993332922,
+        "minimum_seconds": 0.08651820011436939,
+        "resident_engine": true,
+        "seconds": [
+          0.08733529993332922,
+          0.08651820011436939,
+          0.08852720004506409
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          27,
+          27,
+          27
+        ],
+        "maximum_seconds": 0.05313589982688427,
+        "median_iterations": 27,
+        "median_samples_per_second": 1907614.2431567472,
+        "median_seconds": 0.052421499975025654,
+        "minimum_seconds": 0.051527699921280146,
+        "resident_engine": false,
+        "seconds": [
+          0.051527699921280146,
+          0.05313589982688427,
+          0.052421499975025654
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          28,
+          28,
+          28
+        ],
+        "maximum_seconds": 0.10882869991473854,
+        "median_iterations": 28,
+        "median_samples_per_second": 937819.7384547784,
+        "median_seconds": 0.10663029993884265,
+        "minimum_seconds": 0.10610110010020435,
+        "resident_engine": true,
+        "seconds": [
+          0.10663029993884265,
+          0.10610110010020435,
+          0.10882869991473854
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.10959520004689693,
+        "median_iterations": 13,
+        "median_samples_per_second": 923326.931651518,
+        "median_seconds": 0.10830399999395013,
+        "minimum_seconds": 0.10730330017395318,
+        "resident_engine": false,
+        "seconds": [
+          0.10830399999395013,
+          0.10730330017395318,
+          0.10959520004689693
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.18956349999643862,
+        "median_iterations": 13,
+        "median_samples_per_second": 556757.8435420484,
+        "median_seconds": 0.1796112998854369,
+        "minimum_seconds": 0.1756036002188921,
+        "resident_engine": true,
+        "seconds": [
+          0.18956349999643862,
+          0.1796112998854369,
+          0.1756036002188921
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          29,
+          29,
+          29
+        ],
+        "maximum_seconds": 0.08452909998595715,
+        "median_iterations": 29,
+        "median_samples_per_second": 1191957.624443169,
+        "median_seconds": 0.08389559993520379,
+        "minimum_seconds": 0.07787079992704093,
+        "resident_engine": false,
+        "seconds": [
+          0.07787079992704093,
+          0.08452909998595715,
+          0.08389559993520379
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          29,
+          29,
+          29
+        ],
+        "maximum_seconds": 0.20737680001184344,
+        "median_iterations": 29,
+        "median_samples_per_second": 539255.6541906927,
+        "median_seconds": 0.18544080015271902,
+        "minimum_seconds": 0.17606589989736676,
+        "resident_engine": true,
+        "seconds": [
+          0.18544080015271902,
+          0.17606589989736676,
+          0.20737680001184344
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          14,
+          14,
+          14
+        ],
+        "maximum_seconds": 2.1198938000015914,
+        "median_iterations": 14,
+        "median_samples_per_second": 8005.637955692455,
+        "median_seconds": 2.0465576997958124,
+        "minimum_seconds": 1.779474499868229,
+        "resident_engine": false,
+        "seconds": [
+          2.1198938000015914,
+          1.779474499868229,
+          2.0465576997958124
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          15,
+          15,
+          15
+        ],
+        "maximum_seconds": 0.07990550016984344,
+        "median_iterations": 15,
+        "median_samples_per_second": 205584.04565030066,
+        "median_seconds": 0.07969490019604564,
+        "minimum_seconds": 0.07905359985306859,
+        "resident_engine": true,
+        "seconds": [
+          0.07905359985306859,
+          0.07990550016984344,
+          0.07969490019604564
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          49,
+          49,
+          49
+        ],
+        "maximum_seconds": 0.049444499891251326,
+        "median_iterations": 49,
+        "median_samples_per_second": 345029.46148027154,
+        "median_seconds": 0.04748579999431968,
+        "minimum_seconds": 0.047469399869441986,
+        "resident_engine": false,
+        "seconds": [
+          0.047469399869441986,
+          0.04748579999431968,
+          0.049444499891251326
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          49,
+          49,
+          49
+        ],
+        "maximum_seconds": 0.10370249999687076,
+        "median_iterations": 49,
+        "median_samples_per_second": 158611.83656953275,
+        "median_seconds": 0.10329620004631579,
+        "minimum_seconds": 0.09665239998139441,
+        "resident_engine": true,
+        "seconds": [
+          0.10370249999687076,
+          0.09665239998139441,
+          0.10329620004631579
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          16,
+          16,
+          16
+        ],
+        "maximum_seconds": 2.9293833000119776,
+        "median_iterations": 16,
+        "median_samples_per_second": 6716.524894131884,
+        "median_seconds": 2.4393566998187453,
+        "minimum_seconds": 2.337931799935177,
+        "resident_engine": false,
+        "seconds": [
+          2.9293833000119776,
+          2.4393566998187453,
+          2.337931799935177
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          16,
+          16,
+          16
+        ],
+        "maximum_seconds": 0.12686780001968145,
+        "median_iterations": 16,
+        "median_samples_per_second": 132001.501969539,
+        "median_seconds": 0.12411979981698096,
+        "minimum_seconds": 0.1219671000726521,
+        "resident_engine": true,
+        "seconds": [
+          0.1219671000726521,
+          0.12411979981698096,
+          0.12686780001968145
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          57,
+          57,
+          57
+        ],
+        "maximum_seconds": 0.06825669994577765,
+        "median_iterations": 57,
+        "median_samples_per_second": 252961.30217464542,
+        "median_seconds": 0.06476880004629493,
+        "minimum_seconds": 0.06329880002886057,
+        "resident_engine": false,
+        "seconds": [
+          0.06329880002886057,
+          0.06825669994577765,
+          0.06476880004629493
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          57,
+          57,
+          57
+        ],
+        "maximum_seconds": 0.11235029995441437,
+        "median_iterations": 57,
+        "median_samples_per_second": 148443.8492537432,
+        "median_seconds": 0.11037170002236962,
+        "minimum_seconds": 0.10958390007726848,
+        "resident_engine": true,
+        "seconds": [
+          0.10958390007726848,
+          0.11235029995441437,
+          0.11037170002236962
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.22843919997103512,
+        "median_iterations": 36,
+        "median_samples_per_second": 4459368.460654945,
+        "median_seconds": 0.22424700018018484,
+        "minimum_seconds": 0.22070199996232986,
+        "resident_engine": false,
+        "seconds": [
+          0.22070199996232986,
+          0.22843919997103512,
+          0.22424700018018484
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.2390629001893103,
+        "median_iterations": 36,
+        "median_samples_per_second": 4321310.1539443,
+        "median_seconds": 0.2314112999010831,
+        "minimum_seconds": 0.2249594999011606,
+        "resident_engine": true,
+        "seconds": [
+          0.2390629001893103,
+          0.2249594999011606,
+          0.2314112999010831
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          55,
+          55,
+          55
+        ],
+        "maximum_seconds": 0.17486540018580854,
+        "median_iterations": 55,
+        "median_samples_per_second": 5963559.080270283,
+        "median_seconds": 0.1676850998774171,
+        "minimum_seconds": 0.1582502000965178,
+        "resident_engine": false,
+        "seconds": [
+          0.17486540018580854,
+          0.1582502000965178,
+          0.1676850998774171
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          53,
+          53,
+          53
+        ],
+        "maximum_seconds": 0.25324929994530976,
+        "median_iterations": 53,
+        "median_samples_per_second": 4162563.0704220096,
+        "median_seconds": 0.2402366001624614,
+        "minimum_seconds": 0.23185699991881847,
+        "resident_engine": true,
+        "seconds": [
+          0.23185699991881847,
+          0.25324929994530976,
+          0.2402366001624614
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.34685439988970757,
+        "median_iterations": 36,
+        "median_samples_per_second": 2917989.6097771926,
+        "median_seconds": 0.3427017000503838,
+        "minimum_seconds": 0.3374275998212397,
+        "resident_engine": false,
+        "seconds": [
+          0.34685439988970757,
+          0.3427017000503838,
+          0.3374275998212397
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.4598517999984324,
+        "median_iterations": 36,
+        "median_samples_per_second": 2292401.811566312,
+        "median_seconds": 0.4362236999440938,
+        "minimum_seconds": 0.42491689999587834,
+        "resident_engine": true,
+        "seconds": [
+          0.4598517999984324,
+          0.42491689999587834,
+          0.4362236999440938
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          59,
+          59,
+          59
+        ],
+        "maximum_seconds": 0.26104240003041923,
+        "median_iterations": 59,
+        "median_samples_per_second": 3925390.880970622,
+        "median_seconds": 0.25475169997662306,
+        "minimum_seconds": 0.2541076000779867,
+        "resident_engine": false,
+        "seconds": [
+          0.26104240003041923,
+          0.25475169997662306,
+          0.2541076000779867
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "rust_native_cpu",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "l1",
+      "result": {
+        "all_batches_converged": true,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          59,
+          59,
+          59
+        ],
+        "maximum_seconds": 0.326476400019601,
+        "median_iterations": 59,
+        "median_samples_per_second": 3265856.3861422995,
+        "median_seconds": 0.30619839997962117,
+        "minimum_seconds": 0.291381899965927,
+        "resident_engine": true,
+        "seconds": [
+          0.326476400019601,
+          0.30619839997962117,
+          0.291381899965927
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    }
+  ],
+  "environment": {
+    "git_revision": "4ea5ff70fddf5a32022085c4daa97e01e383d695",
+    "gpu_unavailable": "No module named 'cupy'",
+    "matmul_num_threads": "unset (matrixmultiply default; maximum 4)",
+    "native_cpu": {
+      "abi_version": 1,
+      "engine_version": "0.1.0",
+      "linear_algebra_provider": "nalgebra",
+      "python_api_version": 1,
+      "strict_dtypes": [
+        "float32",
+        "float64"
+      ]
+    },
+    "numpy": "2.4.6",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "python": "3.11.0"
+  },
+  "profile": "standard",
+  "schema": "renewable-huber-shape-sweep",
+  "schema_version": 1
+}

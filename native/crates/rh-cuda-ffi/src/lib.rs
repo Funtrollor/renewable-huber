@@ -153,6 +153,7 @@ pub struct StateMetadata {
 #[derive(Debug, Clone, Copy)]
 pub struct UnpenalizedConfig {
     pub n_features_in: i64,
+    pub fit_intercept: bool,
     pub tau: f64,
     pub bandwidth_scale: f64,
     pub max_iter: i64,
@@ -228,12 +229,13 @@ impl CudaEngine {
 
         #[cfg(feature = "cuda")]
         {
+            let abi_n_parameters = checked_dimension(n_parameters, "n_parameters")?;
             let options = ffi::RhCudaEngineOptions {
                 abi_version: ABI_VERSION,
                 struct_size: std::mem::size_of::<ffi::RhCudaEngineOptions>() as u32,
                 dtype: dtype.raw(),
                 device_id,
-                n_parameters: n_parameters as i64,
+                n_parameters: abi_n_parameters,
                 reserved0: 0,
             };
             let mut raw = std::ptr::null_mut();
@@ -351,6 +353,8 @@ impl CudaEngine {
 
         #[cfg(feature = "cuda")]
         {
+            let n_rows = checked_dimension(batch.x_design.rows, "batch row count")?;
+            let n_columns = checked_dimension(batch.x_design.columns, "batch column count")?;
             let raw_batch = ffi::RhCudaHostBatch {
                 abi_version: ABI_VERSION,
                 struct_size: std::mem::size_of::<ffi::RhCudaHostBatch>() as u32,
@@ -360,8 +364,8 @@ impl CudaEngine {
                     .sample_weight
                     .map_or(std::ptr::null(), |weight| weight.values.as_ptr())
                     as *const std::ffi::c_void,
-                n_rows: batch.x_design.rows as i64,
-                n_columns: batch.x_design.columns as i64,
+                n_rows,
+                n_columns,
                 batch_weight: batch.batch_weight,
             };
             let raw_config = ffi::RhCudaUnpenalizedConfig {
@@ -424,13 +428,15 @@ impl CudaEngine {
 
         #[cfg(feature = "cuda")]
         {
+            let n_rows = checked_dimension(x_design.rows, "prediction row count")?;
+            let n_columns = checked_dimension(x_design.columns, "prediction column count")?;
             let request = ffi::RhCudaHostPrediction {
                 abi_version: ABI_VERSION,
                 struct_size: std::mem::size_of::<ffi::RhCudaHostPrediction>() as u32,
                 x_design: x_design.values.as_ptr() as *const std::ffi::c_void,
                 prediction: prediction.as_mut_ptr() as *mut std::ffi::c_void,
-                n_rows: x_design.rows as i64,
-                n_columns: x_design.columns as i64,
+                n_rows,
+                n_columns,
             };
             let status =
                 unsafe { ffi::rh_cuda_engine_predict_host(self.handle.as_ptr(), &request) };
@@ -534,26 +540,7 @@ impl CudaEngine {
     }
 
     fn validate_config(&self, config: UnpenalizedConfig) -> Result<(), CudaError> {
-        if config.n_features_in < 1 || config.n_features_in as usize > self.n_parameters {
-            return Err(CudaError::InvalidArgument(
-                "n_features_in must fit the engine parameter dimension".to_owned(),
-            ));
-        }
-        if config.max_iter < 1
-            || !config.tau.is_finite()
-            || config.tau <= 0.0
-            || !config.bandwidth_scale.is_finite()
-            || config.bandwidth_scale <= 0.0
-            || !config.tolerance.is_finite()
-            || config.tolerance <= 0.0
-            || !config.ridge.is_finite()
-            || config.ridge < 0.0
-        {
-            return Err(CudaError::InvalidArgument(
-                "received invalid unpenalized solver configuration".to_owned(),
-            ));
-        }
-        Ok(())
+        validate_unpenalized_config(self.n_parameters, config)
     }
 
     #[cfg(feature = "cuda")]
@@ -571,6 +558,46 @@ impl CudaEngine {
         };
         Err(CudaError::Status { status, message })
     }
+}
+
+fn validate_unpenalized_config(
+    n_parameters: usize,
+    config: UnpenalizedConfig,
+) -> Result<(), CudaError> {
+    let n_features_in = usize::try_from(config.n_features_in).map_err(|_| {
+        CudaError::InvalidArgument("n_features_in must be greater than zero".to_owned())
+    })?;
+    let expected_parameters = n_features_in
+        .checked_add(usize::from(config.fit_intercept))
+        .ok_or_else(|| {
+            CudaError::InvalidArgument("feature and intercept dimensions are too large".to_owned())
+        })?;
+    if n_features_in == 0 || expected_parameters != n_parameters {
+        return Err(CudaError::InvalidArgument(
+            "n_parameters must equal n_features_in plus the intercept column".to_owned(),
+        ));
+    }
+    if config.max_iter < 1
+        || !config.tau.is_finite()
+        || config.tau <= 0.0
+        || !config.bandwidth_scale.is_finite()
+        || config.bandwidth_scale <= 0.0
+        || !config.tolerance.is_finite()
+        || config.tolerance <= 0.0
+        || !config.ridge.is_finite()
+        || config.ridge < 0.0
+    {
+        return Err(CudaError::InvalidArgument(
+            "received invalid unpenalized solver configuration".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn checked_dimension(value: usize, name: &str) -> Result<i64, CudaError> {
+    i64::try_from(value)
+        .map_err(|_| CudaError::InvalidArgument(format!("{name} exceeds the CUDA ABI limit")))
 }
 
 impl Drop for CudaEngine {
@@ -800,5 +827,30 @@ mod ffi {
         ) -> i32;
         pub fn rh_cuda_engine_synchronize(engine: *mut RhCudaEngine) -> i32;
         pub fn rh_cuda_engine_last_error(engine: *const RhCudaEngine) -> *const c_char;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_unpenalized_config, UnpenalizedConfig};
+
+    fn config(fit_intercept: bool) -> UnpenalizedConfig {
+        UnpenalizedConfig {
+            n_features_in: 3,
+            fit_intercept,
+            tau: 1.345,
+            bandwidth_scale: 1.0,
+            max_iter: 100,
+            tolerance: 1e-6,
+            ridge: 1e-8,
+        }
+    }
+
+    #[test]
+    fn parameter_shape_matches_intercept_contract() {
+        assert!(validate_unpenalized_config(3, config(false)).is_ok());
+        assert!(validate_unpenalized_config(4, config(true)).is_ok());
+        assert!(validate_unpenalized_config(4, config(false)).is_err());
+        assert!(validate_unpenalized_config(3, config(true)).is_err());
     }
 }

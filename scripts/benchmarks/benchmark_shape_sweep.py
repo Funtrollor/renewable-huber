@@ -1,4 +1,4 @@
-"""Run reproducible native-core shape sweeps across NumPy and CUDA engines."""
+"""Run reproducible shape sweeps across NumPy and native CPU/CUDA engines."""
 
 from __future__ import annotations
 
@@ -68,7 +68,16 @@ def environment_metadata() -> dict[str, Any]:
         "platform": platform.platform(),
         "processor": platform.processor() or os.environ.get("PROCESSOR_IDENTIFIER", "unknown"),
         "numpy": np.__version__,
+        "matmul_num_threads": os.environ.get(
+            "MATMUL_NUM_THREADS", "unset (matrixmultiply default; maximum 4)"
+        ),
     }
+    try:
+        from renewable_huber import _native_cpu
+
+        metadata["native_cpu"] = dict(_native_cpu.version())
+    except Exception as error:
+        metadata["native_cpu_unavailable"] = str(error)
     try:
         import cupy as cp
 
@@ -213,6 +222,45 @@ def benchmark_numpy(
             "includes_input_transfer": False,
             "includes_engine_initialization": True,
             "resident_engine": False,
+            "engine_prime_runs": 0,
+            "repeat_state_reset": "new_estimator",
+        }
+    )
+    return result
+
+
+def benchmark_native_cpu(
+    batches: list[tuple[np.ndarray, np.ndarray]],
+    *,
+    dtype: str,
+    penalty: str,
+    warmup: int,
+    repeats: int,
+    max_iter: int,
+    tol: float,
+) -> dict[str, Any]:
+    """Measure the opt-in whole-batch Rust CPU engine."""
+
+    def operation() -> tuple[int, bool]:
+        return _fit_batches(
+            batches,
+            backend="native_cpu",
+            device="cpu",
+            dtype=dtype,
+            penalty=penalty,
+            max_iter=max_iter,
+            tol=tol,
+        )
+
+    for _ in range(warmup):
+        operation()
+    result = _measure(operation, repeats=repeats)
+    result.update(
+        {
+            "input_location": "host",
+            "includes_input_transfer": False,
+            "includes_engine_initialization": True,
+            "resident_engine": True,
             "engine_prime_runs": 0,
             "repeat_state_reset": "new_estimator",
         }
@@ -380,7 +428,15 @@ def main() -> int:
     parser.add_argument("--case", action="append", help="Run only a named shape; repeatable")
     parser.add_argument(
         "--backend",
-        choices=("numpy", "cupy", "native_cuda", "both", "all"),
+        choices=(
+            "numpy",
+            "native-cpu",
+            "cpu",
+            "cupy",
+            "native_cuda",
+            "both",
+            "all",
+        ),
         default="both",
     )
     parser.add_argument("--penalty", choices=("none", "l1", "both"), default="both")
@@ -405,7 +461,8 @@ def main() -> int:
         shapes = [shape for shape in shapes if shape.name in requested]
     penalties = ("none", "l1") if args.penalty == "both" else (args.penalty,)
     dtypes = ("float32", "float64") if args.dtype == "both" else (args.dtype,)
-    run_numpy = args.backend in ("numpy", "both", "all")
+    run_numpy = args.backend in ("numpy", "cpu", "both", "all")
+    run_native_cpu = args.backend in ("native-cpu", "cpu", "all")
     run_cupy = args.backend in ("cupy", "both", "all")
     run_native_cuda = args.backend in ("native_cuda", "all")
 
@@ -459,6 +516,26 @@ def main() -> int:
                     case = {**base, "engine": "numpy_cpu", "result": result}
                     record["cases"].append(case)
                     _print_result(case)
+                if run_native_cpu:
+                    try:
+                        result = benchmark_native_cpu(
+                            batches,
+                            dtype=dtype,
+                            penalty=penalty,
+                            warmup=args.warmup,
+                            repeats=args.repeats,
+                            max_iter=args.max_iter,
+                            tol=args.tol,
+                        )
+                    except (BackendUnavailableError, ImportError) as error:
+                        record.setdefault("unavailable", {})["native_cpu"] = str(error)
+                        print(f"Native CPU unavailable: {error}")
+                        run_native_cpu = False
+                    else:
+                        _add_throughput(result, shape.samples)
+                        case = {**base, "engine": "rust_native_cpu", "result": result}
+                        record["cases"].append(case)
+                        _print_result(case)
                 if run_cupy:
                     try:
                         host_result, device_result = benchmark_cupy(

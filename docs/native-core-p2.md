@@ -35,8 +35,8 @@ scalars to the C++ host between iterations. Eliminating those synchronization
 points with device-side decisions is a measured follow-up optimization, not a
 claim of this baseline.
 
-The separately built extension reports both C ABI version 1 and Python payload
-API version 1. The base package checks both before creating an engine, so an
+The separately built extension reports C ABI version 1 and Python payload API
+version 2. The base package checks both before creating an engine, so an
 older or unrelated native module fails explicitly instead of reaching a
 method or result-dictionary mismatch later.
 
@@ -73,13 +73,14 @@ From a PowerShell prompt:
 
 ```powershell
 python -m pip install "maturin>=1.8,<2"
-.\scripts\native\build_native.ps1 -Python python
+.\scripts\native\build_native_cuda.ps1 -Python python
 ```
 
 The build script enters the Visual Studio x64 environment, asks Maturin to
-compile the `cuda` feature, and installs `renewable_huber._native_cuda` into
-the selected Python environment. This is a developer/source build; the base
-PyPI wheel continues to require neither Rust nor CUDA.
+compile the `cuda` feature, and installs `_renewable_huber_native_cuda`; the
+base package shim exposes it as `renewable_huber._native_cuda`. This is a
+developer/source build; the base PyPI wheel continues to require neither Rust
+nor CUDA.
 
 ## Use
 

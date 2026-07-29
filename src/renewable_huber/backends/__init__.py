@@ -21,6 +21,12 @@ def resolve_backend(name: str, *, device: str = "auto", dtype: str = "float64") 
         if device == "cuda":
             raise BackendUnavailableError("backend='numpy' cannot target device='cuda'")
         return NumPyBackend(dtype)
+    if name == "native_cpu":
+        if device == "cuda":
+            raise BackendUnavailableError("backend='native_cpu' requires device='cpu'")
+        from .native_cpu_backend import NativeCpuBackend
+
+        return NativeCpuBackend(dtype)
     if name == "cupy":
         if device == "cpu":
             raise BackendUnavailableError("backend='cupy' requires a CUDA device")
