@@ -150,21 +150,21 @@ were captured on an RTX 5070 Ti with CUDA Runtime 12.9. For three steady-state
 
 | Shape | NumPy CPU | CuPy host input | Native host input |
 | --- | ---: | ---: | ---: |
-| 100,000 x 90 | 80.4 ms | 44.4 ms | 36.1 ms |
-| 16,384 x 256 | 1,200.7 ms | 56.5 ms | 47.4 ms |
-| 1,000,000 x 32 | 224.7 ms | 67.4 ms | 72.8 ms |
+| 100,000 x 90 | 77.5 ms | 30.4 ms | 36.0 ms |
+| 16,384 x 256 | 2,288.6 ms | 81.4 ms | 47.0 ms |
+| 1,000,000 x 32 | 208.2 ms | 71.9 ms | 82.4 ms |
 
 This is a correctness-first native baseline, not a universal speedup claim.
-It wins on the reference and wide cases but trails CuPy for the long streaming
-case, and small GPU workloads remain slower than NumPy because launch and
-transfer overhead dominate.
+It wins on the wide `float32` case and the reference `float64` case, but trails
+CuPy for the `float32` reference and long streaming cases. Small GPU workloads
+remain slower than NumPy because launch and transfer overhead dominate.
 
 The native figures are steady-state measurements: one engine is primed once
 and restored outside each timed repeat. The NumPy and CuPy entries construct a
 new estimator in every timed repeat. These policies are recorded per result in
 the JSON and the table must not be read as an initialization-cost comparison.
 
-The profiled three-repeat reference window was 110.8 ms. It contained 396
+The profiled three-repeat reference window was 120.8 ms. It contained 396
 device-to-host copies and 401 stream-wait synchronizations; those counts make
 device-side convergence and reduction results the next optimization target.
 CUDA API time, kernel time, and memcpy time overlap and must not be summed as
