@@ -27,6 +27,12 @@ def resolve_backend(name: str, *, device: str = "auto", dtype: str = "float64") 
         from .cupy_backend import CuPyBackend
 
         return CuPyBackend(dtype)
+    if name == "native_cuda":
+        if device == "cpu":
+            raise BackendUnavailableError("backend='native_cuda' requires a CUDA device")
+        from .native_cuda_backend import NativeCudaBackend
+
+        return NativeCudaBackend(dtype)
     if name == "torch":
         from .torch_backend import TorchBackend
 

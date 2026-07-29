@@ -1,0 +1,22 @@
+[package]
+name = "renewable-huber-native-cuda"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PyO3 dispatcher for the optional Renewable Huber CUDA engine."
+
+[lib]
+name = "_renewable_huber_native_cuda"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+cuda = ["rh-cuda-ffi/cuda"]
+
+[dependencies]
+numpy.workspace = true
+pyo3.workspace = true
+rh-cuda-ffi = { path = "../rh-cuda-ffi" }
+thiserror.workspace = true

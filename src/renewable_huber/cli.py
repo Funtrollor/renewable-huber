@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     print("available backends:")
     print("  numpy: CPU (base install)")
     print("  cupy: CUDA (install the gpu-cupy extra)")
+    print("  native_cuda: opt-in Rust/CUDA whole-batch engine (source build)")
     print("  torch: CPU/CUDA (install the gpu-torch extra)")
     print("  tensorflow: CPU/CUDA, eager execution only (install the gpu-tensorflow extra)")
     print("device policy: backend='auto' uses NumPy unless device='cuda' selects CuPy")

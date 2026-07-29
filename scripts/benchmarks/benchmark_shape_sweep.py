@@ -1,4 +1,4 @@
-"""Run reproducible native-core shape sweeps across NumPy and CuPy."""
+"""Run reproducible native-core shape sweeps across NumPy and CUDA engines."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from renewable_huber import BackendUnavailableError, RenewableHuberRegressor  # noqa: E402
+from renewable_huber.state import RenewableHuberState  # noqa: E402
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,17 @@ def environment_metadata() -> dict[str, Any]:
         )
     except Exception as error:
         metadata["gpu_unavailable"] = str(error)
+    try:
+        from renewable_huber import _native_cuda
+
+        metadata.update(
+            {
+                "native_cuda_abi": _native_cuda.version(),
+                "native_cuda_available": bool(_native_cuda.is_available()),
+            }
+        )
+    except (ImportError, OSError, RuntimeError) as error:
+        metadata["native_cuda_unavailable"] = str(error)
     return metadata
 
 
@@ -142,11 +154,14 @@ def _measure(
     *,
     repeats: int,
     synchronize: Any | None = None,
+    prepare: Any | None = None,
 ) -> dict[str, Any]:
     seconds = []
     iterations = []
     convergence = []
     for _ in range(repeats):
+        if prepare is not None:
+            prepare()
         if synchronize is not None:
             synchronize()
         start = perf_counter()
@@ -192,7 +207,16 @@ def benchmark_numpy(
     for _ in range(warmup):
         operation()
     result = _measure(operation, repeats=repeats)
-    result.update({"input_location": "host", "includes_input_transfer": False})
+    result.update(
+        {
+            "input_location": "host",
+            "includes_input_transfer": False,
+            "includes_engine_initialization": True,
+            "resident_engine": False,
+            "engine_prime_runs": 0,
+            "repeat_state_reset": "new_estimator",
+        }
+    )
     return result
 
 
@@ -240,13 +264,95 @@ def benchmark_cupy(
     stream.synchronize()
 
     host_result = _measure(host_operation, repeats=repeats, synchronize=stream.synchronize)
-    host_result.update({"input_location": "host", "includes_input_transfer": True})
+    host_result.update(
+        {
+            "input_location": "host",
+            "includes_input_transfer": True,
+            "includes_engine_initialization": True,
+            "resident_engine": False,
+            "engine_prime_runs": 0,
+            "repeat_state_reset": "new_estimator",
+        }
+    )
     device_result = _measure(device_operation, repeats=repeats, synchronize=stream.synchronize)
-    device_result.update({"input_location": "device", "includes_input_transfer": False})
+    device_result.update(
+        {
+            "input_location": "device",
+            "includes_input_transfer": False,
+            "includes_engine_initialization": True,
+            "resident_engine": False,
+            "engine_prime_runs": 0,
+            "repeat_state_reset": "new_estimator",
+        }
+    )
     host_result["transfer_and_conversion_overhead_seconds"] = max(
         0.0, host_result["median_seconds"] - device_result["median_seconds"]
     )
     return host_result, device_result
+
+
+def benchmark_native_cuda(
+    batches: list[tuple[np.ndarray, np.ndarray]],
+    *,
+    dtype: str,
+    warmup: int,
+    repeats: int,
+    max_iter: int,
+    tol: float,
+) -> dict[str, Any]:
+    """Measure the host-fed whole-batch solver with state resident on CUDA."""
+
+    model = RenewableHuberRegressor(
+        backend="native_cuda",
+        device="cuda",
+        dtype=dtype,
+        penalty="none",
+        max_iter=max_iter,
+        tol=tol,
+    )
+
+    def operation() -> tuple[int, bool]:
+        iterations = 0
+        converged = True
+        for X_batch, y_batch in batches:
+            model.partial_fit(X_batch, y_batch)
+            iterations += model.diagnostics_.iterations
+            converged = converged and model.diagnostics_.converged
+        return iterations, converged
+
+    # Prime handles and maximum-batch workspaces once. Every timed repeat then
+    # restores an empty portable state into the same opaque engine.
+    operation()
+    empty_state = RenewableHuberState.empty(
+        batches[0][0].shape[1],
+        fit_intercept=model.fit_intercept,
+        xp=np,
+        dtype=np.dtype(dtype),
+    )
+
+    def prepare() -> None:
+        model._backend.restore_native_state(empty_state)
+        model._state = empty_state.copy()
+        model._diagnostics = None
+        model.n_samples_seen_ = 0
+        model.n_iter_ = 0
+        model._sync_public_coefficients()
+
+    for _ in range(warmup):
+        prepare()
+        operation()
+    result = _measure(operation, repeats=repeats, prepare=prepare)
+    result.update(
+        {
+            "input_location": "host",
+            "includes_input_transfer": True,
+            "includes_engine_initialization": False,
+            "resident_engine": True,
+            "engine_prime_runs": 1,
+            "repeat_state_reset": "restore_empty_portable_state",
+        }
+    )
+    return result
 
 
 def _add_throughput(result: dict[str, Any], samples: int) -> None:
@@ -272,7 +378,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=tuple(PROFILES), default="smoke")
     parser.add_argument("--case", action="append", help="Run only a named shape; repeatable")
-    parser.add_argument("--backend", choices=("numpy", "cupy", "both"), default="both")
+    parser.add_argument(
+        "--backend",
+        choices=("numpy", "cupy", "native_cuda", "both", "all"),
+        default="both",
+    )
     parser.add_argument("--penalty", choices=("none", "l1", "both"), default="both")
     parser.add_argument("--dtype", choices=("float32", "float64", "both"), default="both")
     parser.add_argument("--warmup", type=int, default=1)
@@ -295,8 +405,9 @@ def main() -> int:
         shapes = [shape for shape in shapes if shape.name in requested]
     penalties = ("none", "l1") if args.penalty == "both" else (args.penalty,)
     dtypes = ("float32", "float64") if args.dtype == "both" else (args.dtype,)
-    run_numpy = args.backend in ("numpy", "both")
-    run_cupy = args.backend in ("cupy", "both")
+    run_numpy = args.backend in ("numpy", "both", "all")
+    run_cupy = args.backend in ("cupy", "both", "all")
+    run_native_cuda = args.backend in ("native_cuda", "all")
 
     record: dict[str, Any] = {
         "schema": "renewable-huber-shape-sweep",
@@ -372,6 +483,25 @@ def main() -> int:
                             case = {**base, "engine": engine, "result": result}
                             record["cases"].append(case)
                             _print_result(case)
+                if run_native_cuda and penalty == "none":
+                    try:
+                        result = benchmark_native_cuda(
+                            batches,
+                            dtype=dtype,
+                            warmup=args.warmup,
+                            repeats=args.repeats,
+                            max_iter=args.max_iter,
+                            tol=args.tol,
+                        )
+                    except (BackendUnavailableError, ImportError, OSError) as error:
+                        record.setdefault("unavailable", {})["native_cuda"] = str(error)
+                        print(f"Native CUDA unavailable: {error}")
+                        run_native_cuda = False
+                    else:
+                        _add_throughput(result, shape.samples)
+                        case = {**base, "engine": "native_cuda_host_input", "result": result}
+                        record["cases"].append(case)
+                        _print_result(case)
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)

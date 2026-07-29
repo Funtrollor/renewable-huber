@@ -1,0 +1,1226 @@
+{
+  "arguments": {
+    "max_iter": 100,
+    "repeats": 3,
+    "seed": 42,
+    "tol": 1e-06,
+    "warmup": 1
+  },
+  "cases": [
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.0017570999916642904,
+        "median_iterations": 5,
+        "median_samples_per_second": 2416519.3621588224,
+        "median_seconds": 0.0016949998680502176,
+        "minimum_seconds": 0.0013728998601436615,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.0016949998680502176,
+          0.0017570999916642904,
+          0.0013728998601436615
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.013702099910005927,
+        "median_iterations": 5,
+        "median_samples_per_second": 460561.07968114596,
+        "median_seconds": 0.008893500082194805,
+        "minimum_seconds": 0.00884840008802712,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.008893500082194805,
+          0.00884840008802712,
+          0.013702099910005927
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.0
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.014022700022906065,
+        "median_iterations": 5,
+        "median_samples_per_second": 419611.93853980885,
+        "median_seconds": 0.009761400055140257,
+        "minimum_seconds": 0.008895899867638946,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.009761400055140257,
+          0.008895899867638946,
+          0.014022700022906065
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float32",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 0.26568603515625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.009444399969652295,
+        "median_iterations": 5,
+        "median_samples_per_second": 856008.3391037865,
+        "median_seconds": 0.004785000113770366,
+        "minimum_seconds": 0.004112199880182743,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.004112199880182743,
+          0.009444399969652295,
+          0.004785000113770366
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.0017527001909911633,
+        "median_iterations": 5,
+        "median_samples_per_second": 2615581.0149387764,
+        "median_seconds": 0.0015660000499337912,
+        "minimum_seconds": 0.0015010000206530094,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.0017527001909911633,
+          0.0015010000206530094,
+          0.0015660000499337912
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.015622000209987164,
+        "median_iterations": 5,
+        "median_samples_per_second": 379733.9245225504,
+        "median_seconds": 0.010786500060930848,
+        "minimum_seconds": 0.010371299926191568,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.010786500060930848,
+          0.015622000209987164,
+          0.010371299926191568
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.0008871001191437244
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.015117200091481209,
+        "median_iterations": 5,
+        "median_samples_per_second": 413762.45268261735,
+        "median_seconds": 0.009899399941787124,
+        "minimum_seconds": 0.009818800026550889,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.009818800026550889,
+          0.015117200091481209,
+          0.009899399941787124
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 42,
+      "dtype": "float64",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 0.5313720703125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          5,
+          5,
+          5
+        ],
+        "maximum_seconds": 0.01047220011241734,
+        "median_iterations": 5,
+        "median_samples_per_second": 767846.4154240871,
+        "median_seconds": 0.0053344001062214375,
+        "minimum_seconds": 0.0053026999812573195,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.01047220011241734,
+          0.0053026999812573195,
+          0.0053344001062214375
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 16,
+        "name": "latency",
+        "samples": 4096
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.07888459996320307,
+        "median_iterations": 13,
+        "median_samples_per_second": 1289951.4083467843,
+        "median_seconds": 0.0775222999509424,
+        "minimum_seconds": 0.07682789978571236,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.07888459996320307,
+          0.0775222999509424,
+          0.07682789978571236
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.042144699953496456,
+        "median_iterations": 13,
+        "median_samples_per_second": 3289917.4010732304,
+        "median_seconds": 0.030395899899303913,
+        "minimum_seconds": 0.029679100029170513,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.030395899899303913,
+          0.029679100029170513,
+          0.042144699953496456
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.0031620997469872236
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.042124300030991435,
+        "median_iterations": 13,
+        "median_samples_per_second": 3671907.682391263,
+        "median_seconds": 0.02723380015231669,
+        "minimum_seconds": 0.02669279999099672,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.02723380015231669,
+          0.02669279999099672,
+          0.042124300030991435
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float32",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 34.714088439941406,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.04188779997639358,
+        "median_iterations": 13,
+        "median_samples_per_second": 2774756.383094634,
+        "median_seconds": 0.036039199912920594,
+        "minimum_seconds": 0.035024499986320734,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.035024499986320734,
+          0.04188779997639358,
+          0.036039199912920594
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.10620019980706275,
+        "median_iterations": 13,
+        "median_samples_per_second": 1002563.5537520676,
+        "median_seconds": 0.09974430012516677,
+        "minimum_seconds": 0.09744699997827411,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.10620019980706275,
+          0.09744699997827411,
+          0.09974430012516677
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.07941429992206395,
+        "median_iterations": 13,
+        "median_samples_per_second": 1306282.8281525078,
+        "median_seconds": 0.07655310002155602,
+        "minimum_seconds": 0.07542020012624562,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.07655310002155602,
+          0.07542020012624562,
+          0.07941429992206395
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.00313840014860034
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.07762559992261231,
+        "median_iterations": 13,
+        "median_samples_per_second": 1362125.0263646143,
+        "median_seconds": 0.07341469987295568,
+        "minimum_seconds": 0.072710300097242,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.07341469987295568,
+          0.072710300097242,
+          0.07762559992261231
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 43,
+      "dtype": "float64",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 69.42817687988281,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          13,
+          13,
+          13
+        ],
+        "maximum_seconds": 0.07455900008790195,
+        "median_iterations": 13,
+        "median_samples_per_second": 1575448.2158626548,
+        "median_seconds": 0.06347399996593595,
+        "minimum_seconds": 0.060549800051376224,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.060549800051376224,
+          0.06347399996593595,
+          0.07455900008790195
+        ]
+      },
+      "shape": {
+        "batch_size": 32768,
+        "features": 90,
+        "name": "reference",
+        "samples": 100000
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          14,
+          14,
+          14
+        ],
+        "maximum_seconds": 2.457697399891913,
+        "median_iterations": 14,
+        "median_samples_per_second": 7158.890803905228,
+        "median_seconds": 2.288622699910775,
+        "minimum_seconds": 2.27780929999426,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          2.288622699910775,
+          2.457697399891913,
+          2.27780929999426
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          15,
+          15,
+          15
+        ],
+        "maximum_seconds": 0.08649330004118383,
+        "median_iterations": 15,
+        "median_samples_per_second": 201262.80600762207,
+        "median_seconds": 0.08140600007027388,
+        "minimum_seconds": 0.07329219998791814,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.07329219998791814,
+          0.08649330004118383,
+          0.08140600007027388
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.010293799918144941
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          15,
+          15,
+          15
+        ],
+        "maximum_seconds": 0.07803749991580844,
+        "median_iterations": 15,
+        "median_samples_per_second": 230396.471561139,
+        "median_seconds": 0.07111220015212893,
+        "minimum_seconds": 0.06949650007300079,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.07803749991580844,
+          0.06949650007300079,
+          0.07111220015212893
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float32",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 16.0634765625,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          15,
+          15,
+          15
+        ],
+        "maximum_seconds": 0.05118219996802509,
+        "median_iterations": 15,
+        "median_samples_per_second": 348672.8982682906,
+        "median_seconds": 0.046989599941298366,
+        "minimum_seconds": 0.0444413002114743,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.0444413002114743,
+          0.05118219996802509,
+          0.046989599941298366
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          16,
+          16,
+          16
+        ],
+        "maximum_seconds": 2.294117399957031,
+        "median_iterations": 16,
+        "median_samples_per_second": 8558.37236778857,
+        "median_seconds": 1.9143826998770237,
+        "minimum_seconds": 1.8351042999420315,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          1.8351042999420315,
+          1.9143826998770237,
+          2.294117399957031
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          16,
+          16,
+          16
+        ],
+        "maximum_seconds": 0.08460889989510179,
+        "median_iterations": 16,
+        "median_samples_per_second": 196233.6646436828,
+        "median_seconds": 0.0834923000074923,
+        "minimum_seconds": 0.08318810001946986,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.08460889989510179,
+          0.08318810001946986,
+          0.0834923000074923
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.003723499830812216
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          16,
+          16,
+          16
+        ],
+        "maximum_seconds": 0.08363180002197623,
+        "median_iterations": 16,
+        "median_samples_per_second": 205393.5870128552,
+        "median_seconds": 0.07976880017668009,
+        "minimum_seconds": 0.0797137999907136,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.07976880017668009,
+          0.08363180002197623,
+          0.0797137999907136
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 44,
+      "dtype": "float64",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 32.126953125,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          16,
+          16,
+          16
+        ],
+        "maximum_seconds": 0.0807334000710398,
+        "median_iterations": 16,
+        "median_samples_per_second": 215189.62436396373,
+        "median_seconds": 0.07613749988377094,
+        "minimum_seconds": 0.07533479994162917,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.07613749988377094,
+          0.0807334000710398,
+          0.07533479994162917
+        ]
+      },
+      "shape": {
+        "batch_size": 4096,
+        "features": 256,
+        "name": "wide",
+        "samples": 16384
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.20907189999707043,
+        "median_iterations": 36,
+        "median_samples_per_second": 4802887.107538359,
+        "median_seconds": 0.20820810017175972,
+        "minimum_seconds": 0.20221669995225966,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.20221669995225966,
+          0.20907189999707043,
+          0.20820810017175972
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.07223970000632107,
+        "median_iterations": 36,
+        "median_samples_per_second": 13902965.650427345,
+        "median_seconds": 0.07192709995433688,
+        "minimum_seconds": 0.07116800011135638,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.07223970000632107,
+          0.07116800011135638,
+          0.07192709995433688
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.01040700008161366
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.06264519994147122,
+        "median_iterations": 36,
+        "median_samples_per_second": 16254850.074510038,
+        "median_seconds": 0.06152009987272322,
+        "minimum_seconds": 0.06121559999883175,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.06264519994147122,
+          0.06121559999883175,
+          0.06152009987272322
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float32",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 125.8851318359375,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.08277820004150271,
+        "median_iterations": 36,
+        "median_samples_per_second": 12128739.310683452,
+        "median_seconds": 0.08244879986159503,
+        "minimum_seconds": 0.07804159983061254,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.08244879986159503,
+          0.08277820004150271,
+          0.07804159983061254
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "numpy_cpu",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.3110736000817269,
+        "median_iterations": 36,
+        "median_samples_per_second": 3233588.9692720557,
+        "median_seconds": 0.3092539000790566,
+        "minimum_seconds": 0.30915109999477863,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.3110736000817269,
+          0.3092539000790566,
+          0.30915109999477863
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "cupy_cuda_host_input",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.13654780015349388,
+        "median_iterations": 36,
+        "median_samples_per_second": 7374283.2212954275,
+        "median_seconds": 0.13560639997012913,
+        "minimum_seconds": 0.13076629978604615,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.13560639997012913,
+          0.13654780015349388,
+          0.13076629978604615
+        ],
+        "transfer_and_conversion_overhead_seconds": 0.019627399975433946
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "cupy_cuda_device_input",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 0,
+        "includes_engine_initialization": true,
+        "includes_input_transfer": false,
+        "input_location": "device",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.11842399998567998,
+        "median_iterations": 36,
+        "median_samples_per_second": 8622250.580240728,
+        "median_seconds": 0.11597899999469519,
+        "minimum_seconds": 0.1129874000325799,
+        "repeat_state_reset": "new_estimator",
+        "resident_engine": false,
+        "seconds": [
+          0.11842399998567998,
+          0.1129874000325799,
+          0.11597899999469519
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    },
+    {
+      "dataset_seed": 45,
+      "dtype": "float64",
+      "engine": "native_cuda_host_input",
+      "estimated_host_data_mib": 251.770263671875,
+      "penalty": "none",
+      "result": {
+        "all_batches_converged": true,
+        "engine_prime_runs": 1,
+        "includes_engine_initialization": false,
+        "includes_input_transfer": true,
+        "input_location": "host",
+        "iterations": [
+          36,
+          36,
+          36
+        ],
+        "maximum_seconds": 0.17080139997415245,
+        "median_iterations": 36,
+        "median_samples_per_second": 6161820.497344792,
+        "median_seconds": 0.16228970000520349,
+        "minimum_seconds": 0.16079919994808733,
+        "repeat_state_reset": "restore_empty_portable_state",
+        "resident_engine": true,
+        "seconds": [
+          0.16079919994808733,
+          0.17080139997415245,
+          0.16228970000520349
+        ]
+      },
+      "shape": {
+        "batch_size": 65536,
+        "features": 32,
+        "name": "streaming",
+        "samples": 1000000
+      }
+    }
+  ],
+  "environment": {
+    "cuda_runtime": 12090,
+    "cupy": "14.1.1",
+    "git_revision": "5ebbc2eab4c186adcf9bd4e6ba1d8fc02573692d",
+    "gpu": "NVIDIA GeForce RTX 5070 Ti",
+    "gpu_compute_capability": "12.0",
+    "native_cuda_abi": {
+      "abi_version": 1,
+      "cuda_available": true,
+      "device_count": 1,
+      "driver_version": 13020,
+      "python_api_version": 1,
+      "runtime_version": 12090
+    },
+    "native_cuda_available": true,
+    "numpy": "2.4.6",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "python": "3.11.0"
+  },
+  "profile": "standard",
+  "schema": "renewable-huber-shape-sweep",
+  "schema_version": 1
+}

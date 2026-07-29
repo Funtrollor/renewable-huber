@@ -1,0 +1,50 @@
+{
+  "all_batches_converged": true,
+  "configuration": {
+    "batch_size": 32768,
+    "batches": 4,
+    "dtype": "float32",
+    "engine": "native_cuda",
+    "engine_prime_runs": 1,
+    "features": 90,
+    "includes_engine_initialization": false,
+    "input_location": "host",
+    "max_iter": 100,
+    "penalty": "none",
+    "repeat_state_reset": "restore_empty_portable_state",
+    "repeats": 3,
+    "resident_engine": true,
+    "samples": 100000,
+    "seed": 42,
+    "tol": 1e-06,
+    "warmup": 1
+  },
+  "cuda_runtime": 12090,
+  "cupy": "14.1.1",
+  "elapsed_seconds": [
+    0.03488590009510517,
+    0.035495599964633584,
+    0.03654120001010597
+  ],
+  "git_revision": "5ebbc2eab4c186adcf9bd4e6ba1d8fc02573692d",
+  "gpu": "NVIDIA GeForce RTX 5070 Ti",
+  "gpu_compute_capability": "12.0",
+  "iteration_counts": [
+    15,
+    15,
+    15
+  ],
+  "native_cuda_abi": {
+    "abi_version": 1,
+    "cuda_available": true,
+    "device_count": 1,
+    "driver_version": 13020,
+    "python_api_version": 1,
+    "runtime_version": 12090
+  },
+  "numpy": "2.4.6",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "python": "3.11.0",
+  "schema": "renewable-huber-nsight-profile",
+  "schema_version": 1
+}
