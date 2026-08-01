@@ -110,7 +110,7 @@ jobs:
           command: build
           target: ${{ matrix.rust-target }}
           args: >-
-            --release --locked --manylinux 2014
+            --release --locked
             --interpreter python${{ matrix.python-version }}
             --out ../../dist-native-cpu
           manylinux: "2014"
