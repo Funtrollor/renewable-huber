@@ -17,6 +17,18 @@ from scripts.native.validate_release_artifacts import (
 
 
 class NativeReleaseMetadataTests(unittest.TestCase):
+    def test_release_workflow_has_single_manylinux_policy_source(self) -> None:
+        workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('manylinux: "2014"', workflow)
+        self.assertNotIn("--manylinux 2014", workflow)
+        self.assertIn(
+            "cargo test --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets",
+            workflow,
+        )
+        self.assertNotIn("cargo test --locked --workspace --all-targets", workflow)
+
     def test_source_projects_match_base_release_exactly(self) -> None:
         self.assertEqual(check_source_metadata(), base_version())
 
