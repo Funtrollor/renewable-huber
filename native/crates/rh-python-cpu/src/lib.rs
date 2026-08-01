@@ -8,11 +8,12 @@ use numpy::{ndarray::Array2, IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonly
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use rh_core::{BatchView, CoreError, Diagnostics, Penalty, State, UpdateConfig};
 use rh_cpu::{predict, CpuEngine, CpuScalar};
 
 const ABI_VERSION: u32 = 1;
-const PYTHON_API_VERSION: u32 = 1;
+const PYTHON_API_VERSION: u32 = 2;
 
 struct EngineData<T: CpuScalar> {
     engine: CpuEngine<T>,
@@ -47,10 +48,10 @@ impl<T: CpuScalar> EngineData<T> {
         self.coefficients.len()
     }
 
-    fn state(&self, n_features_in: usize, fit_intercept: bool) -> State<T> {
+    fn take_state(&mut self, n_features_in: usize, fit_intercept: bool) -> State<T> {
         State {
-            coefficients: self.coefficients.clone(),
-            information: self.information.clone(),
+            coefficients: std::mem::take(&mut self.coefficients),
+            information: std::mem::take(&mut self.information),
             n_samples_seen: self.n_samples_seen,
             batch_count: self.batch_count,
             previous_lambda: self.previous_lambda,
@@ -75,16 +76,72 @@ enum TypedEngine {
     Float64(EngineData<f64>),
 }
 
+/// Selects the Rayon scheduler used by one Python-visible engine.
+///
+/// The global variant preserves the original behavior and honours an
+/// application-wide Rayon configuration. A dedicated pool lets callers bound
+/// CPU use independently for each estimator without mutating process-global
+/// state.
+enum ExecutionPool {
+    Global,
+    Dedicated(ThreadPool),
+}
+
+impl ExecutionPool {
+    fn new(n_threads: Option<i64>) -> PyResult<Self> {
+        let Some(n_threads) = n_threads else {
+            return Ok(Self::Global);
+        };
+        if n_threads < 1 {
+            return Err(PyValueError::new_err(
+                "n_threads must be a positive integer",
+            ));
+        }
+        let n_threads = usize::try_from(n_threads)
+            .map_err(|_| PyValueError::new_err("n_threads is too large"))?;
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(n_threads)
+            .thread_name(|index| format!("renewable-huber-cpu-{index}"))
+            .build()
+            .map_err(|error| {
+                PyRuntimeError::new_err(format!(
+                    "failed to create the native CPU thread pool: {error}"
+                ))
+            })?;
+        Ok(Self::Dedicated(pool))
+    }
+
+    fn n_threads(&self) -> usize {
+        match self {
+            Self::Global => rayon::current_num_threads(),
+            Self::Dedicated(pool) => pool.current_num_threads(),
+        }
+    }
+
+    fn is_dedicated(&self) -> bool {
+        matches!(self, Self::Dedicated(_))
+    }
+
+    fn install<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
+        match self {
+            Self::Global => operation(),
+            Self::Dedicated(pool) => pool.install(operation),
+        }
+    }
+}
+
 /// Persistent Rust CPU engine with reusable numerical workspaces.
 #[pyclass(module = "renewable_huber._native_cpu")]
 struct NativeCpuEngine {
     inner: TypedEngine,
+    execution_pool: ExecutionPool,
 }
 
 #[pymethods]
 impl NativeCpuEngine {
     #[new]
-    fn new(dtype: &str, n_parameters: usize) -> PyResult<Self> {
+    #[pyo3(signature = (dtype, n_parameters, n_threads=None))]
+    fn new(dtype: &str, n_parameters: usize, n_threads: Option<i64>) -> PyResult<Self> {
         let inner = match dtype {
             "float32" => TypedEngine::Float32(EngineData::new(n_parameters)?),
             "float64" => TypedEngine::Float64(EngineData::new(n_parameters)?),
@@ -94,7 +151,10 @@ impl NativeCpuEngine {
                 ))
             }
         };
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            execution_pool: ExecutionPool::new(n_threads)?,
+        })
     }
 
     #[getter]
@@ -111,6 +171,18 @@ impl NativeCpuEngine {
             TypedEngine::Float32(engine) => engine.n_parameters(),
             TypedEngine::Float64(engine) => engine.n_parameters(),
         }
+    }
+
+    /// Effective number of Rayon workers available to this engine.
+    #[getter]
+    fn n_threads(&self) -> usize {
+        self.execution_pool.n_threads()
+    }
+
+    /// Whether this engine owns a private Rayon pool instead of using global state.
+    #[getter]
+    fn has_dedicated_thread_pool(&self) -> bool {
+        self.execution_pool.is_dedicated()
     }
 
     #[pyo3(signature = (
@@ -209,9 +281,14 @@ impl NativeCpuEngine {
             tolerance: tol,
             ridge,
         };
-        match &mut self.inner {
+        let Self {
+            inner,
+            execution_pool,
+        } = self;
+        match inner {
             TypedEngine::Float32(engine) => update_typed(
                 py,
+                execution_pool,
                 engine,
                 x_design,
                 y,
@@ -223,6 +300,7 @@ impl NativeCpuEngine {
             ),
             TypedEngine::Float64(engine) => update_typed(
                 py,
+                execution_pool,
                 engine,
                 x_design,
                 y,
@@ -240,12 +318,20 @@ impl NativeCpuEngine {
         py: Python<'py>,
         x_design: &Bound<'py, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        match &mut self.inner {
+        let Self {
+            inner,
+            execution_pool,
+        } = self;
+        match inner {
             TypedEngine::Float32(engine) => {
-                Ok(predict_typed(py, engine, x_design)?.into_any().unbind())
+                Ok(predict_typed(py, execution_pool, engine, x_design)?
+                    .into_any()
+                    .unbind())
             }
             TypedEngine::Float64(engine) => {
-                Ok(predict_typed(py, engine, x_design)?.into_any().unbind())
+                Ok(predict_typed(py, execution_pool, engine, x_design)?
+                    .into_any()
+                    .unbind())
             }
         }
     }
@@ -264,7 +350,11 @@ fn version<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     result.set_item("abi_version", ABI_VERSION)?;
     result.set_item("python_api_version", PYTHON_API_VERSION)?;
     result.set_item("engine_version", env!("CARGO_PKG_VERSION"))?;
-    result.set_item("linear_algebra_provider", "nalgebra")?;
+    result.set_item("linear_algebra_provider", "nalgebra+matrixmultiply")?;
+    result.set_item("parallel_provider", "rayon")?;
+    result.set_item("parallel_threads", rayon::current_num_threads())?;
+    result.set_item("supports_engine_thread_pool", true)?;
+    result.set_item("engine_thread_pool_default", "global")?;
     result.set_item("strict_dtypes", ("float32", "float64"))?;
     Ok(result)
 }
@@ -327,6 +417,7 @@ fn restore_typed<T: CpuScalar + numpy::Element>(
 #[allow(clippy::too_many_arguments)]
 fn update_typed<'py, T: CpuScalar + numpy::Element>(
     py: Python<'py>,
+    execution_pool: &ExecutionPool,
     engine: &mut EngineData<T>,
     x_design: &Bound<'py, PyAny>,
     y: &Bound<'py, PyAny>,
@@ -348,7 +439,11 @@ fn update_typed<'py, T: CpuScalar + numpy::Element>(
         Some(array) => Some(contiguous_vector(&array.0, "sample_weight")?),
         None => None,
     };
-    let state = engine.state(n_features_in, fit_intercept);
+    // Move the resident state into the transition instead of cloning its p^2
+    // information matrix on every partial_fit. The core only borrows it while
+    // solving. If anything fails, put the exact buffers back before exposing
+    // the exception so update remains transactional.
+    let state = engine.take_state(n_features_in, fit_intercept);
     let batch = BatchView {
         x_design: x_values,
         n_rows: x_design.1,
@@ -357,9 +452,15 @@ fn update_typed<'py, T: CpuScalar + numpy::Element>(
         sample_weight: weight_values,
         batch_weight,
     };
-    let transition = py
-        .allow_threads(|| engine.engine.update(batch, &state, config))
-        .map_err(to_py_error)?;
+    let transition = match py
+        .allow_threads(|| execution_pool.install(|| engine.engine.update(batch, &state, config)))
+    {
+        Ok(transition) => transition,
+        Err(error) => {
+            engine.replace_state(state);
+            return Err(to_py_error(error));
+        }
+    };
     let diagnostics = transition.diagnostics;
     engine.replace_state(transition.state);
     let result = state_dict(py, engine)?;
@@ -369,13 +470,17 @@ fn update_typed<'py, T: CpuScalar + numpy::Element>(
 
 fn predict_typed<'py, T: CpuScalar + numpy::Element>(
     py: Python<'py>,
+    execution_pool: &ExecutionPool,
     engine: &mut EngineData<T>,
     x_design: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyArray1<T>>> {
     let x_design = readonly_matrix::<T>(x_design, "X_design")?;
     let x_values = contiguous_matrix(&x_design.0, "X_design")?;
     let values = py
-        .allow_threads(|| predict(x_values, x_design.1, x_design.2, &engine.coefficients))
+        .allow_threads(|| {
+            execution_pool
+                .install(|| predict(x_values, x_design.1, x_design.2, &engine.coefficients))
+        })
         .map_err(to_py_error)?;
     Ok(values.into_pyarray(py))
 }
@@ -391,6 +496,10 @@ fn state_dict<'py, T: CpuScalar + numpy::Element>(
     let result = PyDict::new(py);
     result.set_item("coefficients", engine.coefficients.clone().into_pyarray(py))?;
     result.set_item("information", information.into_pyarray(py))?;
+    // Both arrays above own cloned Rust buffers and are never reused by the
+    // resident engine. The Python adapter can therefore adopt them directly
+    // instead of copying the p^2 information matrix a second time.
+    result.set_item("state_is_detached", true)?;
     result.set_item("n_samples_seen", engine.n_samples_seen)?;
     result.set_item("batch_count", engine.batch_count)?;
     result.set_item("previous_lambda", engine.previous_lambda)?;
@@ -472,5 +581,35 @@ fn to_py_error(error: CoreError) -> PyErr {
         CoreError::LinearSolve | CoreError::NonFiniteResult => {
             PyRuntimeError::new_err(error.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExecutionPool;
+
+    #[test]
+    fn global_execution_pool_preserves_rayon_default() {
+        let pool = ExecutionPool::new(None).unwrap();
+        assert!(!pool.is_dedicated());
+        assert_eq!(pool.install(rayon::current_num_threads), pool.n_threads());
+    }
+
+    #[test]
+    fn dedicated_execution_pool_uses_requested_worker_count() {
+        let pool = ExecutionPool::new(Some(3)).unwrap();
+        assert!(pool.is_dedicated());
+        assert_eq!(pool.n_threads(), 3);
+        assert_eq!(pool.install(rayon::current_num_threads), 3);
+
+        let worker_indices = pool.install(|| {
+            use rayon::prelude::*;
+            (0..10_000)
+                .into_par_iter()
+                .filter_map(|_| rayon::current_thread_index())
+                .collect::<std::collections::BTreeSet<_>>()
+        });
+        assert!(!worker_indices.is_empty());
+        assert!(worker_indices.iter().all(|index| *index < 3));
     }
 }

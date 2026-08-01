@@ -5,10 +5,19 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from ..exceptions import BackendUnavailableError
 from ._cuda_kernels import CudaKernels
+
+# ``os.add_dll_directory`` returns a live registration handle.  A cold
+# benchmark (and a service that creates many short-lived estimators) may build
+# thousands of backend instances; registering the same Toolkit directory per
+# instance eventually exhausts Windows' DLL-directory state.  Keep exactly one
+# process-lifetime handle per resolved path instead.
+_CUDA_DLL_DIRECTORY_HANDLES: dict[Path, Any] = {}
+_CUDA_DLL_DIRECTORY_LOCK = Lock()
 
 
 class CuPyBackend:
@@ -78,9 +87,14 @@ class CuPyBackend:
             return (0 if name.startswith(f"v{runtime_major}.") else 1, candidate)
 
         for cuda_path in sorted({candidate for candidate in candidates if candidate}, key=priority):
-            bin_path = Path(cuda_path) / "bin"
+            bin_path = (Path(cuda_path) / "bin").resolve()
             if bin_path.is_dir():
-                return os.add_dll_directory(str(bin_path))
+                with _CUDA_DLL_DIRECTORY_LOCK:
+                    handle = _CUDA_DLL_DIRECTORY_HANDLES.get(bin_path)
+                    if handle is None:
+                        handle = os.add_dll_directory(str(bin_path))
+                        _CUDA_DLL_DIRECTORY_HANDLES[bin_path] = handle
+                    return handle
         return None
 
     def _validate_linear_algebra(self) -> None:

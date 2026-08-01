@@ -4,7 +4,13 @@ param(
     [string]$Python = "python",
 
     [Parameter()]
-    [switch]$Development
+    [switch]$Development,
+
+    [Parameter()]
+    [string]$OutputDirectory,
+
+    [Parameter()]
+    [switch]$NoInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,7 +93,17 @@ $maturinArguments = @(
 if (-not $Development) {
     $maturinArguments += "--release"
 }
-$wheelDirectory = Join-Path $projectRoot "build\native-cuda-wheel"
+$wheelDirectory = if ($OutputDirectory) {
+    if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
+        [System.IO.Path]::GetFullPath($OutputDirectory)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $projectRoot $OutputDirectory))
+    }
+}
+else {
+    Join-Path $projectRoot "build\native-cuda-wheel"
+}
 New-Item -ItemType Directory -Path $wheelDirectory -Force | Out-Null
 $maturinArguments += @("--out", $wheelDirectory)
 
@@ -108,9 +124,12 @@ $wheel = Get-ChildItem -LiteralPath $wheelDirectory -Filter "renewable_huber_nat
 if (-not $wheel) {
     throw "Maturin did not produce a renewable-huber-native-cuda wheel."
 }
-& $Python -m pip install --disable-pip-version-check --force-reinstall --no-deps $wheel.FullName
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not install the native CUDA wheel."
+if (-not $NoInstall) {
+    & $Python -m pip install --disable-pip-version-check --force-reinstall --no-deps $wheel.FullName
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not install the native CUDA wheel."
+    }
+    Write-Host "Installed _renewable_huber_native_cuda for the renewable_huber._native_cuda shim."
 }
 
-Write-Host "Installed _renewable_huber_native_cuda for the renewable_huber._native_cuda shim."
+Write-Host "Built native CUDA wheel: $($wheel.FullName)"

@@ -14,5 +14,6 @@ crate-type = ["cdylib"]
 [dependencies]
 numpy.workspace = true
 pyo3.workspace = true
+rayon = "1.10"
 rh-core = { path = "../rh-core" }
 rh-cpu = { path = "../rh-cpu" }

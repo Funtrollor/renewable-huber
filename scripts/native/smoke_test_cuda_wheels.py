@@ -10,6 +10,8 @@ import venv
 import zipfile
 from pathlib import Path
 
+from validate_release_artifacts import _check_native_wheel, read_wheel_metadata
+
 
 def _one_wheel(directory: Path, pattern: str) -> Path:
     wheels = sorted(directory.glob(pattern))
@@ -36,6 +38,14 @@ def main() -> int:
     base_wheel = _one_wheel(args.base_dir, "renewable_huber-*.whl")
     native_wheel = _one_wheel(args.native_dir, "renewable_huber_native_cuda-*.whl")
     _assert_native_legal_files(native_wheel)
+    base_metadata = read_wheel_metadata(base_wheel)
+    native_errors = _check_native_wheel(
+        read_wheel_metadata(native_wheel),
+        kind="cuda",
+        expected_version=base_metadata.version,
+    )
+    if native_errors:
+        raise RuntimeError("incompatible CUDA wheel metadata:\n- " + "\n- ".join(native_errors))
 
     with tempfile.TemporaryDirectory(prefix="renewable-huber-native-cuda-") as directory:
         environment = Path(directory)
@@ -65,8 +75,11 @@ def main() -> int:
                     "import numpy as np; "
                     "from renewable_huber import RenewableHuberRegressor, __version__; "
                     "from renewable_huber import _native_cuda; "
-                    "assert __version__.startswith('0.6.'); "
-                    "assert _native_cuda.version()['python_api_version']==2; "
+                    f"assert __version__=={base_metadata.version!r}; "
+                    "assert _native_cuda.version()['abi_version']==1; "
+                    "assert _native_cuda.version()['python_api_version']==3; "
+                    "assert _native_cuda.version()['supports_cuda_graphs']; "
+                    "assert _native_cuda.version()['supports_fast_math']; "
                     "assert _native_cuda.is_available(); "
                     "X=np.arange(24,dtype=np.float32).reshape(8,3); "
                     "y=np.arange(8,dtype=np.float32); "

@@ -10,6 +10,11 @@ use thiserror::Error;
 
 pub const ABI_VERSION: u32 = 1;
 
+#[cfg(any(feature = "cuda", test))]
+const ENGINE_FLAG_CUDA_GRAPHS: u64 = 1 << 0;
+#[cfg(any(feature = "cuda", test))]
+const ENGINE_FLAG_FAST_MATH: u64 = 1 << 1;
+
 /// Strict floating-point dtype supported by the native engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CudaDtype {
@@ -172,6 +177,20 @@ pub struct HostBatch<'a, T: CudaScalar> {
     pub batch_weight: f64,
 }
 
+/// One device-resident C-contiguous batch obtained from a DLPack producer.
+/// Addresses are represented as integers so the descriptor can safely cross
+/// PyO3's GIL-release boundary; the C ABI validates their CUDA allocation and
+/// owning device before dereferencing them.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceBatch {
+    pub x_address: usize,
+    pub y_address: usize,
+    pub sample_weight_address: Option<usize>,
+    pub n_rows: usize,
+    pub n_columns: usize,
+    pub batch_weight: f64,
+}
+
 /// Diagnostics from one update.  Non-convergence is a valid outcome and does
 /// not become an FFI error; the state transition is still committed.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -190,6 +209,45 @@ pub struct RuntimeInfo {
     pub runtime_version: i32,
     pub driver_version: i32,
     pub device_count: i32,
+}
+
+/// Optional CUDA execution tuning. Strict math and ordinary stream launches
+/// remain the default so enabling an optimization always requires consent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EngineTuning {
+    pub cuda_graphs: bool,
+    pub fast_math: bool,
+}
+
+/// Engine-local capabilities and cumulative CUDA Graph activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineFeatures {
+    pub requested: EngineTuning,
+    pub enabled: EngineTuning,
+    pub graph_captures: u64,
+    pub graph_replays: u64,
+    pub graph_fallbacks: u64,
+}
+
+#[cfg(any(feature = "cuda", test))]
+const fn tuning_flags(tuning: EngineTuning) -> u64 {
+    (if tuning.cuda_graphs {
+        ENGINE_FLAG_CUDA_GRAPHS
+    } else {
+        0
+    }) | (if tuning.fast_math {
+        ENGINE_FLAG_FAST_MATH
+    } else {
+        0
+    })
+}
+
+#[cfg(any(feature = "cuda", test))]
+const fn tuning_from_flags(flags: u64) -> EngineTuning {
+    EngineTuning {
+        cuda_graphs: (flags & ENGINE_FLAG_CUDA_GRAPHS) != 0,
+        fast_math: (flags & ENGINE_FLAG_FAST_MATH) != 0,
+    }
 }
 
 /// Opaque, single-device CUDA engine. Sequential ownership may move between
@@ -216,6 +274,15 @@ impl CudaEngine {
         n_parameters: usize,
         device_id: i32,
     ) -> Result<Self, CudaError> {
+        Self::create_with_tuning(dtype, n_parameters, device_id, EngineTuning::default())
+    }
+
+    pub fn create_with_tuning(
+        dtype: CudaDtype,
+        n_parameters: usize,
+        device_id: i32,
+        tuning: EngineTuning,
+    ) -> Result<Self, CudaError> {
         if n_parameters == 0 {
             return Err(CudaError::InvalidArgument(
                 "n_parameters must be greater than zero".to_owned(),
@@ -224,6 +291,11 @@ impl CudaEngine {
         if device_id < 0 {
             return Err(CudaError::InvalidArgument(
                 "device_id must be non-negative".to_owned(),
+            ));
+        }
+        if tuning.fast_math && dtype != CudaDtype::Float32 {
+            return Err(CudaError::InvalidArgument(
+                "fast_math is supported only by float32 CUDA engines".to_owned(),
             ));
         }
 
@@ -236,7 +308,7 @@ impl CudaEngine {
                 dtype: dtype.raw(),
                 device_id,
                 n_parameters: abi_n_parameters,
-                reserved0: 0,
+                reserved0: tuning_flags(tuning),
             };
             let mut raw = std::ptr::null_mut();
             let status = unsafe { ffi::rh_cuda_engine_create(&options, &mut raw) };
@@ -260,7 +332,7 @@ impl CudaEngine {
 
         #[cfg(not(feature = "cuda"))]
         {
-            let _ = (dtype, n_parameters, device_id);
+            let _ = (dtype, n_parameters, device_id, tuning);
             Err(CudaError::NotCompiled)
         }
     }
@@ -275,6 +347,54 @@ impl CudaEngine {
 
     pub const fn device_id(&self) -> i32 {
         self.device_id
+    }
+
+    pub fn features(&mut self) -> Result<EngineFeatures, CudaError> {
+        #[cfg(feature = "cuda")]
+        {
+            let mut features = ffi::RhCudaEngineFeatures {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaEngineFeatures>() as u32,
+                requested_flags: 0,
+                enabled_flags: 0,
+                graph_captures: 0,
+                graph_replays: 0,
+                graph_fallbacks: 0,
+            };
+            let status =
+                unsafe { ffi::rh_cuda_engine_features(self.handle.as_ptr(), &mut features) };
+            self.status(status)?;
+            return Ok(EngineFeatures {
+                requested: tuning_from_flags(features.requested_flags),
+                enabled: tuning_from_flags(features.enabled_flags),
+                graph_captures: features.graph_captures,
+                graph_replays: features.graph_replays,
+                graph_fallbacks: features.graph_fallbacks,
+            });
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err(CudaError::NotCompiled)
+        }
+    }
+
+    /// Raw CUDA stream handle passed to a DLPack producer. The producer uses
+    /// it only to establish the protocol-defined dependency before returning
+    /// the capsule; ownership remains with this engine.
+    pub fn stream_handle(&mut self) -> Result<usize, CudaError> {
+        #[cfg(feature = "cuda")]
+        {
+            let mut stream = 0usize;
+            let status = unsafe { ffi::rh_cuda_engine_stream(self.handle.as_ptr(), &mut stream) };
+            self.status(status)?;
+            return Ok(stream);
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err(CudaError::NotCompiled)
+        }
     }
 
     pub fn restore<T: CudaScalar>(&mut self, state: HostState<'_, T>) -> Result<(), CudaError> {
@@ -348,8 +468,8 @@ impl CudaEngine {
         config: UnpenalizedConfig,
     ) -> Result<Diagnostics, CudaError> {
         self.ensure_dtype::<T>()?;
-        self.validate_batch(&batch)?;
         self.validate_config(config)?;
+        self.validate_batch(&batch, config)?;
 
         #[cfg(feature = "cuda")]
         {
@@ -410,6 +530,199 @@ impl CudaEngine {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (batch, config);
+            Err(CudaError::NotCompiled)
+        }
+    }
+
+    /// Execute one update and export its committed state with the same CUDA
+    /// stream completion. This is the hot path used by the Python backend,
+    /// which returns a portable state after every renewable batch.
+    pub fn update_with_state<T: CudaScalar>(
+        &mut self,
+        batch: HostBatch<'_, T>,
+        config: UnpenalizedConfig,
+        coefficients: &mut [T],
+        information: &mut [T],
+    ) -> Result<(Diagnostics, StateMetadata), CudaError> {
+        self.ensure_dtype::<T>()?;
+        self.validate_config(config)?;
+        self.validate_batch(&batch, config)?;
+        self.validate_state_buffers(coefficients, information)?;
+
+        #[cfg(feature = "cuda")]
+        {
+            let n_rows = checked_dimension(batch.x_design.rows, "batch row count")?;
+            let n_columns = checked_dimension(batch.x_design.columns, "batch column count")?;
+            let raw_batch = ffi::RhCudaHostBatch {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaHostBatch>() as u32,
+                x_design: batch.x_design.values.as_ptr() as *const std::ffi::c_void,
+                y: batch.y.values.as_ptr() as *const std::ffi::c_void,
+                sample_weight: batch
+                    .sample_weight
+                    .map_or(std::ptr::null(), |weight| weight.values.as_ptr())
+                    as *const std::ffi::c_void,
+                n_rows,
+                n_columns,
+                batch_weight: batch.batch_weight,
+            };
+            let raw_config = ffi::RhCudaUnpenalizedConfig {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaUnpenalizedConfig>() as u32,
+                n_features_in: config.n_features_in,
+                max_iter: config.max_iter,
+                tau: config.tau,
+                bandwidth_scale: config.bandwidth_scale,
+                tolerance: config.tolerance,
+                ridge: config.ridge,
+            };
+            let mut raw_diagnostics = ffi::RhCudaDiagnostics {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaDiagnostics>() as u32,
+                iterations: 0,
+                converged: 0,
+                used_regularized_fallback: 0,
+                objective: 0.0,
+                lambda_value: 0.0,
+                bandwidth: 0.0,
+            };
+            let mut raw_state = ffi::RhCudaHostState {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaHostState>() as u32,
+                coefficients: coefficients.as_mut_ptr() as *mut std::ffi::c_void,
+                information: information.as_mut_ptr() as *mut std::ffi::c_void,
+                n_samples_seen: 0,
+                batch_count: 0,
+                previous_lambda: 0.0,
+                weight_sum: 0.0,
+            };
+            let status = unsafe {
+                ffi::rh_cuda_engine_update_host_with_state(
+                    self.handle.as_ptr(),
+                    &raw_batch,
+                    &raw_config,
+                    &mut raw_diagnostics,
+                    &mut raw_state,
+                )
+            };
+            self.status(status)?;
+            return Ok((
+                Diagnostics {
+                    iterations: raw_diagnostics.iterations,
+                    converged: raw_diagnostics.converged != 0,
+                    used_regularized_fallback: raw_diagnostics.used_regularized_fallback != 0,
+                    objective: raw_diagnostics.objective,
+                    lambda_value: raw_diagnostics.lambda_value,
+                    bandwidth: raw_diagnostics.bandwidth,
+                },
+                StateMetadata {
+                    n_samples_seen: raw_state.n_samples_seen,
+                    batch_count: raw_state.batch_count,
+                    previous_lambda: raw_state.previous_lambda,
+                    weight_sum: raw_state.weight_sum,
+                },
+            ));
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = (batch, config, coefficients, information);
+            Err(CudaError::NotCompiled)
+        }
+    }
+
+    /// Execute an update from DLPack-validated device pointers and export the
+    /// committed state. The CUDA ABI performs a second allocation/device check
+    /// before enqueueing any device-to-device copies.
+    pub fn update_device_with_state<T: CudaScalar>(
+        &mut self,
+        batch: DeviceBatch,
+        config: UnpenalizedConfig,
+        coefficients: &mut [T],
+        information: &mut [T],
+    ) -> Result<(Diagnostics, StateMetadata), CudaError> {
+        self.ensure_dtype::<T>()?;
+        self.validate_config(config)?;
+        self.validate_device_batch(batch, config)?;
+        self.validate_state_buffers(coefficients, information)?;
+
+        #[cfg(feature = "cuda")]
+        {
+            let raw_batch = ffi::RhCudaDeviceBatch {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaDeviceBatch>() as u32,
+                x_design: batch.x_address as *const std::ffi::c_void,
+                y: batch.y_address as *const std::ffi::c_void,
+                sample_weight: batch
+                    .sample_weight_address
+                    .map_or(std::ptr::null(), |address| {
+                        address as *const std::ffi::c_void
+                    }),
+                n_rows: checked_dimension(batch.n_rows, "batch row count")?,
+                n_columns: checked_dimension(batch.n_columns, "batch column count")?,
+                batch_weight: batch.batch_weight,
+            };
+            let raw_config = ffi::RhCudaUnpenalizedConfig {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaUnpenalizedConfig>() as u32,
+                n_features_in: config.n_features_in,
+                max_iter: config.max_iter,
+                tau: config.tau,
+                bandwidth_scale: config.bandwidth_scale,
+                tolerance: config.tolerance,
+                ridge: config.ridge,
+            };
+            let mut raw_diagnostics = ffi::RhCudaDiagnostics {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaDiagnostics>() as u32,
+                iterations: 0,
+                converged: 0,
+                used_regularized_fallback: 0,
+                objective: 0.0,
+                lambda_value: 0.0,
+                bandwidth: 0.0,
+            };
+            let mut raw_state = ffi::RhCudaHostState {
+                abi_version: ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::RhCudaHostState>() as u32,
+                coefficients: coefficients.as_mut_ptr() as *mut std::ffi::c_void,
+                information: information.as_mut_ptr() as *mut std::ffi::c_void,
+                n_samples_seen: 0,
+                batch_count: 0,
+                previous_lambda: 0.0,
+                weight_sum: 0.0,
+            };
+            let status = unsafe {
+                ffi::rh_cuda_engine_update_device_with_state(
+                    self.handle.as_ptr(),
+                    &raw_batch,
+                    &raw_config,
+                    &mut raw_diagnostics,
+                    &mut raw_state,
+                )
+            };
+            self.status(status)?;
+            return Ok((
+                Diagnostics {
+                    iterations: raw_diagnostics.iterations,
+                    converged: raw_diagnostics.converged != 0,
+                    used_regularized_fallback: raw_diagnostics.used_regularized_fallback != 0,
+                    objective: raw_diagnostics.objective,
+                    lambda_value: raw_diagnostics.lambda_value,
+                    bandwidth: raw_diagnostics.bandwidth,
+                },
+                StateMetadata {
+                    n_samples_seen: raw_state.n_samples_seen,
+                    batch_count: raw_state.batch_count,
+                    previous_lambda: raw_state.previous_lambda,
+                    weight_sum: raw_state.weight_sum,
+                },
+            ));
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = (batch, config, coefficients, information);
             Err(CudaError::NotCompiled)
         }
     }
@@ -513,10 +826,21 @@ impl CudaEngine {
         Ok(())
     }
 
-    fn validate_batch<T: CudaScalar>(&self, batch: &HostBatch<'_, T>) -> Result<(), CudaError> {
-        if batch.x_design.rows == 0 || batch.x_design.columns != self.n_parameters {
+    fn validate_batch<T: CudaScalar>(
+        &self,
+        batch: &HostBatch<'_, T>,
+        config: UnpenalizedConfig,
+    ) -> Result<(), CudaError> {
+        let feature_columns = usize::try_from(config.n_features_in).map_err(|_| {
+            CudaError::InvalidArgument("n_features_in is outside the host shape range".to_owned())
+        })?;
+        if batch.x_design.rows == 0
+            || (batch.x_design.columns != self.n_parameters
+                && batch.x_design.columns != feature_columns)
+        {
             return Err(CudaError::InvalidArgument(
-                "X_design must have at least one row and exactly n_parameters columns".to_owned(),
+                "X must have at least one row and either n_features_in or n_parameters columns"
+                    .to_owned(),
             ));
         }
         if batch.y.len() != batch.x_design.rows {
@@ -530,6 +854,32 @@ impl CudaEngine {
                     "sample_weight and X_design must have the same number of rows".to_owned(),
                 ));
             }
+        }
+        if !batch.batch_weight.is_finite() || batch.batch_weight <= 0.0 {
+            return Err(CudaError::InvalidArgument(
+                "batch_weight must be finite and greater than zero".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_device_batch(
+        &self,
+        batch: DeviceBatch,
+        config: UnpenalizedConfig,
+    ) -> Result<(), CudaError> {
+        let feature_columns = usize::try_from(config.n_features_in).map_err(|_| {
+            CudaError::InvalidArgument("n_features_in is outside the host shape range".to_owned())
+        })?;
+        if batch.x_address == 0
+            || batch.y_address == 0
+            || batch.n_rows == 0
+            || (batch.n_columns != self.n_parameters && batch.n_columns != feature_columns)
+        {
+            return Err(CudaError::InvalidArgument(
+                "device X must be non-empty and have n_features_in or n_parameters columns"
+                    .to_owned(),
+            ));
         }
         if !batch.batch_weight.is_finite() || batch.batch_weight <= 0.0 {
             return Err(CudaError::InvalidArgument(
@@ -766,6 +1116,18 @@ mod ffi {
     }
 
     #[repr(C)]
+    pub struct RhCudaDeviceBatch {
+        pub abi_version: u32,
+        pub struct_size: u32,
+        pub x_design: *const c_void,
+        pub y: *const c_void,
+        pub sample_weight: *const c_void,
+        pub n_rows: i64,
+        pub n_columns: i64,
+        pub batch_weight: f64,
+    }
+
+    #[repr(C)]
     pub struct RhCudaHostPrediction {
         pub abi_version: u32,
         pub struct_size: u32,
@@ -797,6 +1159,17 @@ mod ffi {
         pub reserved0: i32,
     }
 
+    #[repr(C)]
+    pub struct RhCudaEngineFeatures {
+        pub abi_version: u32,
+        pub struct_size: u32,
+        pub requested_flags: u64,
+        pub enabled_flags: u64,
+        pub graph_captures: u64,
+        pub graph_replays: u64,
+        pub graph_fallbacks: u64,
+    }
+
     extern "C" {
         pub fn rh_cuda_last_error() -> *const c_char;
         pub fn rh_cuda_is_available(available: *mut i32) -> i32;
@@ -821,18 +1194,40 @@ mod ffi {
             config: *const RhCudaUnpenalizedConfig,
             diagnostics: *mut RhCudaDiagnostics,
         ) -> i32;
+        pub fn rh_cuda_engine_update_host_with_state(
+            engine: *mut RhCudaEngine,
+            batch: *const RhCudaHostBatch,
+            config: *const RhCudaUnpenalizedConfig,
+            diagnostics: *mut RhCudaDiagnostics,
+            state: *mut RhCudaHostState,
+        ) -> i32;
+        pub fn rh_cuda_engine_stream(engine: *mut RhCudaEngine, stream: *mut usize) -> i32;
+        pub fn rh_cuda_engine_update_device_with_state(
+            engine: *mut RhCudaEngine,
+            batch: *const RhCudaDeviceBatch,
+            config: *const RhCudaUnpenalizedConfig,
+            diagnostics: *mut RhCudaDiagnostics,
+            state: *mut RhCudaHostState,
+        ) -> i32;
         pub fn rh_cuda_engine_predict_host(
             engine: *mut RhCudaEngine,
             request: *const RhCudaHostPrediction,
         ) -> i32;
         pub fn rh_cuda_engine_synchronize(engine: *mut RhCudaEngine) -> i32;
+        pub fn rh_cuda_engine_features(
+            engine: *mut RhCudaEngine,
+            features: *mut RhCudaEngineFeatures,
+        ) -> i32;
         pub fn rh_cuda_engine_last_error(engine: *const RhCudaEngine) -> *const c_char;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_unpenalized_config, UnpenalizedConfig};
+    use super::{
+        tuning_flags, tuning_from_flags, validate_unpenalized_config, CudaDtype, CudaEngine,
+        EngineTuning, UnpenalizedConfig, ENGINE_FLAG_CUDA_GRAPHS, ENGINE_FLAG_FAST_MATH,
+    };
 
     fn config(fit_intercept: bool) -> UnpenalizedConfig {
         UnpenalizedConfig {
@@ -852,5 +1247,34 @@ mod tests {
         assert!(validate_unpenalized_config(4, config(true)).is_ok());
         assert!(validate_unpenalized_config(4, config(false)).is_err());
         assert!(validate_unpenalized_config(3, config(true)).is_err());
+    }
+
+    #[test]
+    fn tuning_flags_round_trip() {
+        let tuning = EngineTuning {
+            cuda_graphs: true,
+            fast_math: true,
+        };
+        assert_eq!(
+            tuning_flags(tuning),
+            ENGINE_FLAG_CUDA_GRAPHS | ENGINE_FLAG_FAST_MATH
+        );
+        assert_eq!(tuning_from_flags(tuning_flags(tuning)), tuning);
+    }
+
+    #[test]
+    fn fast_math_rejects_float64_before_cuda_initialization() {
+        let error = CudaEngine::create_with_tuning(
+            CudaDtype::Float64,
+            2,
+            0,
+            EngineTuning {
+                cuda_graphs: false,
+                fast_math: true,
+            },
+        )
+        .err()
+        .expect("float64 fast math must fail");
+        assert!(error.to_string().contains("float32"));
     }
 }

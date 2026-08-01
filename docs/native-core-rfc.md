@@ -210,23 +210,28 @@ vendor GEMM is a material bottleneck.
 The P2 compatibility engine uses pivoted cuSOLVER LU for its regular dense
 solve, with a minimum-norm SVD fallback for singular systems. Portable
 checkpoints may contain a general, slightly asymmetric information matrix, so
-mirroring one triangle through Cholesky would change valid state. A future
-Cholesky fast path requires an explicit symmetric-state invariant and
-differential evidence that it preserves the NumPy contract. P2 also starts
-with contiguous host NumPy transport; zero-copy DLPack and device-side
-convergence decisions remain P3 work.
+mirroring one triangle through Cholesky would change valid state. The current
+engine therefore takes Cholesky only after an explicit symmetry check and
+retains LU plus a lazily initialized SVD fallback. P2 started with contiguous
+host NumPy transport; the P3 extension now consumes same-device contiguous
+DLPack tensors. Fully device-side convergence decisions remain future work.
 
 ## DLPack and stream ownership
 
-The first native tensor adapter accepts a single-device, contiguous,
-`float32`/`float64` DLPack tensor. The consumer stream is passed to the producer
-according to the DLPack Python protocol. The adapter retains the managed tensor
-until native work using that memory is complete and calls its deleter exactly
-once.
+The native tensor adapter accepts single-device, C-contiguous `float32`/`float64`
+CuPy, PyTorch CUDA, and TensorFlow eager GPU tensors. CuPy and PyTorch receive
+the engine's consumer stream according to the Python DLPack protocol. Because
+TensorFlow's legacy exporter has no stream parameter, its adapter explicitly
+waits for pending eager work before exporting the zero-copy capsule, and rejects
+versions where it cannot establish that synchronization boundary. The consumer
+retains each managed tensor until native work using its memory is complete,
+claims the capsule once, and invokes its deleter exactly once.
 
-Non-contiguous tensors are copied explicitly or rejected with a stable public
-error. Cross-device state migration is an explicit operation; it is never an
-implicit side effect of `partial_fit`.
+Non-contiguous tensors are rejected with a stable public error; this path never
+silently copies, changes dtype, changes device, or stages through host memory.
+Cross-device state migration is an explicit operation; it is never an implicit
+side effect of `partial_fit`. Device-resident prediction remains a separate
+future ABI and is rejected rather than implicitly copied to host.
 
 Integration order is NumPy, CuPy, PyTorch, then TensorFlow eager. Framework
 custom operators are deferred until profiling demonstrates that the generic
@@ -269,17 +274,21 @@ equality requirement when the final state meets the numerical contract.
 
 ## Benchmark protocol
 
-`scripts/benchmarks/benchmark_shape_sweep.py` emits schema-versioned JSON. Data
-generation, dtype conversion, CUDA context creation, and warm-up are excluded
-from steady-state timings. Host-fed and device-resident CUDA paths are reported
-separately.
+`scripts/benchmarks/benchmark_shape_sweep.py` emits schema-versioned JSON.
+Schema v2 records cold and steady-state contracts separately: data generation,
+dtype conversion, CUDA context creation, and warm-up are excluded from both;
+steady-state also excludes the one-time model/engine prime and empty-state
+restore. Host-fed and device-resident CUDA paths are reported separately.
 
 Every record includes:
 
 - sample count, feature count, batch size, batch count;
 - penalty, dtype, seed, maximum iterations, and tolerance;
 - individual timings, median, minimum, throughput, and solver iterations;
+- data seed and SHA-256 input fingerprint, lifecycle, operation, and reset
+  timing policy;
 - Python, OS, CPU, NumPy, CuPy, CUDA runtime, and GPU metadata;
+- thread environment plus the NumPy BLAS/LAPACK provider;
 - whether input transfer was inside the measured interval.
 
 The required shape classes are:
@@ -295,9 +304,11 @@ Both penalties and both dtypes are measured where memory and runtime permit.
 The `smoke` profile is suitable for local validation; the `standard` profile
 is the publishable baseline.
 
-Results from different hardware are not directly merged. A future performance
-gate will be calibrated only after repeated baseline records exist on fixed
-CPU and GPU runners.
+Results from different hardware are not directly merged. The fixed-runner
+regression/competitor gate and conservative calibration advisor are specified
+in [native performance policy](native-performance-policy.md). Native is not
+promoted for a shape unless it is at least as fast as its paired NumPy/CuPy
+reference under an identical contract; the advisor uses a stricter 10% margin.
 
 ## Nsight baseline
 

@@ -44,6 +44,9 @@ class RenewableHuberRegressor:
         backend: BackendName = "auto",
         device: DeviceName = "auto",
         dtype: DTypeName = "float64",
+        n_jobs: int | None = None,
+        cuda_graphs: bool = False,
+        cuda_fast_math: bool = False,
     ) -> None:
         self.tau = tau
         self.penalty = penalty
@@ -56,6 +59,9 @@ class RenewableHuberRegressor:
         self.backend = backend
         self.device = device
         self.dtype = dtype
+        self.n_jobs = n_jobs
+        self.cuda_graphs = cuda_graphs
+        self.cuda_fast_math = cuda_fast_math
 
     def get_params(self, deep: bool = True) -> dict[str, object]:
         """Return constructor parameters, compatible with scikit-learn cloning."""
@@ -90,6 +96,8 @@ class RenewableHuberRegressor:
             "n_iter_",
             "backend_",
             "device_",
+            "n_jobs_",
+            "cuda_features_",
         ):
             if hasattr(self, attribute):
                 delattr(self, attribute)
@@ -117,7 +125,7 @@ class RenewableHuberRegressor:
         config.validate()
         backend = getattr(self, "_backend", None)
         if backend is None:
-            backend = resolve_backend(config.backend, device=config.device, dtype=config.dtype)
+            backend = self._resolve_backend(config)
 
         state = getattr(self, "_state", None)
         if state is not None:
@@ -157,6 +165,10 @@ class RenewableHuberRegressor:
         self._backend = backend
         self.backend_ = backend.name
         self.device_ = backend.device
+        self.n_jobs_ = getattr(backend, "effective_n_jobs", None)
+        cuda_features = getattr(backend, "cuda_features", None)
+        if cuda_features is not None:
+            self.cuda_features_ = dict(cuda_features)
         self._state = next_state
         self._diagnostics = diagnostics
         if first_batch:
@@ -178,7 +190,11 @@ class RenewableHuberRegressor:
         design = self._design_matrix(X_array)
         native_predict = getattr(backend, "native_predict", None)
         if native_predict is not None:
-            return native_predict(design, state)
+            prediction = native_predict(design, state)
+            cuda_features = getattr(backend, "cuda_features", None)
+            if cuda_features is not None:
+                self.cuda_features_ = dict(cuda_features)
+            return prediction
         return backend.xp.matmul(design, state.coefficients)
 
     def score(self, X: ArrayLike, y: ArrayLike, sample_weight: ArrayLike | None = None) -> float:
@@ -274,9 +290,13 @@ class RenewableHuberRegressor:
         config.validate()
         if state.fit_intercept != config.fit_intercept:
             raise ValidationError("checkpoint fit_intercept does not match configuration")
-        self._backend = resolve_backend(config.backend, device=config.device, dtype=config.dtype)
+        self._backend = self._resolve_backend(config)
         self.backend_ = self._backend.name
         self.device_ = self._backend.device
+        self.n_jobs_ = getattr(self._backend, "effective_n_jobs", None)
+        cuda_features = getattr(self._backend, "cuda_features", None)
+        if cuda_features is not None:
+            self.cuda_features_ = dict(cuda_features)
         self._state = RenewableHuberState(
             coefficients=self._backend.asarray(state.coefficients),
             information=self._backend.asarray(state.information),
@@ -312,6 +332,21 @@ class RenewableHuberRegressor:
             backend=self.backend,
             device=self.device,
             dtype=self.dtype,
+            n_jobs=self.n_jobs,
+            cuda_graphs=self.cuda_graphs,
+            cuda_fast_math=self.cuda_fast_math,
+        )
+
+    @staticmethod
+    def _resolve_backend(config: EstimatorConfig) -> ArrayBackend:
+        native_threads = config.resolved_n_jobs() if config.backend == "native_cpu" else None
+        return resolve_backend(
+            config.backend,
+            device=config.device,
+            dtype=config.dtype,
+            n_jobs=native_threads,
+            cuda_graphs=config.cuda_graphs,
+            cuda_fast_math=config.cuda_fast_math,
         )
 
     def _validate_batch(self, X: ArrayLike, y: ArrayLike, backend: ArrayBackend) -> tuple[Any, Any]:
@@ -396,14 +431,27 @@ class RenewableHuberRegressor:
             raise ValidationError("sample_weight and X must contain the same number of samples")
         if not backend.is_finite(weights):
             raise ValidationError("sample_weight must not contain NaN or infinite values")
-        if backend.scalar(backend.xp.min(weights)) < 0:
+        minimum_scalar = getattr(backend, "minimum_scalar", None)
+        minimum = (
+            minimum_scalar(weights)
+            if callable(minimum_scalar)
+            else backend.scalar(backend.xp.min(weights))
+        )
+        if minimum < 0:
             raise ValidationError("sample_weight must be non-negative")
-        weight_sum = backend.scalar(backend.xp.sum(weights))
+        sum_scalar = getattr(backend, "sum_scalar", None)
+        weight_sum = (
+            sum_scalar(weights) if callable(sum_scalar) else backend.scalar(backend.xp.sum(weights))
+        )
         if weight_sum <= 0:
             raise ValidationError("sample_weight cannot be all zero")
         return weights, weight_sum
 
     def _design_matrix(self, X: Any, *, backend: ArrayBackend | None = None) -> Any:
+        if backend is not None:
+            native_design = getattr(backend, "native_design_matrix", None)
+            if callable(native_design):
+                return native_design(X, fit_intercept=self.fit_intercept)
         if self.fit_intercept:
             if backend is None:
                 backend = self._require_backend()

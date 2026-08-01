@@ -15,6 +15,7 @@ import renewable_huber
 from renewable_huber import RenewableHuberRegressor
 from renewable_huber.backends import resolve_backend
 from renewable_huber.exceptions import BackendUnavailableError, NotFittedError
+from renewable_huber.state import RenewableHuberState
 
 CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v1.json"
 NATIVE_TOLERANCES = {
@@ -28,7 +29,7 @@ def _native_cpu_ready() -> bool:
         from renewable_huber import _native_cpu
 
         version = _native_cpu.version()
-        return version.get("abi_version") == 1 and version.get("python_api_version") == 1
+        return version.get("abi_version") == 1 and version.get("python_api_version") == 2
     except (ImportError, OSError, RuntimeError):
         return False
 
@@ -57,6 +58,84 @@ class NativeCpuSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(BackendUnavailableError, "requires device='cpu'"):
             resolve_backend("native_cpu", device="cuda")
 
+    def test_resolved_thread_count_reaches_engine_and_effective_property(self) -> None:
+        creations: list[tuple[str, int, int | None]] = []
+
+        class FakeEngine:
+            def __init__(
+                self, dtype: str, n_parameters: int, *, n_threads: int | None = None
+            ) -> None:
+                creations.append((dtype, n_parameters, n_threads))
+                self.n_threads = n_threads or 1
+
+            def restore(self, *args: object) -> None:
+                del args
+
+        extension = types.SimpleNamespace(
+            NativeCpuEngine=FakeEngine,
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
+        )
+        with (
+            mock.patch.dict(sys.modules, {"renewable_huber._native_cpu": extension}),
+            mock.patch.object(renewable_huber, "_native_cpu", extension, create=True),
+        ):
+            backend = resolve_backend("native_cpu", device="cpu", n_jobs=3)
+            self.assertEqual(backend.effective_n_jobs, 3)
+            state = RenewableHuberState.empty(2, fit_intercept=False, xp=np, dtype=np.float64)
+            backend.restore_native_state(state)
+
+        self.assertEqual(creations, [("float64", 2, 3)])
+        self.assertEqual(backend.effective_n_jobs, 3)
+
+    def test_resident_engine_restores_distinct_state_with_same_batch_count(self) -> None:
+        restore_calls = 0
+
+        class FakeEngine:
+            def __init__(
+                self, dtype: str, n_parameters: int, *, n_threads: int | None = None
+            ) -> None:
+                self.dtype = np.dtype(dtype)
+                self.coefficients = np.zeros(n_parameters, dtype=self.dtype)
+                self.n_threads = n_threads or 1
+
+            def restore(
+                self,
+                coefficients: np.ndarray,
+                information: np.ndarray,
+                n_samples_seen: int,
+                batch_count: int,
+                previous_lambda: float,
+                weight_sum: float,
+            ) -> None:
+                nonlocal restore_calls
+                del information, n_samples_seen, batch_count, previous_lambda, weight_sum
+                restore_calls += 1
+                self.coefficients = coefficients.copy()
+
+            def predict(self, X: np.ndarray) -> np.ndarray:
+                return X @ self.coefficients
+
+        extension = types.SimpleNamespace(
+            NativeCpuEngine=FakeEngine,
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
+        )
+        with (
+            mock.patch.dict(sys.modules, {"renewable_huber._native_cpu": extension}),
+            mock.patch.object(renewable_huber, "_native_cpu", extension, create=True),
+        ):
+            backend = resolve_backend("native_cpu", device="cpu")
+            first = RenewableHuberState.empty(2, fit_intercept=False, xp=np, dtype=np.float64)
+            second = first.copy()
+            second.coefficients[:] = [2.0, -1.0]
+            X = np.asarray([[3.0, 4.0]], dtype=np.float64)
+
+            np.testing.assert_array_equal(backend.native_predict(X, first), [0.0])
+            np.testing.assert_array_equal(backend.native_predict(X, second), [2.0])
+            np.testing.assert_array_equal(backend.native_predict(X, second), [2.0])
+            self.assertEqual(first.batch_count, second.batch_count)
+            self.assertNotEqual(first.mirror_token, second.mirror_token)
+            self.assertEqual(restore_calls, 2)
+
     def test_engine_initialization_failure_does_not_fit_estimator(self) -> None:
         attempts = 0
 
@@ -70,13 +149,16 @@ class NativeCpuSelectionTests(unittest.TestCase):
                 return self.values
 
         class FlakyEngine:
-            def __init__(self, dtype: str, n_parameters: int) -> None:
+            def __init__(
+                self, dtype: str, n_parameters: int, *, n_threads: int | None = None
+            ) -> None:
                 nonlocal attempts
                 attempts += 1
                 if attempts == 1:
                     raise RuntimeError("simulated failure")
                 self.dtype = np.dtype(dtype)
                 self.n_parameters = n_parameters
+                self.n_threads = n_threads or 1
 
             def restore(
                 self,
@@ -120,13 +202,13 @@ class NativeCpuSelectionTests(unittest.TestCase):
 
         extension = types.SimpleNamespace(
             NativeCpuEngine=FlakyEngine,
-            version=lambda: {"abi_version": 1, "python_api_version": 1},
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cpu": extension}),
             mock.patch.object(renewable_huber, "_native_cpu", extension, create=True),
         ):
-            model = RenewableHuberRegressor(backend="native_cpu", fit_intercept=False)
+            model = RenewableHuberRegressor(backend="native_cpu", fit_intercept=False, n_jobs=3)
             X = np.arange(12, dtype=np.float64).reshape(4, 3)
             y = np.arange(4, dtype=np.float64)
             with self.assertRaisesRegex(BackendUnavailableError, "could not initialize"):
@@ -152,9 +234,12 @@ class NativeCpuSelectionTests(unittest.TestCase):
         engines: list[RecoveringEngine] = []
 
         class RecoveringEngine:
-            def __init__(self, dtype: str, n_parameters: int) -> None:
+            def __init__(
+                self, dtype: str, n_parameters: int, *, n_threads: int | None = None
+            ) -> None:
                 self.dtype = np.dtype(dtype)
                 self.n_parameters = n_parameters
+                self.n_threads = n_threads or 1
                 self.update_calls = 0
                 engines.append(self)
 
@@ -204,16 +289,18 @@ class NativeCpuSelectionTests(unittest.TestCase):
 
         extension = types.SimpleNamespace(
             NativeCpuEngine=RecoveringEngine,
-            version=lambda: {"abi_version": 1, "python_api_version": 1},
+            version=lambda: {"abi_version": 1, "python_api_version": 2},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cpu": extension}),
             mock.patch.object(renewable_huber, "_native_cpu", extension, create=True),
         ):
-            model = RenewableHuberRegressor(backend="native_cpu", fit_intercept=False)
+            model = RenewableHuberRegressor(backend="native_cpu", fit_intercept=False, n_jobs=3)
             X = np.arange(8, dtype=np.float64).reshape(4, 2)
             y = np.arange(4, dtype=np.float64)
             model.partial_fit(X, y)
+            self.assertEqual(model.n_jobs_, 3)
+            self.assertEqual(engines[0].n_threads, 3)
             coefficients_before = model.state_.coefficients.copy()
             information_before = model.state_.information.copy()
 
@@ -228,6 +315,8 @@ class NativeCpuSelectionTests(unittest.TestCase):
 
             model.partial_fit(X, y)
             self.assertEqual(len(engines), 2)
+            self.assertEqual(model.n_jobs_, 3)
+            self.assertEqual(engines[1].n_threads, 3)
             self.assertEqual(model.state_.n_samples_seen, 8)
             self.assertEqual(model.state_.batch_count, 2)
 
@@ -340,6 +429,78 @@ class NativeCpuGoldenTests(unittest.TestCase):
             atol=3e-9,
         )
 
+    def test_parallel_weighted_update_matches_numpy(self) -> None:
+        rng = np.random.default_rng(731)
+        rows = 8_192
+        features = 32
+        X_source = rng.normal(size=(rows, features))
+        y_source = X_source @ rng.normal(size=features) + rng.normal(scale=0.2, size=rows)
+        weights_source = rng.uniform(0.25, 2.0, size=rows)
+        weights_source[::17] = 0.0
+
+        for dtype_name in ("float32", "float64"):
+            for penalty in ("none", "l1"):
+                with self.subTest(dtype=dtype_name, penalty=penalty):
+                    dtype = np.dtype(dtype_name)
+                    X = np.asarray(X_source, dtype=dtype)
+                    y = np.asarray(y_source, dtype=dtype)
+                    weights = np.asarray(weights_source, dtype=dtype)
+                    config = {
+                        "fit_intercept": True,
+                        "penalty": penalty,
+                        "dtype": dtype_name,
+                        "max_iter": 30,
+                        "tol": 1e-6,
+                    }
+                    oracle = RenewableHuberRegressor(
+                        **config, backend="numpy", device="cpu"
+                    ).partial_fit(X, y, sample_weight=weights)
+                    native_single = RenewableHuberRegressor(
+                        **config, backend="native_cpu", device="cpu", n_jobs=1
+                    ).partial_fit(X, y, sample_weight=weights)
+                    native_parallel = RenewableHuberRegressor(
+                        **config, backend="native_cpu", device="cpu", n_jobs=4
+                    ).partial_fit(X, y, sample_weight=weights)
+                    rtol, atol = NATIVE_TOLERANCES[dtype_name]
+                    # Parallel float32 reductions may be accumulated in a
+                    # different order by Accelerate on macOS. Keep the tighter
+                    # coefficient contract and relax only the information
+                    # matrix to the observed cross-platform rounding envelope.
+                    information_rtol, information_atol = (
+                        (1e-3, 3e-4) if dtype_name == "float32" else (rtol, atol)
+                    )
+                    np.testing.assert_allclose(
+                        native_single.state_.coefficients,
+                        oracle.state_.coefficients,
+                        rtol=rtol,
+                        atol=atol,
+                    )
+                    np.testing.assert_allclose(
+                        native_single.state_.information,
+                        oracle.state_.information,
+                        rtol=information_rtol,
+                        atol=information_atol,
+                    )
+                    np.testing.assert_allclose(
+                        native_parallel.state_.coefficients,
+                        native_single.state_.coefficients,
+                        rtol=rtol,
+                        atol=atol,
+                    )
+                    np.testing.assert_allclose(
+                        native_parallel.state_.information,
+                        native_single.state_.information,
+                        rtol=information_rtol,
+                        atol=information_atol,
+                    )
+                    self.assertAlmostEqual(
+                        native_parallel.state_.effective_weight,
+                        oracle.state_.effective_weight,
+                        delta=atol + rtol * oracle.state_.effective_weight,
+                    )
+                    self.assertEqual(native_single.n_jobs_, 1)
+                    self.assertEqual(native_parallel.n_jobs_, 4)
+
     def test_sequential_cross_thread_prediction(self) -> None:
         case = next(
             case for case in self.corpus["cases"] if case["id"] == "weighted_unpenalized_stream_f64"
@@ -396,6 +557,56 @@ class NativeCpuGoldenTests(unittest.TestCase):
                 0.0,
                 0.0,
             )
+
+    def test_direct_binding_update_error_preserves_resident_state(self) -> None:
+        from renewable_huber import _native_cpu
+
+        engine = _native_cpu.NativeCpuEngine("float64", 2)
+        coefficients = np.asarray([0.25, -0.5], dtype=np.float64)
+        information = np.asarray([[2.0, 0.25], [0.25, 1.0]], dtype=np.float64)
+        engine.restore(coefficients, information, 4, 1, 0.0, 4.0)
+        X_design = np.asarray([[1.0, 1.0], [2.0, 1.0], [3.0, 1.0], [4.0, 1.0]], dtype=np.float64)
+
+        with self.assertRaisesRegex(ValueError, "target length"):
+            engine.update(
+                X_design,
+                np.ones(3, dtype=np.float64),
+                None,
+                4.0,
+                1,
+                True,
+                1.345,
+                "none",
+                1.0,
+                1.0,
+                20,
+                1e-6,
+                1e-8,
+            )
+
+        restored = engine.state()
+        np.testing.assert_array_equal(restored["coefficients"], coefficients)
+        np.testing.assert_array_equal(restored["information"], information)
+        self.assertEqual(restored["n_samples_seen"], 4)
+        self.assertEqual(restored["batch_count"], 1)
+
+        result = engine.update(
+            X_design,
+            np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+            None,
+            4.0,
+            1,
+            True,
+            1.345,
+            "none",
+            1.0,
+            1.0,
+            20,
+            1e-6,
+            1e-8,
+        )
+        self.assertEqual(result["n_samples_seen"], 8)
+        self.assertEqual(result["batch_count"], 2)
 
     def _replay_case(self, case: dict[str, object]) -> None:
         model = self._new_model(case)

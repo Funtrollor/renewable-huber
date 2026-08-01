@@ -10,6 +10,8 @@ import venv
 import zipfile
 from pathlib import Path
 
+from validate_release_artifacts import _check_native_wheel, read_wheel_metadata
+
 
 def _one_wheel(directory: Path, pattern: str) -> Path:
     wheels = sorted(directory.glob(pattern))
@@ -37,6 +39,14 @@ def main() -> int:
     base_wheel = _one_wheel(args.base_dir, "renewable_huber-*.whl")
     native_wheel = _one_wheel(args.native_dir, "renewable_huber_native_cpu-*.whl")
     _assert_native_legal_files(native_wheel)
+    base_metadata = read_wheel_metadata(base_wheel)
+    native_errors = _check_native_wheel(
+        read_wheel_metadata(native_wheel),
+        kind="cpu",
+        expected_version=base_metadata.version,
+    )
+    if native_errors:
+        raise RuntimeError("incompatible CPU wheel metadata:\n- " + "\n- ".join(native_errors))
 
     with tempfile.TemporaryDirectory(prefix="renewable-huber-native-cpu-") as directory:
         environment = Path(directory)
@@ -74,8 +84,10 @@ def main() -> int:
                     "y=np.arange(8,dtype=np.float64); "
                     "m=RenewableHuberRegressor(backend='native_cpu',"
                     "fit_intercept=False,max_iter=20).fit(X,y); "
-                    "assert __version__.startswith('0.6.'); "
-                    "assert _native_cpu.version()['python_api_version']==1; "
+                    f"assert __version__=={base_metadata.version!r}; "
+                    "assert _native_cpu.version()['abi_version']==1; "
+                    "assert _native_cpu.version()['python_api_version']==2; "
+                    "assert _native_cpu.version()['supports_engine_thread_pool']; "
                     "assert m.predict(X).shape==(8,)"
                 ),
             ],

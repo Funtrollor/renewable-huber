@@ -58,6 +58,29 @@ int main() {
     if (!check(rh_cuda_engine_create(&options, &engine), "rh_cuda_engine_create")) {
         return 1;
     }
+    RhCudaEngineFeatures features{};
+    initialize(&features);
+    if (!check(rh_cuda_engine_features(engine, &features), "rh_cuda_engine_features strict") ||
+        features.requested_flags != 0 || features.enabled_flags != 0) {
+        std::cerr << "strict engine unexpectedly enabled CUDA tuning\n";
+        rh_cuda_engine_destroy(engine);
+        return 1;
+    }
+    rh_cuda_engine_destroy(engine);
+
+    options.reserved0 = RH_CUDA_ENGINE_FLAG_FAST_MATH;
+    if (rh_cuda_engine_create(&options, &engine) != RH_CUDA_STATUS_INVALID_ARGUMENT) {
+        std::cerr << "float64 engine accepted fast precision\n";
+        if (engine != nullptr) {
+            rh_cuda_engine_destroy(engine);
+        }
+        return 1;
+    }
+
+    options.reserved0 = RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS;
+    if (!check(rh_cuda_engine_create(&options, &engine), "rh_cuda_engine_create graph")) {
+        return 1;
+    }
 
     double coefficients[2] = {0.0, 0.0};
     double asymmetric_information[4] = {1.0, 2.0, 3.0, 4.0};
@@ -124,11 +147,28 @@ int main() {
 
     RhCudaDiagnostics diagnostics{};
     initialize(&diagnostics);
-    if (!check(rh_cuda_engine_update_host(engine, &batch, &config, &diagnostics), "rh_cuda_engine_update_host")) {
+    double fused_coefficients[2] = {};
+    double fused_information[4] = {};
+    RhCudaHostState fused{};
+    initialize(&fused);
+    fused.coefficients = fused_coefficients;
+    fused.information = fused_information;
+    if (!check(
+            rh_cuda_engine_update_host_with_state(engine, &batch, &config, &diagnostics, &fused),
+            "rh_cuda_engine_update_host_with_state"
+        )) {
         rh_cuda_engine_destroy(engine);
         return 1;
     }
     if (!check(rh_cuda_engine_copy_state(engine, &copied), "rh_cuda_engine_copy_state update")) {
+        rh_cuda_engine_destroy(engine);
+        return 1;
+    }
+    if (std::memcmp(fused_coefficients, copied_coefficients, sizeof(fused_coefficients)) != 0 ||
+        std::memcmp(fused_information, copied_information, sizeof(fused_information)) != 0 ||
+        fused.n_samples_seen != copied.n_samples_seen || fused.batch_count != copied.batch_count ||
+        fused.previous_lambda != copied.previous_lambda || fused.weight_sum != copied.weight_sum) {
+        std::cerr << "fused update state differs from a subsequent state copy\n";
         rh_cuda_engine_destroy(engine);
         return 1;
     }
@@ -258,6 +298,15 @@ int main() {
     if (!close(copied_coefficients[0], 0.1, 1e-4) || !close(copied_coefficients[1], 0.1, 1e-4)) {
         std::cerr << "unexpected minimum-norm coefficients: " << copied_coefficients[0] << ", "
                   << copied_coefficients[1] << '\n';
+        rh_cuda_engine_destroy(engine);
+        return 1;
+    }
+
+    initialize(&features);
+    if (!check(rh_cuda_engine_features(engine, &features), "rh_cuda_engine_features graph") ||
+        features.requested_flags != RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS ||
+        features.graph_captures + features.graph_fallbacks == 0) {
+        std::cerr << "CUDA Graph request was neither captured nor safely disabled\n";
         rh_cuda_engine_destroy(engine);
         return 1;
     }

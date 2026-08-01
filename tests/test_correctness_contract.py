@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -457,6 +458,20 @@ class EstimatorCorrectnessContractTests(unittest.TestCase):
         for name, value in cases.items():
             with self.subTest(name=name), self.assertRaises(ValidationError):
                 RenewableHuberRegressor(**{name: value}).fit(X, y)
+
+    def test_n_jobs_validation_and_all_cpu_resolution(self) -> None:
+        for value in (None, -1, 1, 7):
+            with self.subTest(valid=value):
+                EstimatorConfig(n_jobs=value).validate()
+
+        for value in (True, False, 0, -2, 1.5, "2"):
+            with self.subTest(invalid=value), self.assertRaisesRegex(ValidationError, "n_jobs"):
+                EstimatorConfig(n_jobs=value).validate()
+
+        with mock.patch("renewable_huber.config.os.cpu_count", return_value=None):
+            self.assertEqual(EstimatorConfig(n_jobs=-1).resolved_n_jobs(), 1)
+        with mock.patch("renewable_huber.config.os.cpu_count", return_value=12):
+            self.assertEqual(EstimatorConfig(n_jobs=-1).resolved_n_jobs(), 12)
 
     def test_empty_batches_are_rejected_without_mutating_an_existing_stream(self) -> None:
         empty_cases = [

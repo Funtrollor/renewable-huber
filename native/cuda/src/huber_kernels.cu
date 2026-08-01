@@ -12,6 +12,26 @@ inline int blocks_for(int64_t count) {
 }
 
 template <typename T>
+__global__ void append_intercept_kernel(
+    const T* features,
+    T* design,
+    int64_t rows,
+    int64_t feature_columns
+) {
+    const int64_t design_columns = feature_columns + 1;
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t count = rows * design_columns;
+    if (index >= count) {
+        return;
+    }
+    const int64_t row = index / design_columns;
+    const int64_t column = index % design_columns;
+    design[index] = column == feature_columns
+        ? static_cast<T>(1)
+        : features[row * feature_columns + column];
+}
+
+template <typename T>
 __global__ void residual_score_curvature_kernel(
     const T* residual_input,
     T* residual,
@@ -215,11 +235,42 @@ __global__ void transpose_kernel(
 }
 
 template <typename T>
+__global__ void mirror_lower_triangle_kernel(T* matrix, int64_t side) {
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t count = side * side;
+    if (index >= count) {
+        return;
+    }
+    // Matrices in the CUDA engine use column-major layout. cuBLAS SYRKX
+    // writes the lower triangle; copy it into the matching upper entries.
+    const int64_t row = index % side;
+    const int64_t column = index / side;
+    if (row < column) {
+        matrix[index] = matrix[row * side + column];
+    }
+}
+
+template <typename T>
 cudaError_t last_launch_error() {
     return cudaGetLastError();
 }
 
 }  // namespace
+
+template <typename T>
+cudaError_t launch_append_intercept(
+    const T* features,
+    T* design,
+    int64_t rows,
+    int64_t feature_columns,
+    cudaStream_t stream
+) {
+    const int64_t count = rows * (feature_columns + 1);
+    append_intercept_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
+        features, design, rows, feature_columns
+    );
+    return last_launch_error<T>();
+}
 
 template <typename T>
 cudaError_t launch_residual_score_curvature(
@@ -400,6 +451,21 @@ cudaError_t launch_transpose(
     return last_launch_error<T>();
 }
 
+template <typename T>
+cudaError_t launch_mirror_lower_triangle(T* matrix, int64_t side, cudaStream_t stream) {
+    const int64_t count = side * side;
+    mirror_lower_triangle_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
+        matrix, side
+    );
+    return last_launch_error<T>();
+}
+
+template cudaError_t launch_append_intercept<float>(
+    const float*, float*, int64_t, int64_t, cudaStream_t
+);
+template cudaError_t launch_append_intercept<double>(
+    const double*, double*, int64_t, int64_t, cudaStream_t
+);
 template cudaError_t launch_residual_score_curvature<float>(
     const float*, float*, float*, float*, int64_t, float, float, cudaStream_t
 );
@@ -470,5 +536,7 @@ template cudaError_t launch_transpose<float>(
 template cudaError_t launch_transpose<double>(
     const double*, double*, int64_t, int64_t, cudaStream_t
 );
+template cudaError_t launch_mirror_lower_triangle<float>(float*, int64_t, cudaStream_t);
+template cudaError_t launch_mirror_lower_triangle<double>(double*, int64_t, cudaStream_t);
 
 }  // namespace rh_cuda

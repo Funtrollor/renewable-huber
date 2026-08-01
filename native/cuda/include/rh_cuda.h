@@ -47,6 +47,18 @@ typedef int32_t RhCudaDType;
 #define RH_CUDA_DTYPE_FLOAT32 ((RhCudaDType)1)
 #define RH_CUDA_DTYPE_FLOAT64 ((RhCudaDType)2)
 
+/*
+ * Optional engine tuning flags carried in RhCudaEngineOptions::reserved0.
+ * Zero preserves the strict, backward-compatible execution contract. CUDA
+ * Graph capture is best effort and falls back to ordinary stream launches.
+ * FAST_MATH enables TF32 only for float32 dense linear algebra; reductions,
+ * convergence decisions, and float64 engines remain strict.
+ */
+#define RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS (UINT64_C(1) << 0)
+#define RH_CUDA_ENGINE_FLAG_FAST_MATH (UINT64_C(1) << 1)
+#define RH_CUDA_ENGINE_FLAG_KNOWN_MASK \
+    (RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS | RH_CUDA_ENGINE_FLAG_FAST_MATH)
+
 /* Opaque, single-device owner of state, CUDA handles, and reusable buffers. */
 typedef struct RhCudaEngine RhCudaEngine;
 
@@ -122,6 +134,22 @@ typedef struct RhCudaHostBatch {
     double batch_weight;
 } RhCudaHostBatch;
 
+/*
+ * Device-resident, C-contiguous batch. Pointers must address allocations on
+ * the engine's CUDA device and contain values in the engine dtype. The caller
+ * (normally a DLPack consumer) retains ownership until this call returns.
+ */
+typedef struct RhCudaDeviceBatch {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const void* x_design;
+    const void* y;
+    const void* sample_weight;
+    int64_t n_rows;
+    int64_t n_columns;
+    double batch_weight;
+} RhCudaDeviceBatch;
+
 typedef struct RhCudaHostPrediction {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -150,6 +178,17 @@ typedef struct RhCudaRuntimeInfo {
     int32_t device_count;
     int32_t reserved0;
 } RhCudaRuntimeInfo;
+
+/* Engine-local tuning state and cumulative graph-use counters. */
+typedef struct RhCudaEngineFeatures {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t requested_flags;
+    uint64_t enabled_flags;
+    uint64_t graph_captures;
+    uint64_t graph_replays;
+    uint64_t graph_fallbacks;
+} RhCudaEngineFeatures;
 
 RH_CUDA_API uint32_t rh_cuda_abi_version(void);
 /* Thread-local failure text for calls which fail before an engine exists. */
@@ -184,12 +223,46 @@ RH_CUDA_API RhCudaStatus rh_cuda_engine_update_host(
     RhCudaDiagnostics* diagnostics
 );
 
+/*
+ * Execute one update and export the committed state using the same stream
+ * completion.  This avoids a second device synchronization for callers that
+ * need a portable checkpoint after every batch.  The caller owns all output
+ * buffers, exactly as for rh_cuda_engine_copy_state.
+ */
+RH_CUDA_API RhCudaStatus rh_cuda_engine_update_host_with_state(
+    RhCudaEngine* engine,
+    const RhCudaHostBatch* batch,
+    const RhCudaUnpenalizedConfig* config,
+    RhCudaDiagnostics* diagnostics,
+    RhCudaHostState* state
+);
+
+/* Return the engine stream handle for DLPack producer/consumer synchronization. */
+RH_CUDA_API RhCudaStatus rh_cuda_engine_stream(
+    RhCudaEngine* engine,
+    uintptr_t* stream
+);
+
+/* Device-input equivalent of rh_cuda_engine_update_host_with_state. */
+RH_CUDA_API RhCudaStatus rh_cuda_engine_update_device_with_state(
+    RhCudaEngine* engine,
+    const RhCudaDeviceBatch* batch,
+    const RhCudaUnpenalizedConfig* config,
+    RhCudaDiagnostics* diagnostics,
+    RhCudaHostState* state
+);
+
 RH_CUDA_API RhCudaStatus rh_cuda_engine_predict_host(
     RhCudaEngine* engine,
     const RhCudaHostPrediction* request
 );
 
 RH_CUDA_API RhCudaStatus rh_cuda_engine_synchronize(RhCudaEngine* engine);
+
+RH_CUDA_API RhCudaStatus rh_cuda_engine_features(
+    RhCudaEngine* engine,
+    RhCudaEngineFeatures* features
+);
 
 /* Returned storage is owned by the engine and stays valid until its next API call. */
 RH_CUDA_API const char* rh_cuda_engine_last_error(const RhCudaEngine* engine);

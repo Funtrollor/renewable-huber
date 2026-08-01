@@ -87,17 +87,21 @@ Run a local smoke comparison:
 ```powershell
 python scripts/benchmarks/benchmark_shape_sweep.py `
   --profile smoke --backend cpu --penalty both --dtype both `
+  --lifecycle cold --operation partial-fit `
   --output artifacts/p1-cpu-smoke.json
 ```
 
-Benchmark records include engine initialization. NumPy and native CPU both
-construct a new estimator for each timed repeat, so the comparison uses the
-same estimator lifecycle.
+Benchmark schema v2 makes lifecycle explicit. The cold command above includes
+engine initialization for both NumPy and native CPU; use a separate
+`--lifecycle steady --operation partial-fit` run for reusable-engine
+throughput. See the [native performance policy](native-performance-policy.md)
+for fair comparison and promotion rules.
 
 The checked-in Windows/CPython 3.11 baseline at commit `4ea5ff7` is
 [`benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json`](../benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json).
 The table reports `NumPy median / native median`; values above 1 mean the
-native engine is faster.
+native engine is faster. It is a schema-v1 historical record, not a hard
+schema-v2 dispatch or regression baseline.
 
 | Standard shape | penalty | float32 | float64 |
 | --- | --- | ---: | ---: |
@@ -112,7 +116,27 @@ this host's NumPy build. Those results define optimization targets rather than
 being hidden: reducing dense-solver allocation and LAMM overhead is the next
 CPU-provider work.
 
-The portable P1 dense solver currently allocates nalgebra matrix/vector
-storage per solve. Reusing factorization storage or selecting a tuned
-BLAS/LAPACK provider is intentionally left as the next CPU-provider
-optimization; the P1 reuse guarantee applies to the batch hot-path buffers.
+The portable dense solver retains LU/SVD compatibility for asymmetric or
+singular checkpoints and uses a scale-checked Cholesky fast path for symmetric
+float64 Hessians. The binding moves resident state into each transition
+transactionally instead of cloning the `p^2` information matrix, and the L1
+loop reuses the accepted candidate residual.
+
+## Optimized schema-v2 baseline
+
+The current fixed-runner record is
+[`p3-windows-ryzen9900x-native-cpu-v2.json`](../benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json).
+It uses identical cold lifecycles for both engines, three warmups, nine
+measured samples, 0.25 seconds of fixed block work per sample, NumPy 2.4.6,
+and a 24-thread Rayon pool. It covers all four standard shapes, both dtypes,
+both penalties, and both public operations (`fit` and `partial_fit`).
+
+The strict competitor and 5% relative-MAD gate passed all 32 Native/NumPy
+pairs with `--max-competitor-slowdown 1.0`. NumPy/native median speedup ranged
+from 1.17x to 15.65x, with a 1.68x median. The implementation uses size-gated Rayon
+row partitions for residuals and gradients, and reduces multiple
+matrixmultiply SIMD Gram blocks without nested thread pools. Partial Gram
+scratch is capped at 64 MiB; smaller workloads stay on a row-major serial
+gradient fast path. Large L1 gradients use contiguous row chunks and private
+thread accumulators. The extension also marks its returned result arrays as
+detached so the Python adapter does not copy the information matrix twice.

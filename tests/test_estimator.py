@@ -122,6 +122,51 @@ class RenewableHuberRegressorTests(unittest.TestCase):
         self.assertEqual(restored.state_.effective_weight, model.state_.effective_weight)
         np.testing.assert_array_equal(restored.feature_names_in_, ["feature_a", "feature_b"])
 
+    def test_n_jobs_get_params_runtime_attribute_and_checkpoint_contract(self) -> None:
+        model = RenewableHuberRegressor(backend="numpy", n_jobs=-1).fit(self.X, self.y)
+        self.assertEqual(model.get_params(deep=False)["n_jobs"], -1)
+        self.assertIsNone(model.n_jobs_)
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "n-jobs-model.npz"
+            model.save(checkpoint)
+            restored = RenewableHuberRegressor.load(checkpoint)
+
+        self.assertEqual(restored.n_jobs, -1)
+        self.assertEqual(restored.get_params(deep=False)["n_jobs"], -1)
+        self.assertIsNone(restored.n_jobs_)
+
+        restored.set_params(n_jobs=2)
+        self.assertEqual(restored.n_jobs, 2)
+        self.assertFalse(hasattr(restored, "n_jobs_"))
+
+    def test_cuda_tuning_get_params_and_checkpoint_contract(self) -> None:
+        model = RenewableHuberRegressor(
+            backend="numpy",
+            dtype="float32",
+            cuda_graphs=True,
+            cuda_fast_math=True,
+        ).fit(self.X, self.y)
+        self.assertTrue(model.get_params(deep=False)["cuda_graphs"])
+        self.assertTrue(model.get_params(deep=False)["cuda_fast_math"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "cuda-tuning-model.npz"
+            model.save(checkpoint)
+            restored = RenewableHuberRegressor.load(checkpoint)
+
+        self.assertTrue(restored.cuda_graphs)
+        self.assertTrue(restored.cuda_fast_math)
+        self.assertFalse(hasattr(restored, "cuda_features_"))
+
+    def test_cuda_tuning_validation_is_strict_and_opt_in(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "cuda_graphs must be a boolean"):
+            RenewableHuberRegressor(cuda_graphs=1).fit(self.X, self.y)
+        with self.assertRaisesRegex(ValidationError, "cuda_fast_math must be a boolean"):
+            RenewableHuberRegressor(cuda_fast_math=1).fit(self.X, self.y)
+        with self.assertRaisesRegex(ValidationError, "requires dtype='float32'"):
+            RenewableHuberRegressor(backend="native_cuda", cuda_fast_math=True).fit(self.X, self.y)
+
     def test_checkpoint_can_migrate_backend_device_and_dtype(self) -> None:
         model = RenewableHuberRegressor(dtype="float64").fit(self.X, self.y)
         with tempfile.TemporaryDirectory() as directory:

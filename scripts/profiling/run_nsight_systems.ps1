@@ -9,12 +9,20 @@ param(
     [ValidateSet("none", "l1")]
     [string]$Penalty = "none",
     [ValidateSet("cupy", "native_cuda")]
-    [string]$Engine = "cupy"
+    [string]$Engine = "cupy",
+    [switch]$CudaGraphs,
+    [switch]$CudaFastMath
 )
 
 $ErrorActionPreference = "Stop"
 if (($Engine -eq "native_cuda") -and ($Penalty -ne "none")) {
     throw "The P2 native CUDA engine supports penalty='none' only."
+}
+if (($CudaGraphs -or $CudaFastMath) -and ($Engine -ne "native_cuda")) {
+    throw "CUDA tuning switches require Engine='native_cuda'."
+}
+if ($CudaFastMath -and ($DType -ne "float32")) {
+    throw "CudaFastMath requires DType='float32'."
 }
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $profiler = Get-Command nsys -ErrorAction SilentlyContinue
@@ -34,13 +42,22 @@ if ($null -eq $profiler) {
 
 $outputPath = Join-Path $projectRoot $OutputDirectory
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-$profileName = if ($Engine -eq "native_cuda") { "native-core-p2-native" } else { "native-core-p0-cupy" }
+$profileName = if ($CudaGraphs -or $CudaFastMath) {
+    "native-core-p4-tuned"
+} elseif ($Engine -eq "native_cuda") {
+    "native-core-p2-native"
+} else {
+    "native-core-p0-cupy"
+}
 $inputLocation = if ($Engine -eq "native_cuda") { "host" } else { "device" }
 $reportPrefix = Join-Path $outputPath "$profileName-systems"
 $metadataPath = Join-Path $outputPath "$profileName-systems.json"
 $summaryPath = Join-Path $outputPath "$profileName-summary.json"
 $workload = Join-Path $PSScriptRoot "profile_cuda_update.py"
 $summarizer = Join-Path $PSScriptRoot "summarize_nsys_sqlite.py"
+$tuningArguments = @()
+if ($CudaGraphs) { $tuningArguments += "--cuda-graphs" }
+if ($CudaFastMath) { $tuningArguments += "--cuda-fast-math" }
 
 & $profilerPath profile `
     --trace=cuda,nvtx,cublas,cusolver `
@@ -57,6 +74,7 @@ $summarizer = Join-Path $PSScriptRoot "summarize_nsys_sqlite.py"
     --input-location $inputLocation `
     --warmup 2 `
     --repeats 3 `
+    @tuningArguments `
     --metadata-output $metadataPath
 
 if ($LASTEXITCODE -ne 0) {

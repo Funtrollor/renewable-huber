@@ -30,7 +30,11 @@ jobs:
         run: cargo check --locked --workspace --all-targets
       - name: Test Rust workspace
         working-directory: native
-        run: cargo test --locked --workspace --all-targets
+        # PyO3 extension crates are exercised by the native wheel jobs below.
+        # Building them as standalone Linux test executables leaves CPython
+        # extension-module symbols unresolved, so unit-test the pure Rust
+        # crates here while retaining workspace-wide check and clippy gates.
+        run: cargo test --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets
       - name: Lint Rust workspace
         working-directory: native
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -117,6 +121,8 @@ jobs:
         run: ruff format --check src tests scripts
       - name: Verify native-core golden corpus
         run: python scripts/generate_native_golden.py --check
+      - name: Verify base/native release metadata contract
+        run: python scripts/native/validate_release_artifacts.py --source-only
 
   optional-backend:
     name: ${{ matrix.name }} CPU
