@@ -8,6 +8,15 @@
 namespace rh_cuda {
 
 template <typename T>
+cudaError_t launch_append_intercept(
+    const T* features,
+    T* design,
+    int64_t rows,
+    int64_t feature_columns,
+    cudaStream_t stream
+);
+
+template <typename T>
 cudaError_t launch_residual_score_curvature(
     const T* residual_input,
     T* residual,
@@ -125,6 +134,9 @@ cudaError_t launch_transpose(
     int64_t columns,
     cudaStream_t stream
 );
+
+template <typename T>
+cudaError_t launch_mirror_lower_triangle(T* matrix, int64_t side, cudaStream_t stream);
 
 }  // namespace rh_cuda
 

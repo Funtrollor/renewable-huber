@@ -34,11 +34,12 @@ class SklearnIntegrationTests(unittest.TestCase):
         cls.y = cls.X @ np.asarray([1.4, -0.8, 0.3, 0.0]) + 0.2
 
     def test_clone_is_an_unfitted_regressor(self) -> None:
-        model = self.Regressor(tau=1.1, max_iter=80)
+        model = self.Regressor(tau=1.1, max_iter=80, n_jobs=2)
         cloned = self.clone(model)
 
         self.assertTrue(self.is_regressor(cloned))
         self.assertEqual(cloned.get_params(deep=False), model.get_params(deep=False))
+        self.assertEqual(cloned.n_jobs, 2)
         self.assertFalse(hasattr(cloned, "coef_"))
 
     def test_pipeline_and_grid_search(self) -> None:

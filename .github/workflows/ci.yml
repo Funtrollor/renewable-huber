@@ -117,6 +117,8 @@ jobs:
         run: ruff format --check src tests scripts
       - name: Verify native-core golden corpus
         run: python scripts/generate_native_golden.py --check
+      - name: Verify base/native release metadata contract
+        run: python scripts/native/validate_release_artifacts.py --source-only
 
   optional-backend:
     name: ${{ matrix.name }} CPU

@@ -1,28 +1,33 @@
-# GitHub 與 PyPI 發布檢查表
+# 發布檢查清單
 
-## 已完成的發布基礎
+## 每次 release 前
 
-- [x] 使用 `src/renewable_huber/_version.py` 作為唯一版號來源。
-- [x] 採用 Apache-2.0，並提供論文歸屬與獨立實作聲明。
-- [x] 將 GitHub 連結指向 `Funtrollor/renewable-huber`。
-- [x] 排除資料、模型、研究 PDF、legacy 程式與本機工具狀態。
-- [x] 在 Windows、Linux、macOS 與 Python 3.10–3.12 執行 CI。
-- [x] 建置並在乾淨環境 smoke-test wheel 與 sdist。
-- [x] 提供手動、自架 NVIDIA runner 的 CuPy/CUDA 驗證工作流。
-- [x] 建立 tag 驅動的 GitHub Release 與構件上傳工作流。
-- [x] 建立 `CHANGELOG.md`、`CITATION.cff`、維護文件與 GitHub 模板。
+- [ ] Base、native CPU、native CUDA 使用相同的 PEP 440 版本。
+- [ ] Native distributions 精確依賴同版 `renewable-huber==X.Y.Z`。
+- [ ] `CHANGELOG.md`、README 支援範圍與 API 文件已更新。
+- [ ] Golden corpus、Python 測試、Rust tests、Ruff、rustfmt、Clippy 全部通過。
+- [ ] 固定硬體上的 CPU 與 CUDA performance gates 無效能或正確性回歸。
+- [ ] 手動 GPU validation 已在 CUDA 12 self-hosted runner 通過。
+- [ ] `python scripts/native/validate_release_artifacts.py --source-only` 通過。
+- [ ] Release commit 已合併到 `main`，tag 名稱為 `vX.Y.Z`。
 
-## 第一次正式發布前
+## Artifact gate
 
-- [ ] 凍結公開 API，完成效能基準與論文／legacy golden-case 驗證。
-- [x] 更新 `CHANGELOG.md` 的 `Unreleased` 項目並決定正式版號 `0.5.1`。
-- [x] 在 `_version.py` 設定版號 `0.5.1`。
-- [ ] 在具備 NVIDIA CUDA 的 runner 執行 GPU validation。
-- [x] 確認 `renewable-huber` 在 PyPI 與 TestPyPI 尚未建立（2026-07-28）。
-- [x] 設定 PyPI 與 TestPyPI Trusted Publishing。
-- [x] 發布 `0.5.0` 至 TestPyPI，並在新的虛擬環境完成安裝與 fit/predict smoke test。
-- [ ] 建立簽署的 `vX.Y.Z` tag；GitHub Actions 會驗證 tag 與套件版號一致。
-- [ ] 人工檢查 GitHub Release 內的 wheel、sdist 與 release notes。
-- [ ] 核准後才發布至正式 PyPI。
+- [ ] Base wheel 與 sdist 通過 `twine check` 與 clean-install smoke test。
+- [ ] 15 個 CPU wheels 全數產生：Python 3.10–3.12 × 5 個 OS/architecture targets。
+- [ ] 3 個 Windows x86-64 CUDA 12 wheels 全數產生。
+- [ ] CUDA wheel 具備公開 API version、native ABI 與 capability metadata。
+- [ ] CUDA fat binary architecture 清單符合 release policy，使用者不需本機 `nvcc`。
+- [ ] 完整 artifact set 沒有重複檔名，且版本與 dependency contract 全部相符。
+- [ ] CPU/CUDA wheels 與 matching base wheel 在乾淨環境可一起安裝並通過 `pip check`。
+- [ ] GitHub Release 包含 base wheel/sdist 及所有 native wheels。
 
-完整操作與失敗處理請見 [release-process.md](release-process.md)。
+## PyPI 發布
+
+- [ ] `pypi`、`pypi-native-cpu`、`pypi-native-cuda` environments 都有 required reviewer。
+- [ ] 三個 PyPI projects 的 Trusted Publisher 設定與 `release.yml` 完全一致。
+- [ ] 維護者已人工核准三個 publish jobs。
+- [ ] 從 PyPI 新環境安裝 base-only、native CPU、native CUDA 三種組合並執行 smoke test。
+- [ ] 未嘗試覆寫已存在的版本；修正一律發布新的 patch version。
+
+詳細步驟與 runner/runtime 要求請見 [發布流程](release-process.md)。

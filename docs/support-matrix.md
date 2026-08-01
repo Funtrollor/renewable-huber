@@ -7,13 +7,24 @@
 | Backend | CPU | GPU | dtype | 作業系統範圍 | 安裝 extra | `predict` 回傳型別 | 主要限制 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `numpy` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；三者均進行基線 CI | 無（基礎安裝） | `numpy.ndarray` | `device="cuda"` 會直接報錯；效能取決於 NumPy 連結的 BLAS/LAPACK。 |
-| `native_cpu` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；PyO3 wheel matrix CI | 獨立安裝 `renewable-huber-native-cpu` | `numpy.ndarray` | P1 僅接受 dense NumPy；adapter 最多建立一次 contiguous copy。必須明確指定，不會由 `auto` 選取。 |
+| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.12；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.0` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。必須明確指定，不會由 `auto` 選取。安裝 wheel 不需本機 Rust toolchain。 |
 | `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；專案 GPU workflow 為 Windows self-hosted runner | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
-| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | Windows source build in P2 | 獨立安裝 `renewable-huber-native-cuda` | `numpy.ndarray` | Opt-in host-input whole-batch engine; `penalty="none"` only in P2; explicit requests never silently fall back. |
+| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.12、Windows x86-64 CUDA 12 wheel；self-hosted GPU CI | `renewable-huber-native-cuda==0.6.0` | `numpy.ndarray`; CuPy、PyTorch CUDA、TensorFlow eager GPU tensor | Python API v3。Opt-in whole-batch engine；device update 使用同裝置、完全相同 dtype、C-contiguous DLPack，絕不經 host staging；`penalty="none"` only；device-resident `predict` 尚未支援。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不需本機 nvcc，但需要 NVIDIA driver 與 CUDA 12 runtime DLL。 |
 | `torch` | 是 | NVIDIA CUDA | `float32`, `float64` | CPU：Linux／Windows／macOS；CUDA：依 PyTorch wheel 支援的 Linux／Windows | `gpu-torch` | `torch.Tensor` | `device="auto"` 使用 CPU；輸入會 detach、移至指定裝置並轉 dtype，不提供 autograd layer，也不支援 MPS device。 |
 | `tensorflow` | 是 | TensorFlow 可見的 CUDA GPU | `float32`, `float64` | 依 TensorFlow wheel；CPU backend CI 在 Linux，CUDA 通常為 Linux／WSL2 環境 | `gpu-tensorflow` | `tensorflow.Tensor` | 僅 eager execution，不可直接在 `tf.function` 內使用；`device="auto"` 使用 CPU；不支援 Metal/MPS device。 |
 
-表中的 OS 範圍仍受 optional dependency 本身的 Python、driver 與硬體相容性限制。專案 CI 對 NumPy 與 native CPU wheel 執行 Python 3.10-3.12 × Linux/Windows/macOS；Torch、TensorFlow 與 scikit-learn optional job 在 Linux CPU 執行；CuPy/CUDA 由手動啟動的 Windows GPU workflow 驗證。
+Native CPU 的 `n_jobs=None` 使用 extension 的共享 Rayon pool；`n_jobs=-1`
+使用全部邏輯 CPU，正整數則指定確切 worker 數，後兩者建立 estimator-local
+pool。它不會修改 Rayon 全域狀態，也不會改變 NumPy、CuPy、Torch 或
+TensorFlow 的 thread 設定；非 native backend 的 `n_jobs_` 固定為 `None`。
+當 joblib、GridSearchCV 或應用層已平行執行多個 estimator 時，應把每個
+native estimator 設為 `n_jobs=1`，避免巢狀 pool 造成 CPU 過度訂閱。
+
+Native CUDA 的 `cuda_graphs` 與 `cuda_fast_math` 都預設為 `False`。
+Graph capture 不可用時會安全回退 strict stream；fast math 只允許 float32
+TF32，不適用 float64。fitted estimator 以 `cuda_features_` 回報實際狀態與計數。
+
+表中的 OS 範圍仍受 optional dependency 本身的 Python、driver 與硬體相容性限制。專案 CI 對 NumPy 與 native CPU wheel 執行 Python 3.10-3.12 × Linux/Windows/macOS；native CPU release 另產生 Linux aarch64 與 Apple Silicon wheels。Torch、TensorFlow 與 scikit-learn optional job 在 Linux CPU 執行；CuPy/native CUDA 由手動與 release-gated 的 Windows CUDA 12 self-hosted workflow 驗證。CUDA release fat binary 目標為 SM 75、80、86、89、90、120；使用者安裝 wheel 不需 native build toolchain。
 
 ## Backend 與裝置選擇
 
@@ -30,7 +41,7 @@
 | `backend="tensorflow", device="auto"` | TensorFlow / CPU |
 | 明確 backend + `device="cuda"` | 僅在該 backend 能看到 CUDA GPU 時成立，否則拋出 `BackendUnavailableError` |
 
-`auto` 不會檢查輸入是 NumPy、CuPy、Torch 或 TensorFlow tensor。若要保留框架原生回傳型別，必須明確指定該 backend。跨框架轉換沒有零複製保證。
+`auto` 不會檢查輸入是 NumPy、CuPy、Torch 或 TensorFlow tensor。若要保留框架原生回傳型別，必須明確指定該 backend。一般跨框架轉換沒有零複製保證；唯一例外是明確選擇 `native_cuda` 的 device-update 路徑：CuPy／PyTorch 直接實作 DLPack consumer-stream negotiation，TensorFlow eager 則透過 legacy capsule adapter 在 export 前呼叫 `tf.experimental.async_wait()`（或要求已明確啟用同步 eager execution）。後者仍是零拷貝，但會有必要的 producer synchronization。
 
 ## 輸入整合
 
@@ -40,6 +51,7 @@
 | pandas DataFrame／Series | 支援 `.to_numpy()` 轉換；可安裝 `pandas` extra | 若 DataFrame 欄名全為字串，第一次訓練會記錄欄名，後續 DataFrame 批次與預測會驗證名稱及順序。未命名 array 仍按位置處理。GPU backend 會先經 NumPy，再複製到裝置。 |
 | PyTorch tensor | 明確選擇 `backend="torch"` 時原生支援 | 輸入會 detach；不保留梯度圖。 |
 | TensorFlow tensor | 明確選擇 `backend="tensorflow"` 時原生支援 | 只支援 eager tensor。 |
+| CuPy／PyTorch／TensorFlow CUDA tensor | 明確選擇 `backend="native_cuda"` 時可零拷貝更新 | 三個 batch input 必須全在同一 CUDA device、dtype 完全相同且 C-contiguous；PyTorch 會以共享 storage 的 `detach()` view 移除 autograd；TensorFlow 只支援 eager GPU tensor。 |
 | SciPy sparse | 明確拒絕 | 不會隱式 densify；呼叫端必須評估記憶體後明確使用 `X.toarray()`。 |
 | pandas sparse | 經 pandas `.to_numpy()` 轉為 dense | 轉換可能配置完整 dense array，大型資料應先評估記憶體。 |
 | `sample_weight` | `fit`、`partial_fit`、`score` 支援 | 必須是一維、有限、非負且至少一個正值；採 frequency-weight 語意，整數權重等價於重複該列。 |

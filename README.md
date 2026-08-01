@@ -26,14 +26,31 @@ renewable-huber --version
 P1 native CPU 核心採明確 opt-in，並與純 Python 基礎套件分開發行。安裝或在本機
 建置 `renewable-huber-native-cpu` 後，可用以下方式選取：
 
+0.6.0 發布後可直接安裝 matching native wheel：
+
+```powershell
+python -m pip install renewable-huber-native-cpu==0.6.0
+```
+
+0.6 release wheels 涵蓋 CPython 3.10–3.12、Windows x86-64、Linux
+x86-64／aarch64 與 macOS x86-64／Apple Silicon；一般使用者不需要安裝 Rust
+或在本機編譯 extension。
+
 ```python
 native_model = RenewableHuberRegressor(
     backend="native_cpu",
     device="cpu",
     dtype="float64",
+    n_jobs=-1,  # 或指定正整數，例如 n_jobs=8
 )
 native_model.fit(X_train, y_train)
 ```
+
+`n_jobs=None` 使用 native extension 的預設 Rayon pool，`n_jobs=-1` 使用全部
+邏輯 CPU，正整數則為這個 estimator 建立固定大小的獨立 thread pool。完成
+fit 後可由 `native_model.n_jobs_` 查看實際 worker 數。若外層已使用
+joblib／`GridSearchCV(n_jobs=...)` 平行化多個模型，建議內層 estimator 設為
+`n_jobs=1`，避免巢狀 thread pool 彼此搶占 CPU。
 
 它支援 `penalty="none"` 與 `penalty="l1"`，輸入為 C-contiguous NumPy
 `float32`／`float64`。P1 階段的 `backend="auto"` 在 CPU 上仍維持使用 NumPy。
@@ -86,6 +103,44 @@ gpu_model = RenewableHuberRegressor(backend="cupy", device="cuda", dtype="float3
 gpu_model.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
 gpu_prediction = gpu_model.predict(cp.asarray(X_test))  # cupy.ndarray，未回傳 CPU
 ```
+
+0.6.0 發布後，Windows x86-64 使用者可直接安裝 CPython 3.10–3.12 的
+CUDA 12 plugin wheel：
+
+```powershell
+python -m pip install renewable-huber-native-cuda==0.6.0
+```
+
+Wheel 已包含針對支援 GPU 架構編譯的 native extension，因此不需要 Rust、CMake、
+Visual Studio 或本機 `nvcc`；執行時仍需要相容的 NVIDIA driver，以及 CUDA 12
+`cudart`、cuBLAS、cuSOLVER runtime DLL。
+
+安裝獨立 native CUDA extension 後，可明確選擇 Rust/CUDA whole-batch
+engine，直接以 DLPack 消費 CuPy、PyTorch CUDA 或 TensorFlow eager GPU
+batch，全程不經 host staging：
+
+```python
+native_gpu = RenewableHuberRegressor(
+    backend="native_cuda",
+    device="cuda",
+    dtype="float32",
+    penalty="none",
+    cuda_graphs=True,  # opt-in；capture 不可用時安全回退
+    cuda_fast_math=False,  # opt-in TF32；strict float32 預設
+)
+native_gpu.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
+```
+
+Native CUDA Python API v3 另提供 opt-in 的 `cuda_graphs=True`，以及只允許
+`float32` 的 `cuda_fast_math=True`（TF32）極速模式。兩者預設關閉；CUDA Graph
+無法安全 capture 時會回退到一般執行路徑。完成 fit 後可從
+`native_gpu.cuda_features_` 檢查實際啟用狀態、capture、replay 與 fallback 計數。
+
+所有 device batch inputs 必須位於同一 GPU、dtype 完全相同且
+C-contiguous；條件不符會直接報錯，不會隱式複製。CuPy／PyTorch 使用
+DLPack consumer-stream negotiation；TensorFlow legacy DLPack adapter 會先做
+必要的 producer synchronization，但仍不複製 storage。目前 native CUDA
+device-resident `predict` 尚未支援，需明確傳入 host array。
 
 PyTorch 可在 CPU 或明確指定的 CUDA 裝置上使用原生 `torch.Tensor`：
 
@@ -170,6 +225,7 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 - [Rust/CUDA native-core RFC](docs/native-core-rfc.md)
 - [Native-core P0 效能基線](docs/native-core-p0-baseline.md)
 - [Native-core P2 CUDA engine](docs/native-core-p2.md)
+- [Native-core P4 CUDA tuning](docs/native-core-p4.md)
 - [發布前檢查表](docs/release-checklist.md)
 - [版本與 GitHub Release 流程](docs/release-process.md)
 - [貢獻指南](CONTRIBUTING.md)

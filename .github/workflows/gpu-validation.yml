@@ -23,7 +23,9 @@ jobs:
         shell: pwsh
         run: nvidia-smi
       - name: Install CUDA backends and test tools
-        run: python -m pip install ".[dev,gpu-cupy,native-build]"
+        run: python -m pip install ".[dev,gpu-cupy,gpu-torch,native-build]"
+      - name: Verify base/native release metadata contract
+        run: python scripts/native/validate_release_artifacts.py --source-only
       - name: Build matching base wheel
         run: python -m build --wheel --outdir dist-base
       - name: Build and run direct CUDA C ABI smoke test
@@ -56,7 +58,7 @@ jobs:
       - name: Run CUDA kernel, CuPy, and native integration tests
         run: >
           python -m unittest tests.test_cuda_kernels tests.test_cupy_backend
-          tests.test_native_cuda_backend -v
+          tests.test_native_cuda_backend tests.test_dlpack_adapters -v
       - name: Capture CUDA shape-sweep smoke baseline
         run: >
           python scripts/benchmarks/benchmark_shape_sweep.py

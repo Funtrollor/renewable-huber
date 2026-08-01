@@ -24,21 +24,41 @@ CUDA C++ engine
   - pivoted LU solve and singular-system SVD fallback
 ```
 
-The initial transport is contiguous host NumPy data. A batch is copied to the
-selected GPU once, while coefficients, the information matrix, and reusable
-workspaces stay allocated on that device across `partial_fit` calls. DLPack
-device input is P3 and is deliberately not simulated through an implicit
-CuPy-to-host copy.
+The compatible transport remains contiguous host NumPy data. Raw features are
+copied to the selected GPU once and the intercept column is appended in
+reusable device workspace, avoiding a second full host-side design-matrix
+copy. A separate DLPack hot path accepts C-contiguous CUDA `float32`/`float64`
+tensors already resident on the engine device. PyO3 consumes each capsule with
+the engine stream, validates dtype/device/shape/strides, and keeps the producer
+allocation alive until the CUDA ABI completes its device-to-device copy. There
+is no implicit CUDA-to-host fallback. Coefficients, the information matrix,
+and reusable workspaces stay allocated on that device across `partial_fit`
+calls.
 
-The solver loop is native, but P2 still copies convergence and line-search
-scalars to the C++ host between iterations. Eliminating those synchronization
-points with device-side decisions is a measured follow-up optimization, not a
-claim of this baseline.
+The solver loop is native. Objective/convergence scalars still cross to the
+C++ host between iterations, but they use one pinned four-scalar buffer and
+paired synchronization. Update and portable state export share the final
+stream completion. A library-owned CUDA memory pool amortizes workspace
+allocation without changing the process-wide default allocator.
+
+Cold engines initialize only the regular SPD/LU resources. `gesvdjInfo`,
+singular values, U/V matrices, and the SVD work buffer are allocated lazily
+after LU actually reports a singular system. This preserves the exact
+minimum-norm fallback while removing unused SVD setup from ordinary
+Cholesky-only fits. The rank-deficient golden case and a CUDA-DLPack
+rank-deficient test both exercise this lazy path.
+
+For DLPack input with an intercept, the append kernel reads the producer's X
+allocation directly instead of first staging an identical device copy. The
+target vector is safely aliased for the duration of the native call; capsule
+ownership and the final stream completion guarantee its lifetime. Host input
+continues to use owned engine workspace.
 
 The separately built extension reports C ABI version 1 and Python payload API
 version 2. The base package checks both before creating an engine, so an
 older or unrelated native module fails explicitly instead of reaching a
-method or result-dictionary mismatch later.
+native method or result-dictionary mismatch later. Compatible builds
+additionally advertise `device_input="dlpack"`.
 
 ## Numerical contract
 
@@ -130,7 +150,14 @@ Run a comparable smoke benchmark:
 ```powershell
 python scripts/benchmarks/benchmark_shape_sweep.py `
   --profile smoke --backend all --penalty none --dtype both `
-  --warmup 1 --repeats 3 --output artifacts/native-p2-shape-sweep.json
+  --lifecycle cold --operation partial-fit `
+  --warmup 3 --repeats 9 --output artifacts/native-p2-cold-v2.json
+
+# Capture reusable native/CuPy/NumPy streaming throughput separately.
+python scripts/benchmarks/benchmark_shape_sweep.py `
+  --profile smoke --backend all --penalty none --dtype both `
+  --lifecycle steady --operation partial-fit `
+  --warmup 3 --repeats 9 --output artifacts/native-p2-steady-v2.json
 ```
 
 Capture native whole-update Nsight Systems and Nsight Compute reports:
@@ -164,6 +191,10 @@ The native figures are steady-state measurements: one engine is primed once
 and restored outside each timed repeat. The NumPy and CuPy entries construct a
 new estimator in every timed repeat. These policies are recorded per result in
 the JSON and the table must not be read as an initialization-cost comparison.
+It is a schema-v1 historical observation, not an eligible dispatch or
+regression-gate baseline. Schema v2 now applies the same cold or steady
+reset/initialization contract to every engine; see the
+[native performance policy](native-performance-policy.md).
 
 The profiled three-repeat reference window was 120.8 ms. It contained 396
 device-to-host copies and 401 stream-wait synchronizations; those counts make
@@ -171,9 +202,41 @@ device-side convergence and reduction results the next optimization target.
 CUDA API time, kernel time, and memcpy time overlap and must not be summed as
 wall-clock time.
 
+The optimized engine now uses a device-pointer cuBLAS reduction handle so the
+two objective scalars and the two convergence norms are each transferred and
+synchronized as one pair. Exactly symmetric, positive-ridge information uses
+cuSOLVER Cholesky; non-symmetric state and failed factorization retain the
+full-matrix LU and minimum-norm SVD paths. Both solve paths validate cuSOLVER
+device status. SVD metadata and workspaces are initialized only if LU confirms
+a singular system, while a dedicated rank-deficient DLPack test preserves the
+minimum-norm fallback. The PyO3 adapter also marks freshly allocated state
+snapshots, allowing the Python backend to avoid a second `p + p²` host copy.
+
+A GPU-loaded diagnostic run reduced the reference float32 native steady time
+from the historical 36.0 ms to 19.9 ms, but that run is intentionally not a
+publishable comparison: another graphics workload occupied the GPU.
+
+The approved 2026-08-01 schema-v2 cold run used three warmups, nine measured
+samples, and 0.5 seconds of fixed block work per sample for all standard
+shapes, both dtypes, and both public operations. Native CUDA passed all 16
+matched CuPy host-input comparisons and all 16 matched CuPy device-input
+comparisons. Host speedup ranged from 1.04x to 1.96x (median 1.35x); DLPack
+device speedup ranged from 1.06x to 2.04x (median 1.53x). Maximum Native
+relative MAD was 3.62% for host input and 3.28% for device input, below the
+unchanged 10% ceiling. The fixed-runner record is
+[`p3-windows-rtx5070ti-native-cuda-v2.json`](../benchmarks/baselines/p3-windows-rtx5070ti-native-cuda-v2.json).
+
+The original single-call capture rejected two cold latency pairs because
+Windows/WDDM relative MAD exceeded 10%. The runner now uses fixed block
+sampling and isolates cyclic GC without trimming or retrying observations.
+Sampling policy is part of the comparison key, so that historical capture is
+not compared with the approved stabilized baseline.
+
 The acceptance gate is correctness first. Performance results must record the
-GPU, driver, toolkit, shape, dtype, solver iterations, transfer policy, and
-git revision; they are not portable headline numbers across machines.
+GPU, driver, toolkit, shape, dtype, solver iterations, transfer policy, thread
+configuration, and BLAS provider; they are not portable headline numbers
+across machines. Native CUDA must pass the matched CuPy competitor parity gate
+under the same host/device transport before a calibration can recommend it.
 
 ## Rollback and lifetime rules
 

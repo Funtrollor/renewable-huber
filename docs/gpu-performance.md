@@ -63,7 +63,8 @@ profiling workload:
 
 ```powershell
 python scripts/benchmarks/benchmark_shape_sweep.py `
-  --profile standard --backend both --penalty both --dtype both `
+  --profile standard --backend all --penalty both --dtype both `
+  --lifecycle cold --operation both --warmup 3 --repeats 9 `
   --output artifacts/shape-sweep.json
 
 .\scripts\profiling\run_nsight_systems.ps1 -Python python
@@ -71,4 +72,11 @@ python scripts/benchmarks/benchmark_shape_sweep.py `
 
 See the [native-core RFC](native-core-rfc.md) for the accepted migration
 boundary and the [P0 baseline](native-core-p0-baseline.md) for the committed
-pre-native measurements and profiler findings.
+pre-native measurements and profiler findings. Fair cold/steady comparisons,
+fixed-runner gates, and the calibration-only native dispatch rule are in the
+[native performance policy](native-performance-policy.md).
+
+P4 adds opt-in CUDA Graph replay and float32 TF32 tuning while preserving
+strict execution by default. See [P4 native CUDA tuning](native-core-p4.md) for
+the public flags, error contract, fallback rules, benchmark, and Nsight
+reproduction commands.

@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Validate and build distributions
+  source-gate:
+    name: Validate source release
     if: github.repository == 'Funtrollor/renewable-huber'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -21,44 +21,218 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Require a release commit from main
         shell: bash
         run: |
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - name: Require tag and package versions to match
+      - name: Require tag, base, and native package versions to match
         shell: bash
         run: |
           package_version="$(python -c "import runpy; print(runpy.run_path('src/renewable_huber/_version.py')['__version__'])")"
           tag_version="${GITHUB_REF_NAME#v}"
-          if [[ "$tag_version" != "$package_version" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match package version $package_version"
-            exit 1
-          fi
-      - name: Install release tools and project
+          test "$tag_version" = "$package_version"
+          python scripts/native/validate_release_artifacts.py --source-only
+      - name: Install validation tools
         run: python -m pip install ".[dev]" twine
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -v
-      - name: Lint
-        run: ruff check src tests scripts
-      - name: Check formatting
-        run: ruff format --check src tests scripts
-      - name: Build wheel and sdist
-        run: python -m build
-      - name: Validate distribution metadata
-        run: python -m twine check dist/*
-      - name: Preserve release artifacts
-        uses: actions/upload-artifact@v4
+      - name: Run Python tests and quality gates
+        run: |
+          python -m unittest discover -s tests -v
+          ruff check src tests scripts
+          ruff format --check src tests scripts
+      - name: Run Rust tests and quality gates
+        working-directory: native
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked --workspace --all-targets
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build base wheel and sdist
+        run: python -m build --outdir dist-base
+      - name: Validate base distribution metadata
+        run: python -m twine check dist-base/*
+      - name: Clean-install base wheel
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/base-release-smoke"
+          "$RUNNER_TEMP/base-release-smoke/bin/python" -m pip install dist-base/*.whl
+          "$RUNNER_TEMP/base-release-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/base-release-smoke/bin/renewable-huber" --version
+      - uses: actions/upload-artifact@v4
         with:
-          name: python-distributions
-          path: dist/*
+          name: base-distributions
+          path: dist-base/*
+          if-no-files-found: error
+          retention-days: 30
+
+  native-cpu-wheels:
+    name: CPU wheel / ${{ matrix.os }} / py${{ matrix.python-version }}
+    needs: source-gate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-13, macos-14]
+        python-version: ["3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            architecture: linux-x86_64
+            rust-target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            architecture: linux-aarch64
+            rust-target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            architecture: windows-x86_64
+          - os: macos-13
+            architecture: macos-x86_64
+          - os: macos-14
+            architecture: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native build frontend
+        if: runner.os != 'Linux'
+        run: python -m pip install "maturin>=1.8,<2"
+      - name: Validate matching package metadata
+        run: python scripts/native/validate_release_artifacts.py --source-only
+      - name: Build manylinux2014 CPU wheel
+        if: runner.os == 'Linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.rust-target }}
+          args: >-
+            --release --locked --manylinux 2014
+            --interpreter python${{ matrix.python-version }}
+            --out ../../dist-native-cpu
+          manylinux: "2014"
+          working-directory: native/python-cpu
+      - name: Build native CPU wheel
+        if: runner.os != 'Linux'
+        working-directory: native/python-cpu
+        run: >-
+          python -m maturin build --release --locked
+          --out ../../dist-native-cpu
+      - uses: actions/download-artifact@v4
+        with:
+          name: base-distributions
+          path: dist-base
+      - name: Clean-install matching base and CPU wheels
+        run: >-
+          python scripts/native/smoke_test_cpu_wheels.py
+          --base-dir dist-base --native-dir dist-native-cpu
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-cpu-${{ matrix.architecture }}-py${{ matrix.python-version }}
+          path: dist-native-cpu/*.whl
+          if-no-files-found: error
+          retention-days: 30
+
+  native-cuda-wheels:
+    name: CUDA 12 wheel / Windows x86-64 / py${{ matrix.python-version }}
+    needs: source-gate
+    # Release tags contain trusted repository code. Pull requests never reach
+    # this self-hosted runner; gpu-validation.yml remains manual for PR work.
+    runs-on: [self-hosted, windows, x64, gpu, cuda12]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    env:
+      # Fat binary policy: Turing through Blackwell. CUDA 12.8+ is required to
+      # compile SM 120; PTX for the highest entry covers compatible later GPUs.
+      RH_CUDA_ARCHITECTURES: "75;80;86;89;90;120"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Show CUDA release toolchain
+        shell: pwsh
+        run: |
+          nvidia-smi
+          nvcc --version
+      - name: Install release and GPU test tools
+        run: python -m pip install ".[dev,gpu-cupy,gpu-torch,native-build]" twine
+      - uses: actions/download-artifact@v4
+        with:
+          name: base-distributions
+          path: dist-base
+      - name: Build CUDA 12 plugin wheel
+        shell: pwsh
+        run: >-
+          .\scripts\native\build_native_cuda.ps1
+          -Python "${{ env.pythonLocation }}\python.exe"
+          -OutputDirectory "dist-native-cuda"
+          -NoInstall
+      - name: Validate and clean-install matching wheels
+        run: >-
+          python scripts/native/smoke_test_cuda_wheels.py
+          --base-dir dist-base --native-dir dist-native-cuda
+      - name: Run native CUDA and DLPack integration tests
+        run: >-
+          python -m unittest tests.test_cuda_kernels tests.test_cupy_backend
+          tests.test_native_cuda_backend tests.test_dlpack_adapters -v
+      - name: Validate CUDA wheel metadata
+        run: python -m twine check dist-native-cuda/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-cuda-windows-x86_64-py${{ matrix.python-version }}
+          path: dist-native-cuda/*.whl
+          if-no-files-found: error
+          retention-days: 30
+
+  validate-release-set:
+    name: Validate complete artifact set
+    needs: [source-gate, native-cpu-wheels, native-cuda-wheels]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: base-distributions
+          path: release/base
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-cpu-*
+          path: release/cpu
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-cuda-*
+          path: release/cuda
+          merge-multiple: true
+      - name: Validate versions, dependencies, modules, and artifact counts
+        run: >-
+          python scripts/native/validate_release_artifacts.py
+          --base-dir release/base --cpu-dir release/cpu --cuda-dir release/cuda
+          --expected-cpu 15 --expected-cuda 3
+      - name: Validate all distribution metadata
+        run: |
+          python -m pip install twine
+          python -m twine check release/base/* release/cpu/* release/cuda/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-release-bundle
+          path: release/**/*
           if-no-files-found: error
           retention-days: 30
 
   github-release:
     name: Create GitHub Release
-    needs: build
-    if: github.repository == 'Funtrollor/renewable-huber'
+    needs: validate-release-set
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -67,45 +241,78 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Download distributions
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: python-distributions
-          path: dist
+          name: complete-release-bundle
+          path: release
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          mapfile -t artifacts < <(find release -type f | sort)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release upload "$GITHUB_REF_NAME" "${artifacts[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/* \
-              --verify-tag \
-              --generate-notes \
-              --title "renewable-huber $GITHUB_REF_NAME"
+            gh release create "$GITHUB_REF_NAME" "${artifacts[@]}" \
+              --verify-tag --generate-notes --title "renewable-huber $GITHUB_REF_NAME"
           fi
 
-  publish-pypi:
-    name: Publish distributions to PyPI
-    needs:
-      - build
-      - github-release
-    if: github.repository == 'Funtrollor/renewable-huber'
+  publish-base:
+    name: Publish base package to PyPI
+    needs: github-release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     environment:
       name: pypi
       url: https://pypi.org/p/renewable-huber
     permissions:
       id-token: write
     steps:
-      - name: Download distributions
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: python-distributions
+          name: base-distributions
           path: dist
-      - name: Publish distributions
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  publish-native-cpu:
+    name: Publish native CPU wheels to PyPI
+    # Native wheels declare an exact dependency on the base release. Publish
+    # that project first so installers never observe a plugin whose required
+    # base version is still absent from the index.
+    needs: [github-release, publish-base]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi-native-cpu
+      url: https://pypi.org/p/renewable-huber-native-cpu
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-cpu-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  publish-native-cuda:
+    name: Publish native CUDA wheels to PyPI
+    needs: [github-release, publish-base]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi-native-cuda
+      url: https://pypi.org/p/renewable-huber-native-cuda
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-cuda-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

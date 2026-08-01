@@ -2,20 +2,28 @@
 //!
 //! The hot row-wise kernels operate directly on C-contiguous input slices and
 //! reuse an engine-owned workspace. Weighted Gram matrices use matrixmultiply's
-//! runtime-selected SGEMM/DGEMM kernels and its portable, maximum-four-thread
-//! pool (`MATMUL_NUM_THREADS` can lower the limit). Dense systems are routed
-//! through the [`DenseSolver`] abstraction. P1 uses nalgebra's portable
-//! partial-pivot LU with a minimum-norm SVD fallback; a tuned BLAS/LAPACK
+//! runtime-selected SGEMM/DGEMM kernels, partitioned across Rayon's persistent
+//! worker pool for sufficiently large batches. Dense systems are routed through
+//! the [`DenseSolver`] abstraction. P1 uses nalgebra's portable Cholesky fast
+//! path, partial-pivot LU, and a minimum-norm SVD fallback; a tuned BLAS/LAPACK
 //! provider can replace it later without changing the algorithm or Python
 //! boundary.
 
 use std::marker::PhantomData;
 
 use nalgebra::{DMatrix, DVector, RealField};
+use rayon::prelude::*;
 use rh_core::{
     scalar_from_f64, BatchView, CoreError, Diagnostics, Penalty, Scalar, State, Transition,
     UpdateConfig,
 };
+
+// Micro-batches are latency-bound: crossing the Python boundary and joining a
+// worker pool costs more than the dot products themselves. These thresholds
+// were tuned against the public smoke sweep on a 24-thread Ryzen host.
+const PARALLEL_VECTOR_WORK: usize = 1_000_000;
+const PARALLEL_GRAM_WORK: usize = 16_000_000;
+const MAX_PARTIAL_GRAM_BYTES: usize = 64 * 1024 * 1024;
 
 /// Scalar supported by the CPU implementation.
 pub trait CpuScalar: Scalar + RealField {
@@ -139,7 +147,7 @@ pub trait DenseSolver<T: CpuScalar> {
     ) -> Result<SolveOutcome<T>, CoreError>;
 }
 
-/// Portable P1 provider: partial-pivot LU followed by minimum-norm SVD.
+/// Portable P1 provider: Cholesky, partial-pivot LU, then minimum-norm SVD.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NalgebraSolver;
 
@@ -155,6 +163,27 @@ impl<T: CpuScalar> DenseSolver<T> for NalgebraSolver {
         }
         let matrix = DMatrix::from_row_slice(dimension, dimension, row_major_matrix);
         let vector = DVector::from_column_slice(rhs);
+        // The ordinary Renewable Huber Hessian is symmetric positive definite
+        // once ridge is applied. Cholesky performs roughly half the work of LU
+        // on the wide shapes. Restored checkpoints are allowed to contain a
+        // genuinely asymmetric information matrix, so only take this path
+        // after an explicit scale-aware symmetry check.
+        // f32's narrower mantissa made the factorization perturb the Newton
+        // path enough to add iterations on the public wide sweep. Keep LU for
+        // f32; Cholesky's speedup is both stable and material for f64.
+        if std::mem::size_of::<T>() == std::mem::size_of::<f64>()
+            && approximately_symmetric(row_major_matrix, dimension)
+        {
+            if let Some(cholesky) = matrix.clone().cholesky() {
+                let solution = cholesky.solve(&vector);
+                if solution.iter().all(|value| value.is_finite()) {
+                    return Ok(SolveOutcome {
+                        solution: solution.as_slice().to_vec(),
+                        used_minimum_norm_fallback: false,
+                    });
+                }
+            }
+        }
         if let Some(solution) = matrix.clone().lu().solve(&vector) {
             if solution.iter().all(|value| value.is_finite()) {
                 return Ok(SolveOutcome {
@@ -194,6 +223,27 @@ impl<T: CpuScalar> DenseSolver<T> for NalgebraSolver {
     }
 }
 
+fn approximately_symmetric<T: CpuScalar>(matrix: &[T], dimension: usize) -> bool {
+    let mut scale = T::one();
+    for value in matrix {
+        scale = num_traits::Float::max(scale, num_traits::Float::abs(*value));
+    }
+    let dimension_t = T::from_usize(dimension).unwrap_or(T::one());
+    let tolerance =
+        T::default_epsilon() * dimension_t * T::from_f64(32.0).unwrap_or_else(T::one) * scale;
+    for row in 0..dimension {
+        for column in 0..row {
+            let difference = num_traits::Float::abs(
+                matrix[row * dimension + column] - matrix[column * dimension + row],
+            );
+            if difference > tolerance {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Reusable buffers sized for the largest batch processed by an engine.
 #[derive(Clone, Debug, Default)]
 pub struct Workspace<T: CpuScalar> {
@@ -201,6 +251,8 @@ pub struct Workspace<T: CpuScalar> {
     score: Vec<T>,
     curvature: Vec<T>,
     weighted_design: Vec<T>,
+    partial_grams: Vec<T>,
+    partial_gradients: Vec<T>,
     gradient: Vec<T>,
     hessian: Vec<T>,
     gram: Vec<T>,
@@ -222,6 +274,35 @@ impl<T: CpuScalar> Workspace<T> {
         self.score.resize(n_rows, T::zero());
         self.curvature.resize(n_rows, T::zero());
         self.weighted_design.resize(design_length, T::zero());
+        let gram_work = n_rows.saturating_mul(matrix_length);
+        let gram_bytes = matrix_length
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(CoreError::SizeOverflow)?;
+        let memory_limited_workers = MAX_PARTIAL_GRAM_BYTES / gram_bytes.max(1);
+        let gram_workers = if gram_work >= PARALLEL_GRAM_WORK && memory_limited_workers > 1 {
+            rayon::current_num_threads()
+                .min(n_rows)
+                .min(memory_limited_workers)
+        } else {
+            0
+        };
+        self.partial_grams.resize(
+            matrix_length
+                .checked_mul(gram_workers)
+                .ok_or(CoreError::SizeOverflow)?,
+            T::zero(),
+        );
+        let gradient_workers = if n_rows.saturating_mul(n_parameters) >= PARALLEL_VECTOR_WORK {
+            rayon::current_num_threads().min(n_rows)
+        } else {
+            0
+        };
+        self.partial_gradients.resize(
+            n_parameters
+                .checked_mul(gradient_workers)
+                .ok_or(CoreError::SizeOverflow)?,
+            T::zero(),
+        );
         self.gradient.resize(n_parameters, T::zero());
         self.hessian.resize(matrix_length, T::zero());
         self.gram.resize(matrix_length, T::zero());
@@ -305,14 +386,9 @@ impl<T: CpuScalar, S: DenseSolver<T>> CpuEngine<T, S> {
             Penalty::L1 => self.solve_l1(batch, state, config, lambda_value, n_total)?,
         };
 
-        residual(
-            batch.x_design,
-            batch.n_rows,
-            n_parameters,
-            &solution.coefficients,
-            batch.y,
-            &mut self.workspace.residual,
-        );
+        // Every successful solver exit leaves `workspace.residual` evaluated
+        // at the returned coefficients. Reuse it for final information rather
+        // than issuing another full X @ beta pass per batch.
         smoothed_curvature(
             &self.workspace.residual,
             config.tau,
@@ -323,6 +399,7 @@ impl<T: CpuScalar, S: DenseSolver<T>> CpuEngine<T, S> {
             batch,
             &self.workspace.curvature,
             &mut self.workspace.weighted_design,
+            &mut self.workspace.partial_grams,
             &mut self.workspace.gram,
         )?;
         let information = state
@@ -431,6 +508,14 @@ impl<T: CpuScalar, S: DenseSolver<T>> CpuEngine<T, S> {
                 step *= 0.5;
             }
             if !accepted {
+                residual(
+                    batch.x_design,
+                    batch.n_rows,
+                    batch.n_parameters,
+                    &beta,
+                    batch.y,
+                    &mut self.workspace.residual,
+                );
                 return Ok(SolverResult {
                     coefficients: beta,
                     iterations: iteration,
@@ -485,7 +570,14 @@ impl<T: CpuScalar, S: DenseSolver<T>> CpuEngine<T, S> {
         let mut phi = 1.0_f64;
 
         for iteration in 1..=config.max_iter {
-            gradient_only(batch, &beta, state, config, n_total, &mut self.workspace)?;
+            gradient_from_current_residual(
+                batch,
+                &beta,
+                state,
+                config,
+                n_total,
+                &mut self.workspace,
+            )?;
             let mut accepted = false;
             let mut candidate_objective = objective;
             for _ in 0..40 {
@@ -528,6 +620,14 @@ impl<T: CpuScalar, S: DenseSolver<T>> CpuEngine<T, S> {
                 phi *= 2.0;
             }
             if !accepted {
+                residual(
+                    batch.x_design,
+                    batch.n_rows,
+                    batch.n_parameters,
+                    &beta,
+                    batch.y,
+                    &mut self.workspace.residual,
+                );
                 return Ok(SolverResult {
                     coefficients: beta,
                     iterations: iteration,
@@ -598,8 +698,15 @@ pub fn predict<T: CpuScalar>(
         ));
     }
     let mut result = vec![T::zero(); n_rows];
-    for (row, output) in x_design.chunks_exact(n_parameters).zip(result.iter_mut()) {
-        *output = dot(row, coefficients);
+    if x_design.len() < PARALLEL_VECTOR_WORK {
+        for (row, output) in x_design.chunks_exact(n_parameters).zip(result.iter_mut()) {
+            *output = dot(row, coefficients);
+        }
+    } else {
+        result.par_iter_mut().enumerate().for_each(|(row, output)| {
+            let start = row * n_parameters;
+            *output = dot(&x_design[start..start + n_parameters], coefficients);
+        });
     }
     Ok(result)
 }
@@ -625,12 +732,27 @@ fn residual<T: CpuScalar>(
     output: &mut [T],
 ) {
     debug_assert_eq!(output.len(), n_rows);
-    for ((row, target), result) in x_design
-        .chunks_exact(n_parameters)
-        .zip(y.iter())
-        .zip(output.iter_mut())
-    {
-        *result = *target - dot(row, beta);
+    debug_assert_eq!(x_design.len(), n_rows * n_parameters);
+    debug_assert_eq!(beta.len(), n_parameters);
+    // Keep latency-sized calls on the current thread. For larger matrices,
+    // partition by rows: this avoids the packing cost of treating GEMV as a
+    // degenerate GEMM and gives each worker a long, contiguous dot product.
+    if n_rows.saturating_mul(n_parameters) < PARALLEL_VECTOR_WORK {
+        for ((row, target), result) in x_design
+            .chunks_exact(n_parameters)
+            .zip(y.iter())
+            .zip(output.iter_mut())
+        {
+            *result = *target - dot(row, beta);
+        }
+    } else {
+        output
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(row_index, result)| {
+                let offset = row_index * n_parameters;
+                *result = y[row_index] - dot(&x_design[offset..offset + n_parameters], beta);
+            });
     }
 }
 
@@ -682,27 +804,78 @@ fn weighted_gram<T: CpuScalar>(
     batch: BatchView<'_, T>,
     curvature: &[T],
     weighted_design: &mut [T],
+    partial_grams: &mut [T],
     output: &mut [T],
 ) -> Result<(), CoreError> {
     let p = batch.n_parameters;
-    for (row_index, (input_row, weighted_row)) in batch
-        .x_design
-        .chunks_exact(p)
-        .zip(weighted_design.chunks_exact_mut(p))
+    if batch.n_rows.saturating_mul(p) < PARALLEL_VECTOR_WORK {
+        for (row_index, (input_row, weighted_row)) in batch
+            .x_design
+            .chunks_exact(p)
+            .zip(weighted_design.chunks_exact_mut(p))
+            .enumerate()
+        {
+            let weight = curvature[row_index]
+                * batch
+                    .sample_weight
+                    .map_or(T::one(), |weights| weights[row_index]);
+            for (weighted_value, input_value) in weighted_row.iter_mut().zip(input_row.iter()) {
+                *weighted_value = *input_value * weight;
+            }
+        }
+    } else {
+        weighted_design
+            .par_chunks_mut(p)
+            .enumerate()
+            .for_each(|(row_index, weighted_row)| {
+                let input_row = &batch.x_design[row_index * p..(row_index + 1) * p];
+                let weight = curvature[row_index]
+                    * batch
+                        .sample_weight
+                        .map_or(T::one(), |weights| weights[row_index]);
+                for (weighted_value, input_value) in weighted_row.iter_mut().zip(input_row.iter()) {
+                    *weighted_value = *input_value * weight;
+                }
+            });
+    }
+    let matrix_length = p.checked_mul(p).ok_or(CoreError::SizeOverflow)?;
+    let workers = partial_grams.len() / matrix_length;
+    let workload = batch.n_rows.saturating_mul(matrix_length);
+    if workers <= 1 || workload < PARALLEL_GRAM_WORK {
+        return T::weighted_gram_gemm(batch.x_design, weighted_design, batch.n_rows, p, output);
+    }
+
+    let rows_per_worker = batch.n_rows.div_ceil(workers);
+    partial_grams
+        .par_chunks_mut(matrix_length)
         .enumerate()
-    {
-        let weight = curvature[row_index]
-            * batch
-                .sample_weight
-                .map_or(T::one(), |weights| weights[row_index]);
-        for (weighted_value, input_value) in weighted_row.iter_mut().zip(input_row.iter()) {
-            *weighted_value = *input_value * weight;
+        .try_for_each(|(worker, partial)| {
+            let row_start = worker * rows_per_worker;
+            let row_end = (row_start + rows_per_worker).min(batch.n_rows);
+            if row_start == row_end {
+                partial.fill(T::zero());
+                return Ok(());
+            }
+            let value_start = row_start * p;
+            let value_end = row_end * p;
+            T::weighted_gram_gemm(
+                &batch.x_design[value_start..value_end],
+                &weighted_design[value_start..value_end],
+                row_end - row_start,
+                p,
+                partial,
+            )
+        })?;
+    output.fill(T::zero());
+    for partial in partial_grams.chunks_exact(matrix_length) {
+        for (total, value) in output.iter_mut().zip(partial.iter()) {
+            *total += *value;
         }
     }
-    T::weighted_gram_gemm(batch.x_design, weighted_design, batch.n_rows, p, output)
+    Ok(())
 }
 
-fn gradient_only<T: CpuScalar>(
+fn gradient_from_current_residual<T: CpuScalar>(
     batch: BatchView<'_, T>,
     beta: &[T],
     state: &State<T>,
@@ -710,17 +883,21 @@ fn gradient_only<T: CpuScalar>(
     n_total: f64,
     workspace: &mut Workspace<T>,
 ) -> Result<(), CoreError> {
-    residual(
-        batch.x_design,
-        batch.n_rows,
-        batch.n_parameters,
-        beta,
-        batch.y,
-        &mut workspace.residual,
-    );
+    // L1's preceding smooth-objective evaluation used the same `beta` and
+    // leaves its residual in the workspace. Each accepted candidate objective
+    // establishes the invariant again for the next iteration, eliminating one
+    // full X @ beta pass per proximal iteration without changing arithmetic.
     let tau = scalar_from_f64::<T>(config.tau)?;
-    for (score, value) in workspace.score.iter_mut().zip(workspace.residual.iter()) {
-        *score = huber_score(*value, tau);
+    for (row, (score, value)) in workspace
+        .score
+        .iter_mut()
+        .zip(workspace.residual.iter())
+        .enumerate()
+    {
+        // Store the frequency weight in the score so the subsequent
+        // parallel X.T @ score reduction applies it exactly once.
+        let sample_weight = batch.sample_weight.map_or(T::one(), |weights| weights[row]);
+        *score = huber_score(*value, tau) * sample_weight;
     }
     gradient_from_score(batch, beta, state, config, n_total, workspace)
 }
@@ -743,8 +920,15 @@ fn gradient_and_hessian<T: CpuScalar>(
         &mut workspace.residual,
     );
     let tau = scalar_from_f64::<T>(config.tau)?;
-    for (score, value) in workspace.score.iter_mut().zip(workspace.residual.iter()) {
-        *score = huber_score(*value, tau);
+    for (row, (score, value)) in workspace
+        .score
+        .iter_mut()
+        .zip(workspace.residual.iter())
+        .enumerate()
+    {
+        // `gradient_from_score` consumes this already-weighted score.
+        let sample_weight = batch.sample_weight.map_or(T::one(), |weights| weights[row]);
+        *score = huber_score(*value, tau) * sample_weight;
     }
     smoothed_curvature(
         &workspace.residual,
@@ -757,6 +941,7 @@ fn gradient_and_hessian<T: CpuScalar>(
         batch,
         &workspace.curvature,
         &mut workspace.weighted_design,
+        &mut workspace.partial_grams,
         &mut workspace.gram,
     )?;
     let divisor = scalar_from_f64::<T>(n_total)?;
@@ -789,12 +974,64 @@ fn gradient_from_score<T: CpuScalar>(
     let divisor = scalar_from_f64::<T>(n_total)?;
     let historical_scale =
         scalar_from_f64::<T>(state.weight_sum / n_total * state.previous_lambda)?;
-    for parameter in 0..p {
-        let mut current = T::zero();
-        for row in 0..batch.n_rows {
-            let sample_weight = batch.sample_weight.map_or(T::one(), |weights| weights[row]);
-            current += batch.x_design[row * p + parameter] * workspace.score[row] * sample_weight;
+    if batch.n_rows.saturating_mul(p) < PARALLEL_VECTOR_WORK {
+        // Accumulate by row to walk the C-contiguous design matrix once.
+        // The former column-wise reduction repeatedly traversed the same
+        // matrix at a stride of `p`, which was measurably slower than NumPy's
+        // BLAS path for the reference-sized micro-batches.
+        workspace.gradient.fill(T::zero());
+        for (row, score) in batch.x_design.chunks_exact(p).zip(workspace.score.iter()) {
+            for (gradient, value) in workspace.gradient.iter_mut().zip(row.iter()) {
+                *gradient += *value * *score;
+            }
         }
+    } else if config.penalty == Penalty::L1 || prefer_row_chunk_gradient::<T>(p) {
+        // Split by contiguous row ranges and give each worker a private p-wide
+        // accumulator. This reads X exactly once in cache-friendly order. The
+        // previous parameter-parallel implementation made every worker walk
+        // X with a p-element stride, which left much of each cache line unused.
+        let workers = workspace.partial_gradients.len() / p;
+        let rows_per_worker = batch.n_rows.div_ceil(workers);
+        workspace
+            .partial_gradients
+            .par_chunks_mut(p)
+            .enumerate()
+            .for_each(|(worker, partial)| {
+                partial.fill(T::zero());
+                let row_start = worker * rows_per_worker;
+                let row_end = (row_start + rows_per_worker).min(batch.n_rows);
+                for row_index in row_start..row_end {
+                    let row = &batch.x_design[row_index * p..(row_index + 1) * p];
+                    let score = workspace.score[row_index];
+                    for (sum, value) in partial.iter_mut().zip(row.iter()) {
+                        *sum += *value * score;
+                    }
+                }
+            });
+        workspace.gradient.fill(T::zero());
+        for partial in workspace.partial_gradients.chunks_exact(p) {
+            for (sum, value) in workspace.gradient.iter_mut().zip(partial.iter()) {
+                *sum += *value;
+            }
+        }
+    } else {
+        // A private p-wide accumulator per worker stops fitting comfortably in
+        // cache for wider f64 designs. Parameter partitioning wins there even
+        // with its strided access pattern, so retain the established path.
+        workspace
+            .gradient
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(parameter, current)| {
+                *current = batch
+                    .x_design
+                    .chunks_exact(p)
+                    .zip(workspace.score.iter())
+                    .fold(T::zero(), |sum, (row, score)| sum + row[parameter] * *score);
+            });
+    }
+    for parameter in 0..p {
+        let current = workspace.gradient[parameter];
         let historical = dot(
             &state.information[parameter * p..(parameter + 1) * p],
             &workspace.delta,
@@ -809,6 +1046,14 @@ fn gradient_from_score<T: CpuScalar>(
         workspace.gradient[parameter] = gradient;
     }
     Ok(())
+}
+
+fn prefer_row_chunk_gradient<T>(n_parameters: usize) -> bool {
+    if std::mem::size_of::<T>() == std::mem::size_of::<f32>() {
+        n_parameters <= 128
+    } else {
+        n_parameters <= 64
+    }
 }
 
 fn smooth_objective<T: CpuScalar>(
@@ -946,6 +1191,85 @@ mod tests {
         let error = f64::weighted_gram_gemm(&[1.0, 2.0], &[1.0, 2.0], 1, 2, &mut [0.0])
             .expect_err("a short output buffer must be rejected before unsafe GEMM");
         assert!(matches!(error, CoreError::InvalidBatch(_)));
+    }
+
+    #[test]
+    fn parallel_weighted_gram_matches_direct_weighted_sum() {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| {
+                let n_rows = 4_096;
+                let p = 64;
+                let x = (0..n_rows * p)
+                    .map(|index| ((index % 97) as f64 - 48.0) / 37.0)
+                    .collect::<Vec<_>>();
+                let y = vec![0.0; n_rows];
+                let curvature = (0..n_rows)
+                    .map(|row| 0.25 + (row % 11) as f64 / 20.0)
+                    .collect::<Vec<_>>();
+                let sample_weight = (0..n_rows)
+                    .map(|row| 0.5 + (row % 7) as f64 / 5.0)
+                    .collect::<Vec<_>>();
+                let batch = BatchView {
+                    x_design: &x,
+                    n_rows,
+                    n_parameters: p,
+                    y: &y,
+                    sample_weight: Some(&sample_weight),
+                    batch_weight: sample_weight.iter().sum(),
+                };
+                let mut workspace = Workspace::<f64>::default();
+                workspace.reserve(n_rows, p).unwrap();
+                weighted_gram(
+                    batch,
+                    &curvature,
+                    &mut workspace.weighted_design,
+                    &mut workspace.partial_grams,
+                    &mut workspace.gram,
+                )
+                .unwrap();
+                assert!(workspace.partial_grams.len() > p * p);
+
+                for row in 0..p {
+                    for column in 0..p {
+                        let expected = (0..n_rows).fold(0.0, |sum, sample| {
+                            let weight = curvature[sample] * sample_weight[sample];
+                            sum + x[sample * p + row] * x[sample * p + column] * weight
+                        });
+                        let actual = workspace.gram[row * p + column];
+                        assert!(
+                            (actual - expected).abs() <= 1.0e-10 * (1.0 + expected.abs()),
+                            "Gram[{row}, {column}] expected {expected}, got {actual}"
+                        );
+                    }
+                }
+            });
+    }
+
+    #[test]
+    fn parallel_predict_matches_single_thread_pool() {
+        let n_rows = 20_000;
+        let n_parameters = 64;
+        assert!(n_rows * n_parameters >= PARALLEL_VECTOR_WORK);
+        let x = (0..n_rows * n_parameters)
+            .map(|index| ((index % 113) as f64 - 56.0) / 31.0)
+            .collect::<Vec<_>>();
+        let coefficients = (0..n_parameters)
+            .map(|index| ((index % 17) as f64 - 8.0) / 19.0)
+            .collect::<Vec<_>>();
+        let single_thread = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| predict(&x, n_rows, n_parameters, &coefficients).unwrap());
+        let multi_thread = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| predict(&x, n_rows, n_parameters, &coefficients).unwrap());
+        assert_eq!(multi_thread, single_thread);
     }
 
     #[test]

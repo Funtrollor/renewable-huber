@@ -19,8 +19,23 @@ RenewableHuberRegressor(
     backend="auto",  # 預設 NumPy；只有 device="cuda" 時選 CuPy
     device="auto",
     dtype="float64",  # CPU precision；GPU 可使用 float32 加速
+    n_jobs=None,
 )
 ```
+
+`n_jobs` 只控制 `backend="native_cpu"`。允許 `None`（使用 extension
+預設值）、`-1`（使用 `os.cpu_count()` 回報的全部邏輯 CPU，且至少為 1），
+或正整數。布林值、0、小於 `-1` 與非整數都會被拒絕。`get_params`、
+scikit-learn clone 與 checkpoint 會保留原始設定；完成 fit 後，`n_jobs_`
+會回報 native engine 實際使用的 worker 數。其他 backend 不受此參數影響，
+其 `n_jobs_` 為 `None`。
+
+明確設定 `n_jobs=-1` 或正整數時，每個 native CPU estimator 擁有自己的
+Rayon thread pool；`None` 則沿用 extension 的共享 pool。若外層已由 joblib、
+`GridSearchCV(n_jobs=...)` 或其他工作排程器同時訓練多個模型，內層
+estimator 應設 `n_jobs=1`；否則巢狀平行可能過度訂閱 CPU，反而降低吞吐量。
+單一模型的最佳 worker 數也可能小於全部邏輯核心，應用正式的 thread-scaling
+benchmark 依代表性資料形狀選擇。
 
 `fit(X, y, sample_weight=None)` 會清空既有狀態並把輸入作為第一批資料處理。`partial_fit(X_batch, y_batch, sample_weight=None)` 必須在後續批次維持相同特徵數量。所有輸入必須是二維有限浮點特徵矩陣與一維有限目標向量。
 
@@ -42,6 +57,7 @@ RenewableHuberRegressor(
 | `n_iter_` | 最近一批更新所使用的 solver 迭代數。 |
 | `backend_` | 實際使用的運算後端。 |
 | `device_` | 實際裝置，例如 `cpu` 或 `cuda:0`。 |
+| `n_jobs_` | Native CPU 實際 worker 數；其他 backend 為 `None`。 |
 | `state_` | 防禦性複製的可續跑狀態。 |
 | `diagnostics_` | 最後一個批次的迭代、收斂、loss、lambda 與 bandwidth。 |
 
@@ -79,7 +95,29 @@ model = RenewableHuberRegressor.load(
 
 ## Backend 與資料順序語意
 
-`backend="auto"` 不檢查輸入型別：`device="auto"` 或 `"cpu"` 使用 NumPy，只有 `device="cuda"` 使用 CuPy。Rust CPU P1 必須明確設定 `backend="native_cpu"` 並安裝 `renewable-huber-native-cpu`；Rust/CUDA P2 必須明確設定 `backend="native_cuda"` 並安裝與基礎套件版本相容的 `renewable-huber-native-cuda`。兩個 native engine 都不會由 `auto` 選取。Torch／TensorFlow tensor 工作流也必須明確指定對應 backend。PyTorch 輸入會 detach，因此輸出不屬於呼叫端的 autograd graph；TensorFlow backend 要求 eager execution。
+`backend="auto"` 不檢查輸入型別：`device="auto"` 或 `"cpu"` 使用 NumPy，只有 `device="cuda"` 使用 CuPy。Rust CPU P1 必須明確設定 `backend="native_cpu"` 並安裝 `renewable-huber-native-cpu`；Rust/CUDA 必須明確設定 `backend="native_cuda"` 並安裝與基礎套件版本相容的 `renewable-huber-native-cuda`。`native_cuda` 可接收相容的 NumPy host array，或直接接收位於相同 CUDA device、dtype 完全一致且 C-contiguous 的 DLPack tensor；不會暗中做跨裝置、dtype 或 device-to-host 轉換。兩個 native engine 都不會由 `auto` 選取。Torch／TensorFlow tensor 工作流也必須明確指定對應 backend。PyTorch 輸入會 detach，因此輸出不屬於呼叫端的 autograd graph；TensorFlow backend 要求 eager execution。
+
+`cuda_graphs=True` 僅調校 `native_cuda`，並在不支援 capture 時安全回退；
+`cuda_fast_math=True` 另要求 `dtype="float32"`，允許 TF32 誤差契約。兩者預設
+皆為 `False`，實際 capability 與計數可從 fitted model 的
+`cuda_features_` 讀取。
+
+### Native CUDA 零拷貝 batch
+
+`native_cuda` 的 `fit`／`partial_fit` 可直接消費 CuPy array、PyTorch CUDA
+tensor 或 TensorFlow eager GPU tensor。`X`、`y` 與非空的 `sample_weight`
+必須全部使用 device input 或全部使用 host input，不可混用。Device input
+不會轉 dtype、不會改 device，也不會建立 contiguous copy；條件不符時會直接
+報錯。PyTorch `requires_grad=True` 輸入會先建立共享原 storage 的 `detach()`
+view，本 estimator 不會加入 autograd graph。
+
+CuPy 與 PyTorch 的 producer 會收到 native engine 私有 CUDA stream handle；
+extension 在完成 device-to-device workspace copy 後才釋放並且只釋放一次
+DLPack capsule。TensorFlow 的 legacy exporter 沒有 consumer-stream 參數，
+因此 adapter 在 export 前以 `tf.experimental.async_wait()` 建立安全邊界；若
+該 API 不存在，只允許已明確啟用 synchronous eager execution。這項同步不會
+複製 tensor storage。Device-resident `predict` 尚未實作，傳入 CUDA tensor
+會明確報錯，不會偷偷搬回 host；目前需由呼叫端明確傳入 host prediction array。
 
 Renewable 更新使用上一批的係數與累積資訊矩陣。批次邊界與觀測順序因此是運算語意的一部分；不同分批、重排後的串流與一次性 `fit` 不保證逐位元相同。需要可重現續跑時，應固定 backend、dtype、批次切法、順序，並由 checkpoint 後接續相同的剩餘批次。
 

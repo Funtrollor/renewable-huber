@@ -139,6 +139,8 @@ def _metadata(
             "repeats": args.repeats,
             "max_iter": args.max_iter,
             "tol": args.tol,
+            "cuda_graphs": args.cuda_graphs,
+            "cuda_fast_math": args.cuda_fast_math,
             "seed": args.seed,
             "resident_engine": args.engine == "native_cuda",
             "includes_engine_initialization": args.engine != "native_cuda",
@@ -171,6 +173,8 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--max-iter", type=int, default=100)
     parser.add_argument("--tol", type=float, default=1e-6)
+    parser.add_argument("--cuda-graphs", action="store_true")
+    parser.add_argument("--cuda-fast-math", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--metadata-output", type=Path)
     args = parser.parse_args()
@@ -184,6 +188,10 @@ def main() -> int:
         parser.error("sizes and repeats must be positive; warmup must be non-negative")
     if args.engine == "native_cuda" and args.penalty != "none":
         parser.error("the P2 native CUDA engine currently supports only penalty='none'")
+    if (args.cuda_graphs or args.cuda_fast_math) and args.engine != "native_cuda":
+        parser.error("CUDA tuning flags require --engine native_cuda")
+    if args.cuda_fast_math and args.dtype != "float32":
+        parser.error("--cuda-fast-math requires --dtype float32")
     if args.engine == "native_cuda" and args.input_location != "host":
         parser.error("the P2 native CUDA engine accepts host input; use --input-location host")
 
@@ -217,6 +225,8 @@ def main() -> int:
                 penalty=args.penalty,
                 max_iter=args.max_iter,
                 tol=args.tol,
+                cuda_graphs=args.cuda_graphs,
+                cuda_fast_math=args.cuda_fast_math,
             )
             # Prime CUDA handles and the maximum batch workspace once. This
             # mirrors the shape-sweep protocol and is deliberately outside

@@ -1,9 +1,9 @@
-//! PyO3 boundary for the optional host-fed CUDA P2 engine.
+//! PyO3 boundary for the optional host/DLPack CUDA engine.
 //!
 //! Python remains responsible for public estimator validation and for
-//! calculating `batch_weight`.  This extension accepts only C-contiguous
-//! NumPy `float32`/`float64` arrays and forwards one fully validated batch to
-//! the safe Rust CUDA wrapper.
+//! calculating `batch_weight`. This extension accepts C-contiguous NumPy host
+//! arrays or CUDA DLPack tensors in strict `float32`/`float64`, then forwards
+//! one fully validated batch to the safe Rust CUDA wrapper.
 
 use numpy::{ndarray::Array2, IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -11,11 +11,170 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
 use rh_cuda_ffi::{
     device_count as cuda_device_count, is_available as cuda_is_available, runtime_info, CudaDtype,
-    CudaEngine, CudaError, CudaScalar, Diagnostics, HostBatch, HostMatrix, HostState, HostVector,
-    StateMetadata, UnpenalizedConfig,
+    CudaEngine, CudaError, CudaScalar, DeviceBatch, Diagnostics, EngineTuning, HostBatch,
+    HostMatrix, HostState, HostVector, StateMetadata, UnpenalizedConfig,
 };
 
-const PYTHON_API_VERSION: u32 = 2;
+const PYTHON_API_VERSION: u32 = 3;
+
+const DL_DEVICE_CUDA: i32 = 2;
+const DL_DTYPE_FLOAT: u8 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DlDevice {
+    device_type: i32,
+    device_id: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DlDataType {
+    code: u8,
+    bits: u8,
+    lanes: u16,
+}
+
+#[repr(C)]
+struct DlTensor {
+    data: *mut std::ffi::c_void,
+    device: DlDevice,
+    ndim: i32,
+    dtype: DlDataType,
+    shape: *mut i64,
+    strides: *mut i64,
+    byte_offset: u64,
+}
+
+#[repr(C)]
+struct DlManagedTensor {
+    dl_tensor: DlTensor,
+    manager_ctx: *mut std::ffi::c_void,
+    deleter: Option<unsafe extern "C" fn(*mut DlManagedTensor)>,
+}
+
+/// Owns one consumed legacy DLPack capsule until the native CUDA call returns.
+struct DlpackTensor {
+    _capsule: Py<PyAny>,
+    managed: *mut DlManagedTensor,
+    address: usize,
+    shape: Vec<usize>,
+}
+
+impl DlpackTensor {
+    #[allow(clippy::too_many_arguments)]
+    fn consume(
+        py: Python<'_>,
+        value: &Bound<'_, PyAny>,
+        stream: usize,
+        expected_dtype: CudaDtype,
+        expected_device: i32,
+        expected_ndim: usize,
+        name: &str,
+    ) -> PyResult<Self> {
+        let device: (i32, i32) = value
+            .call_method0("__dlpack_device__")
+            .and_then(|result| result.extract())
+            .map_err(|_| PyTypeError::new_err(format!("{name} must implement CUDA DLPack")))?;
+        if device != (DL_DEVICE_CUDA, expected_device) {
+            return Err(PyValueError::new_err(format!(
+                "{name} must be on CUDA device {expected_device}"
+            )));
+        }
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("stream", stream)?;
+        let capsule = value.call_method("__dlpack__", (), Some(&kwargs))?;
+        let managed = unsafe {
+            pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), c"dltensor".as_ptr())
+                as *mut DlManagedTensor
+        };
+        if managed.is_null() {
+            return Err(PyTypeError::new_err(format!(
+                "{name} returned an invalid or already-consumed DLPack capsule"
+            )));
+        }
+        let tensor = unsafe { &(*managed).dl_tensor };
+        if tensor.device.device_type != DL_DEVICE_CUDA || tensor.device.device_id != expected_device
+        {
+            return Err(PyValueError::new_err(format!(
+                "{name} DLPack tensor is on the wrong CUDA device"
+            )));
+        }
+        let expected_bits = match expected_dtype {
+            CudaDtype::Float32 => 32,
+            CudaDtype::Float64 => 64,
+        };
+        if tensor.dtype.code != DL_DTYPE_FLOAT
+            || tensor.dtype.bits != expected_bits
+            || tensor.dtype.lanes != 1
+        {
+            return Err(PyTypeError::new_err(format!(
+                "{name} DLPack dtype must exactly match {}",
+                expected_dtype.name()
+            )));
+        }
+        if tensor.ndim != expected_ndim as i32 || tensor.shape.is_null() {
+            return Err(PyValueError::new_err(format!(
+                "{name} must be a {expected_ndim}-dimensional tensor"
+            )));
+        }
+        let raw_shape = unsafe { std::slice::from_raw_parts(tensor.shape, expected_ndim) };
+        let shape = raw_shape
+            .iter()
+            .map(|&dimension| {
+                usize::try_from(dimension).map_err(|_| {
+                    PyValueError::new_err(format!("{name} has an invalid negative dimension"))
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        if shape.contains(&0) {
+            return Err(PyValueError::new_err(format!("{name} must not be empty")));
+        }
+        if !tensor.strides.is_null() {
+            let strides = unsafe { std::slice::from_raw_parts(tensor.strides, expected_ndim) };
+            let mut expected_stride = 1i64;
+            for axis in (0..expected_ndim).rev() {
+                if strides[axis] != expected_stride {
+                    return Err(PyValueError::new_err(format!(
+                        "{name} must be C-contiguous for native CUDA"
+                    )));
+                }
+                expected_stride = expected_stride
+                    .checked_mul(raw_shape[axis])
+                    .ok_or_else(|| PyValueError::new_err(format!("{name} shape is too large")))?;
+            }
+        }
+        let base = tensor.data as usize;
+        let offset = usize::try_from(tensor.byte_offset)
+            .map_err(|_| PyValueError::new_err(format!("{name} byte offset is too large")))?;
+        let address = base
+            .checked_add(offset)
+            .filter(|address| *address != 0)
+            .ok_or_else(|| PyValueError::new_err(format!("{name} has an invalid data pointer")))?;
+        let rename_status =
+            unsafe { pyo3::ffi::PyCapsule_SetName(capsule.as_ptr(), c"used_dltensor".as_ptr()) };
+        if rename_status != 0 {
+            return Err(PyRuntimeError::new_err(format!(
+                "unable to claim {name} DLPack capsule"
+            )));
+        }
+        Ok(Self {
+            _capsule: capsule.unbind(),
+            managed,
+            address,
+            shape,
+        })
+    }
+}
+
+impl Drop for DlpackTensor {
+    fn drop(&mut self) {
+        let deleter = unsafe { (*self.managed).deleter };
+        if let Some(deleter) = deleter {
+            unsafe { deleter(self.managed) };
+        }
+    }
+}
 
 /// Host-fed adapter for one persistent, single-device native CUDA engine.
 ///
@@ -30,10 +189,25 @@ struct NativeCudaEngine {
 #[pymethods]
 impl NativeCudaEngine {
     #[new]
-    #[pyo3(signature = (dtype, n_parameters, device_id=0))]
-    fn new(dtype: &str, n_parameters: usize, device_id: i32) -> PyResult<Self> {
+    #[pyo3(signature = (dtype, n_parameters, device_id=0, cuda_graphs=false, fast_math=false))]
+    fn new(
+        dtype: &str,
+        n_parameters: usize,
+        device_id: i32,
+        cuda_graphs: bool,
+        fast_math: bool,
+    ) -> PyResult<Self> {
         let dtype = CudaDtype::parse(dtype).map_err(to_py_error)?;
-        let engine = CudaEngine::create(dtype, n_parameters, device_id).map_err(to_py_error)?;
+        let engine = CudaEngine::create_with_tuning(
+            dtype,
+            n_parameters,
+            device_id,
+            EngineTuning {
+                cuda_graphs,
+                fast_math,
+            },
+        )
+        .map_err(to_py_error)?;
         Ok(Self { engine })
     }
 
@@ -50,6 +224,19 @@ impl NativeCudaEngine {
     #[getter]
     fn device_id(&self) -> i32 {
         self.engine.device_id()
+    }
+
+    fn features<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let features = self.engine.features().map_err(to_py_error)?;
+        let result = PyDict::new(py);
+        result.set_item("cuda_graphs_requested", features.requested.cuda_graphs)?;
+        result.set_item("cuda_graphs_enabled", features.enabled.cuda_graphs)?;
+        result.set_item("fast_math_requested", features.requested.fast_math)?;
+        result.set_item("fast_math_enabled", features.enabled.fast_math)?;
+        result.set_item("graph_captures", features.graph_captures)?;
+        result.set_item("graph_replays", features.graph_replays)?;
+        result.set_item("graph_fallbacks", features.graph_fallbacks)?;
+        Ok(result)
     }
 
     /// Restore host checkpoint state into persistent device allocations.
@@ -163,6 +350,72 @@ impl NativeCudaEngine {
         }
     }
 
+    /// Consume CUDA tensors through the Python DLPack protocol. The producer
+    /// is asked to make this engine's private stream a valid consumer stream;
+    /// no host staging or implicit dtype/device conversion is performed.
+    #[pyo3(signature = (
+        x_design,
+        y,
+        sample_weight,
+        batch_weight,
+        n_features_in,
+        fit_intercept,
+        tau,
+        bandwidth_scale,
+        max_iter,
+        tol,
+        ridge,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn update_device<'py>(
+        &mut self,
+        py: Python<'py>,
+        x_design: &Bound<'py, PyAny>,
+        y: &Bound<'py, PyAny>,
+        sample_weight: Option<&Bound<'py, PyAny>>,
+        batch_weight: f64,
+        n_features_in: i64,
+        fit_intercept: bool,
+        tau: f64,
+        bandwidth_scale: f64,
+        max_iter: i64,
+        tol: f64,
+        ridge: f64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let config = UnpenalizedConfig {
+            n_features_in,
+            fit_intercept,
+            tau,
+            bandwidth_scale,
+            max_iter,
+            tolerance: tol,
+            ridge,
+        };
+        let stream = self.engine.stream_handle().map_err(to_py_error)?;
+        match self.engine.dtype() {
+            CudaDtype::Float32 => update_device_typed::<f32>(
+                py,
+                &mut self.engine,
+                stream,
+                x_design,
+                y,
+                sample_weight,
+                batch_weight,
+                config,
+            ),
+            CudaDtype::Float64 => update_device_typed::<f64>(
+                py,
+                &mut self.engine,
+                stream,
+                x_design,
+                y,
+                sample_weight,
+                batch_weight,
+                config,
+            ),
+        }
+    }
+
     /// Predict from a C-contiguous host design matrix and return a NumPy array
     /// in this engine's strict dtype.
     fn predict<'py>(
@@ -210,6 +463,12 @@ fn version<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     result.set_item("abi_version", rh_cuda_ffi::ABI_VERSION)?;
     result.set_item("python_api_version", PYTHON_API_VERSION)?;
     result.set_item("engine_version", env!("CARGO_PKG_VERSION"))?;
+    result.set_item("initial_state", "canonical_empty")?;
+    result.set_item("device_input", "dlpack")?;
+    result.set_item("cuda_graphs", "opt_in_best_effort")?;
+    result.set_item("fast_math", "opt_in_float32_tf32")?;
+    result.set_item("supports_cuda_graphs", true)?;
+    result.set_item("supports_fast_math", true)?;
     result.set_item("cuda_available", cuda_is_available())?;
     match runtime_info() {
         Ok(info) => {
@@ -297,9 +556,15 @@ fn update_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
         )?)),
         None => None,
     };
-    let diagnostics = py
+    let n_parameters = engine.n_parameters();
+    let information_len = n_parameters
+        .checked_mul(n_parameters)
+        .ok_or_else(|| PyValueError::new_err("n_parameters squared overflows usize"))?;
+    let mut coefficients = vec![T::default(); n_parameters];
+    let mut information = vec![T::default(); information_len];
+    let (diagnostics, metadata) = py
         .allow_threads(|| {
-            engine.update(
+            engine.update_with_state(
                 HostBatch {
                     x_design: x_matrix,
                     y: y_vector,
@@ -307,10 +572,83 @@ fn update_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
                     batch_weight,
                 },
                 config,
+                &mut coefficients,
+                &mut information,
             )
         })
         .map_err(to_py_error)?;
-    let result = state_dict_typed::<T>(py, engine)?;
+    let result = state_dict_from_parts(py, n_parameters, coefficients, information, metadata)?;
+    // These arrays were allocated specifically for this return value and do
+    // not alias the engine's resident device state or mutable host scratch.
+    // The Python adapter can therefore adopt them without a second p + p^2
+    // host copy while retaining the defensive-copy fallback for test doubles
+    // and older extension builds that do not advertise detached ownership.
+    result.set_item("state_is_detached", true)?;
+    add_diagnostics(&result, diagnostics)?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_device_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
+    py: Python<'py>,
+    engine: &mut CudaEngine,
+    stream: usize,
+    x_design: &Bound<'py, PyAny>,
+    y: &Bound<'py, PyAny>,
+    sample_weight: Option<&Bound<'py, PyAny>>,
+    batch_weight: f64,
+    config: UnpenalizedConfig,
+) -> PyResult<Bound<'py, PyDict>> {
+    let expected = engine.dtype();
+    let device_id = engine.device_id();
+    let x = DlpackTensor::consume(py, x_design, stream, expected, device_id, 2, "X_design")?;
+    let target = DlpackTensor::consume(py, y, stream, expected, device_id, 1, "y")?;
+    if target.shape[0] != x.shape[0] {
+        return Err(PyValueError::new_err(
+            "X_design and y must have the same number of rows",
+        ));
+    }
+    let weight = match sample_weight {
+        Some(value) => {
+            let tensor =
+                DlpackTensor::consume(py, value, stream, expected, device_id, 1, "sample_weight")?;
+            if tensor.shape[0] != x.shape[0] {
+                return Err(PyValueError::new_err(
+                    "sample_weight and X_design must have the same number of rows",
+                ));
+            }
+            Some(tensor)
+        }
+        None => None,
+    };
+    let n_parameters = engine.n_parameters();
+    let information_len = n_parameters
+        .checked_mul(n_parameters)
+        .ok_or_else(|| PyValueError::new_err("n_parameters squared overflows usize"))?;
+    let mut coefficients = vec![T::default(); n_parameters];
+    let mut information = vec![T::default(); information_len];
+    let batch = DeviceBatch {
+        x_address: x.address,
+        y_address: target.address,
+        sample_weight_address: weight.as_ref().map(|tensor| tensor.address),
+        n_rows: x.shape[0],
+        n_columns: x.shape[1],
+        batch_weight,
+    };
+    // The three capsule owners remain alive across this GIL release. Their
+    // producer deleters run only after the CUDA ABI has completed its D2D
+    // copies and committed the state.
+    let (diagnostics, metadata) = py
+        .allow_threads(|| {
+            engine.update_device_with_state::<T>(batch, config, &mut coefficients, &mut information)
+        })
+        .map_err(to_py_error)?;
+    drop(weight);
+    drop(target);
+    drop(x);
+    let result = state_dict_from_parts(py, n_parameters, coefficients, information, metadata)?;
+    result.set_item("state_is_detached", true)?;
+    result.set_item("input_transport", "dlpack")?;
     add_diagnostics(&result, diagnostics)?;
     Ok(result)
 }
@@ -334,8 +672,11 @@ fn state_dict_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>
     engine: &mut CudaEngine,
 ) -> PyResult<Bound<'py, PyDict>> {
     let n_parameters = engine.n_parameters();
+    let information_len = n_parameters
+        .checked_mul(n_parameters)
+        .ok_or_else(|| PyValueError::new_err("n_parameters squared overflows usize"))?;
     let mut coefficients = vec![T::default(); n_parameters];
-    let mut information = vec![T::default(); n_parameters * n_parameters];
+    let mut information = vec![T::default(); information_len];
     let metadata = py
         .allow_threads(|| engine.copy_state(&mut coefficients, &mut information))
         .map_err(to_py_error)?;

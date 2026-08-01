@@ -15,6 +15,7 @@ import renewable_huber
 from renewable_huber import RenewableHuberRegressor
 from renewable_huber.backends import resolve_backend
 from renewable_huber.exceptions import BackendUnavailableError, NotFittedError, ValidationError
+from renewable_huber.state import RenewableHuberState
 
 CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v1.json"
 NATIVE_TOLERANCES = {
@@ -40,8 +41,19 @@ def _native_cpu_ready() -> bool:
         from renewable_huber import _native_cpu
 
         version = _native_cpu.version()
-        return version.get("abi_version") == 1 and version.get("python_api_version") == 1
+        return version.get("abi_version") == 1 and version.get("python_api_version") == 2
     except (ImportError, OSError, RuntimeError):
+        return False
+
+
+def _native_cuda_cupy_ready() -> bool:
+    if not _native_cuda_ready():
+        return False
+    try:
+        import cupy as cp
+
+        return cp.cuda.runtime.getDeviceCount() > 0
+    except (ImportError, RuntimeError):
         return False
 
 
@@ -50,7 +62,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
         unavailable = types.SimpleNamespace(
             is_available=lambda: False,
             device_count=lambda: 0,
-            version=lambda: {"abi_version": 1, "python_api_version": 2},
+            version=lambda: {"abi_version": 1, "python_api_version": 3},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": unavailable}),
@@ -72,9 +84,144 @@ class NativeCudaSelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(BackendUnavailableError, "incompatible"):
                 resolve_backend("native_cuda", device="cuda")
 
+    def test_requested_tuning_requires_advertised_capability(self) -> None:
+        extension = types.SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            version=lambda: {
+                "abi_version": 1,
+                "python_api_version": 3,
+                "supports_cuda_graphs": False,
+                "supports_fast_math": False,
+            },
+        )
+        with (
+            mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": extension}),
+            mock.patch.object(renewable_huber, "_native_cuda", extension, create=True),
+        ):
+            with self.assertRaisesRegex(BackendUnavailableError, "Graph"):
+                resolve_backend("native_cuda", device="cuda", cuda_graphs=True)
+            with self.assertRaisesRegex(BackendUnavailableError, "fast-math"):
+                resolve_backend(
+                    "native_cuda",
+                    device="cuda",
+                    dtype="float32",
+                    cuda_fast_math=True,
+                )
+
     def test_native_cuda_rejects_cpu_device(self) -> None:
         with self.assertRaisesRegex(BackendUnavailableError, "requires a CUDA device"):
             resolve_backend("native_cuda", device="cpu")
+
+    def test_cuda_tuning_reaches_engine_and_reports_capabilities(self) -> None:
+        received: dict[str, object] = {}
+
+        class FakeEngine:
+            def __init__(
+                self,
+                dtype: str,
+                n_parameters: int,
+                device_id: int,
+                **tuning: object,
+            ) -> None:
+                received.update(
+                    dtype=dtype,
+                    n_parameters=n_parameters,
+                    device_id=device_id,
+                    **tuning,
+                )
+
+            def features(self) -> dict[str, object]:
+                return {
+                    "cuda_graphs_requested": True,
+                    "cuda_graphs_enabled": True,
+                    "fast_math_requested": True,
+                    "fast_math_enabled": True,
+                    "graph_captures": 0,
+                    "graph_replays": 0,
+                    "graph_fallbacks": 0,
+                }
+
+        extension = types.SimpleNamespace(
+            NativeCudaEngine=FakeEngine,
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            version=lambda: {
+                "abi_version": 1,
+                "python_api_version": 3,
+                "initial_state": "canonical_empty",
+                "supports_cuda_graphs": True,
+                "supports_fast_math": True,
+            },
+        )
+        with (
+            mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": extension}),
+            mock.patch.object(renewable_huber, "_native_cuda", extension, create=True),
+        ):
+            backend = resolve_backend(
+                "native_cuda",
+                device="cuda",
+                dtype="float32",
+                cuda_graphs=True,
+                cuda_fast_math=True,
+            )
+            self.assertFalse(backend.cuda_features["cuda_graphs_enabled"])
+            self.assertFalse(backend.cuda_features["fast_math_enabled"])
+            state = RenewableHuberState.empty(2, fit_intercept=False, xp=np, dtype=np.float32)
+            backend.restore_native_state(state)
+
+        self.assertTrue(received["cuda_graphs"])
+        self.assertTrue(received["fast_math"])
+        self.assertTrue(backend.cuda_features["cuda_graphs_enabled"])
+
+    def test_resident_engine_restores_distinct_state_with_same_batch_count(self) -> None:
+        restore_calls = 0
+
+        class FakeEngine:
+            def __init__(self, dtype: str, n_parameters: int, device_id: int) -> None:
+                del device_id
+                self.dtype = np.dtype(dtype)
+                self.coefficients = np.zeros(n_parameters, dtype=self.dtype)
+
+            def restore(
+                self,
+                coefficients: np.ndarray,
+                information: np.ndarray,
+                n_samples_seen: int,
+                batch_count: int,
+                previous_lambda: float,
+                weight_sum: float,
+            ) -> None:
+                nonlocal restore_calls
+                del information, n_samples_seen, batch_count, previous_lambda, weight_sum
+                restore_calls += 1
+                self.coefficients = coefficients.copy()
+
+            def predict(self, X: np.ndarray) -> np.ndarray:
+                return X @ self.coefficients
+
+        extension = types.SimpleNamespace(
+            NativeCudaEngine=FakeEngine,
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            version=lambda: {"abi_version": 1, "python_api_version": 3},
+        )
+        with (
+            mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": extension}),
+            mock.patch.object(renewable_huber, "_native_cuda", extension, create=True),
+        ):
+            backend = resolve_backend("native_cuda", device="cuda")
+            first = RenewableHuberState.empty(2, fit_intercept=False, xp=np, dtype=np.float64)
+            second = first.copy()
+            second.coefficients[:] = [2.0, -1.0]
+            X = np.asarray([[3.0, 4.0]], dtype=np.float64)
+
+            np.testing.assert_array_equal(backend.native_predict(X, first), [0.0])
+            np.testing.assert_array_equal(backend.native_predict(X, second), [2.0])
+            np.testing.assert_array_equal(backend.native_predict(X, second), [2.0])
+            self.assertEqual(first.batch_count, second.batch_count)
+            self.assertNotEqual(first.mirror_token, second.mirror_token)
+            self.assertEqual(restore_calls, 2)
 
     def test_engine_initialization_error_is_unavailable_and_not_fitted(self) -> None:
         class BrokenEngine:
@@ -86,7 +233,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=BrokenEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 2},
+            version=lambda: {"abi_version": 1, "python_api_version": 3},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -179,7 +326,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=FakeEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 2},
+            version=lambda: {"abi_version": 1, "python_api_version": 3},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -264,7 +411,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=RecoveringEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 2},
+            version=lambda: {"abi_version": 1, "python_api_version": 3},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -287,6 +434,110 @@ class NativeCudaSelectionTests(unittest.TestCase):
                 model.predict(X)
             np.testing.assert_array_equal(model.predict(X), np.zeros(4))
             self.assertEqual(len(engines), 3)
+
+
+@unittest.skipUnless(_native_cuda_cupy_ready(), "native CUDA, CuPy, and a CUDA device are required")
+class NativeCudaDlpackTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import cupy as cp
+
+        self.cp = cp
+        rng = np.random.default_rng(991)
+        self.X = rng.normal(size=(256, 6)).astype(np.float32)
+        beta = rng.normal(size=6).astype(np.float32)
+        self.y = (self.X @ beta + rng.normal(scale=0.1, size=256)).astype(np.float32)
+
+    def test_dlpack_device_input_matches_host_input_state(self) -> None:
+        weights = np.linspace(0.25, 2.0, self.X.shape[0], dtype=np.float32)
+        config = dict(
+            backend="native_cuda",
+            device="cuda",
+            dtype="float32",
+            fit_intercept=True,
+            max_iter=80,
+        )
+        host = RenewableHuberRegressor(**config).fit(self.X, self.y, sample_weight=weights)
+        device = RenewableHuberRegressor(**config).fit(
+            self.cp.asarray(self.X),
+            self.cp.asarray(self.y),
+            sample_weight=self.cp.asarray(weights),
+        )
+
+        np.testing.assert_allclose(device.coef_, host.coef_, rtol=3e-4, atol=3e-5)
+        self.assertAlmostEqual(device.intercept_, host.intercept_, places=4)
+        np.testing.assert_allclose(
+            device._state.information,
+            host._state.information,
+            rtol=5e-4,
+            atol=5e-4,
+        )
+        self.assertEqual(device.n_samples_seen_, host.n_samples_seen_)
+        self.assertEqual(device._state.effective_weight, host._state.effective_weight)
+
+    def test_dlpack_requires_exact_dtype_and_c_contiguity(self) -> None:
+        wrong_dtype = RenewableHuberRegressor(backend="native_cuda", device="cuda", dtype="float64")
+        with self.assertRaisesRegex(TypeError, "dtype must exactly match"):
+            wrong_dtype.fit(self.cp.asarray(self.X), self.cp.asarray(self.y))
+
+        noncontiguous = self.cp.asarray(self.X)[:, ::2]
+        matching_y = self.cp.asarray(self.y)
+        model = RenewableHuberRegressor(backend="native_cuda", device="cuda", dtype="float32")
+        with self.assertRaisesRegex(ValueError, "C-contiguous"):
+            model.fit(noncontiguous, matching_y)
+
+    def test_dlpack_rejects_mixed_host_and_device_batch(self) -> None:
+        model = RenewableHuberRegressor(backend="native_cuda", device="cuda", dtype="float32")
+        with self.assertRaisesRegex(ValidationError, "cannot mix host arrays"):
+            model.fit(self.cp.asarray(self.X), self.y)
+
+    def test_dlpack_rank_deficiency_initializes_lazy_svd_fallback(self) -> None:
+        rng = np.random.default_rng(177)
+        base = rng.normal(size=(96, 2))
+        X = np.column_stack((base, base[:, 0])).astype(np.float64)
+        y = (base @ np.asarray([1.5, -0.75]) + 0.05).astype(np.float64)
+        model = RenewableHuberRegressor(
+            backend="native_cuda",
+            device="cuda",
+            dtype="float64",
+            ridge=0.0,
+            max_iter=80,
+        ).fit(self.cp.asarray(X), self.cp.asarray(y))
+
+        self.assertTrue(model.diagnostics_.used_regularized_fallback)
+        self.assertTrue(np.isfinite(model.coef_).all())
+        self.assertTrue(np.isfinite(model._state.information).all())
+
+
+@unittest.skipUnless(
+    _native_cuda_ready(), "the Rust/CUDA native extension and a CUDA device are required"
+)
+class NativeCudaTuningTests(unittest.TestCase):
+    def test_graph_and_fast_precision_preserve_the_declared_contract(self) -> None:
+        rng = np.random.default_rng(2048)
+        X = rng.normal(size=(8192, 48)).astype(np.float32)
+        beta = rng.normal(size=48).astype(np.float32)
+        y = (X @ beta + rng.normal(scale=0.2, size=X.shape[0])).astype(np.float32)
+        y[::97] += 8
+        common = dict(
+            backend="native_cuda",
+            device="cuda",
+            dtype="float32",
+            max_iter=40,
+            tol=1e-5,
+        )
+        strict = RenewableHuberRegressor(**common).fit(X, y)
+        graph = RenewableHuberRegressor(**common, cuda_graphs=True).fit(X, y)
+        fast = RenewableHuberRegressor(**common, cuda_graphs=True, cuda_fast_math=True).fit(X, y)
+
+        np.testing.assert_array_equal(graph.coef_, strict.coef_)
+        self.assertEqual(graph.intercept_, strict.intercept_)
+        np.testing.assert_allclose(fast.coef_, strict.coef_, rtol=5e-3, atol=5e-4)
+        self.assertAlmostEqual(fast.intercept_, strict.intercept_, delta=5e-4)
+        self.assertGreaterEqual(
+            graph.cuda_features_["graph_captures"] + graph.cuda_features_["graph_fallbacks"],
+            1,
+        )
+        self.assertTrue(fast.cuda_features_["fast_math_enabled"])
 
 
 @unittest.skipUnless(

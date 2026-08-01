@@ -14,10 +14,12 @@
 #include <exception>
 #include <limits>
 #include <new>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -84,6 +86,47 @@ void check_cusolver(cusolverStatus_t status, const char* operation) {
     }
 }
 
+class DevicePoolRegistry final {
+public:
+    cudaMemPool_t acquire(int device_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto existing = pools_.find(device_id);
+        if (existing != pools_.end()) {
+            return existing->second;
+        }
+        cudaMemPoolProps properties{};
+        properties.allocType = cudaMemAllocationTypePinned;
+        properties.handleTypes = cudaMemHandleTypeNone;
+        properties.location.type = cudaMemLocationTypeDevice;
+        properties.location.id = device_id;
+        cudaMemPool_t pool = nullptr;
+        check_cuda(cudaMemPoolCreate(&pool, &properties), "create renewable CUDA memory pool");
+        uint64_t release_threshold = uint64_t{1} << 30;
+        check_cuda(
+            cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &release_threshold),
+            "configure renewable CUDA memory-pool release threshold"
+        );
+        pools_.emplace(device_id, pool);
+        return pool;
+    }
+
+    ~DevicePoolRegistry() noexcept {
+        for (const auto& [device_id, pool] : pools_) {
+            cudaSetDevice(device_id);
+            cudaMemPoolDestroy(pool);
+        }
+    }
+
+private:
+    std::mutex mutex_;
+    std::unordered_map<int, cudaMemPool_t> pools_;
+};
+
+cudaMemPool_t shared_device_pool(int device_id) {
+    static DevicePoolRegistry registry;
+    return registry.acquire(device_id);
+}
+
 template <typename Struct>
 void check_header(const Struct* value, const char* name) {
     if (value == nullptr) {
@@ -115,7 +158,7 @@ size_t checked_elements(int64_t rows, int64_t columns, const char* name) {
 }
 
 template <typename T>
-void validate_finite_state(
+bool validate_finite_state(
     const T* coefficients,
     const T* information,
     size_t parameters
@@ -126,18 +169,34 @@ void validate_finite_state(
         }
     }
 
+    bool symmetric = true;
     for (size_t row = 0; row < parameters; ++row) {
         for (size_t column = 0; column < parameters; ++column) {
             const T value = information[row * parameters + column];
             if (!std::isfinite(static_cast<double>(value))) {
                 fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "restored information must be finite");
             }
+            if (column < row) {
+                const T transpose = information[column * parameters + row];
+                // A portable checkpoint is allowed to contain a general dense
+                // information matrix. Even a small asymmetry must retain the
+                // established full-matrix LU semantics.
+                symmetric = symmetric && value == transpose;
+            }
         }
     }
+    return symmetric;
 }
 
 template <typename T>
-void allocate(void** pointer, size_t elements, const char* name) {
+void allocate(
+    void** pointer,
+    size_t elements,
+    const char* name,
+    cudaStream_t stream,
+    bool stream_ordered,
+    cudaMemPool_t memory_pool
+) {
     if (elements == 0) {
         *pointer = nullptr;
         return;
@@ -145,15 +204,21 @@ void allocate(void** pointer, size_t elements, const char* name) {
     if (elements > std::numeric_limits<size_t>::max() / sizeof(T)) {
         fail(RH_CUDA_STATUS_ALLOCATION_FAILED, std::string(name) + " allocation overflows");
     }
-    const cudaError_t status = cudaMalloc(pointer, elements * sizeof(T));
+    const cudaError_t status = stream_ordered
+        ? cudaMallocFromPoolAsync(pointer, elements * sizeof(T), memory_pool, stream)
+        : cudaMalloc(pointer, elements * sizeof(T));
     if (status != cudaSuccess) {
         fail(RH_CUDA_STATUS_ALLOCATION_FAILED, with_code(name, cudaGetErrorString(status)));
     }
 }
 
-void release(void*& pointer) noexcept {
+void release(void*& pointer, cudaStream_t stream, bool stream_ordered) noexcept {
     if (pointer != nullptr) {
-        cudaFree(pointer);
+        if (stream_ordered && stream != nullptr) {
+            cudaFreeAsync(pointer, stream);
+        } else {
+            cudaFree(pointer);
+        }
         pointer = nullptr;
     }
 }
@@ -197,6 +262,35 @@ struct Blas<float> {
         int ldc
     ) {
         return cublasSgemm(h, op_a, op_b, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
+    }
+    static cublasStatus_t syrkx(
+        cublasHandle_t h,
+        int n,
+        int k,
+        const float* alpha,
+        const float* a,
+        int lda,
+        const float* b,
+        int ldb,
+        const float* beta,
+        float* c,
+        int ldc
+    ) {
+        return cublasSsyrkx(
+            h,
+            CUBLAS_FILL_MODE_LOWER,
+            CUBLAS_OP_N,
+            n,
+            k,
+            alpha,
+            a,
+            lda,
+            b,
+            ldb,
+            beta,
+            c,
+            ldc
+        );
     }
     static cublasStatus_t asum(cublasHandle_t h, int n, const float* x, float* result) {
         return cublasSasum(h, n, x, 1, result);
@@ -246,6 +340,35 @@ struct Blas<double> {
     ) {
         return cublasDgemm(h, op_a, op_b, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
     }
+    static cublasStatus_t syrkx(
+        cublasHandle_t h,
+        int n,
+        int k,
+        const double* alpha,
+        const double* a,
+        int lda,
+        const double* b,
+        int ldb,
+        const double* beta,
+        double* c,
+        int ldc
+    ) {
+        return cublasDsyrkx(
+            h,
+            CUBLAS_FILL_MODE_LOWER,
+            CUBLAS_OP_N,
+            n,
+            k,
+            alpha,
+            a,
+            lda,
+            b,
+            ldb,
+            beta,
+            c,
+            ldc
+        );
+    }
     static cublasStatus_t asum(cublasHandle_t h, int n, const double* x, double* result) {
         return cublasDasum(h, n, x, 1, result);
     }
@@ -268,6 +391,25 @@ struct Solver;
 
 template <>
 struct Solver<float> {
+    static cusolverStatus_t potrf_buffer_size(
+        cusolverDnHandle_t h, int n, float* a, int lda, int* lwork
+    ) {
+        return cusolverDnSpotrf_bufferSize(h, CUBLAS_FILL_MODE_LOWER, n, a, lda, lwork);
+    }
+    static cusolverStatus_t potrf(
+        cusolverDnHandle_t h, int n, float* a, int lda, float* work, int lwork, int* info
+    ) {
+        return cusolverDnSpotrf(
+            h, CUBLAS_FILL_MODE_LOWER, n, a, lda, work, lwork, info
+        );
+    }
+    static cusolverStatus_t potrs(
+        cusolverDnHandle_t h, int n, const float* a, int lda, float* rhs, int ldb, int* info
+    ) {
+        return cusolverDnSpotrs(
+            h, CUBLAS_FILL_MODE_LOWER, n, 1, a, lda, rhs, ldb, info
+        );
+    }
     static cusolverStatus_t getrf_buffer_size(
         cusolverDnHandle_t h, int n, float* a, int lda, int* lwork
     ) {
@@ -325,6 +467,25 @@ struct Solver<float> {
 
 template <>
 struct Solver<double> {
+    static cusolverStatus_t potrf_buffer_size(
+        cusolverDnHandle_t h, int n, double* a, int lda, int* lwork
+    ) {
+        return cusolverDnDpotrf_bufferSize(h, CUBLAS_FILL_MODE_LOWER, n, a, lda, lwork);
+    }
+    static cusolverStatus_t potrf(
+        cusolverDnHandle_t h, int n, double* a, int lda, double* work, int lwork, int* info
+    ) {
+        return cusolverDnDpotrf(
+            h, CUBLAS_FILL_MODE_LOWER, n, a, lda, work, lwork, info
+        );
+    }
+    static cusolverStatus_t potrs(
+        cusolverDnHandle_t h, int n, const double* a, int lda, double* rhs, int ldb, int* info
+    ) {
+        return cusolverDnDpotrs(
+            h, CUBLAS_FILL_MODE_LOWER, n, 1, a, lda, rhs, ldb, info
+        );
+    }
     static cusolverStatus_t getrf_buffer_size(
         cusolverDnHandle_t h, int n, double* a, int lda, int* lwork
     ) {
@@ -392,9 +553,18 @@ struct RhCudaEngine {
     int64_t batch_count = 0;
     double previous_lambda = 0.0;
     double weight_sum = 0.0;
+    bool information_is_symmetric = true;
+    bool stream_ordered_allocations = false;
+    cudaMemPool_t memory_pool = nullptr;
+    uint64_t requested_flags = 0;
+    uint64_t enabled_flags = 0;
+    uint64_t graph_captures = 0;
+    uint64_t graph_replays = 0;
+    uint64_t graph_fallbacks = 0;
 
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas = nullptr;
+    cublasHandle_t cublas_reduction = nullptr;
     cusolverDnHandle_t solver = nullptr;
     gesvdjInfo_t svd_params = nullptr;
 
@@ -414,11 +584,14 @@ struct RhCudaEngine {
     void* d_svd_u = nullptr;
     void* d_svd_v = nullptr;
     void* d_svd_vector = nullptr;
-    void* d_lu_work = nullptr;
+    void* d_factor_work = nullptr;
     void* d_svd_work = nullptr;
+    void* d_reduction_results = nullptr;
     int* d_pivots = nullptr;
     int* d_solver_info = nullptr;
-    int lu_lwork = 0;
+    int* h_solver_info = nullptr;
+    void* h_reduction_results = nullptr;
+    int factor_lwork = 0;
     int svd_lwork = 0;
 
     void* d_design = nullptr;
@@ -436,38 +609,50 @@ struct RhCudaEngine {
         if (device_id >= 0) {
             cudaSetDevice(device_id);
         }
-        release(d_coefficients);
-        release(d_information);
-        release(d_information_next);
-        release(d_trial_beta);
-        release(d_candidate);
-        release(d_delta);
-        release(d_history_vector);
-        release(d_gradient);
-        release(d_direction);
-        release(d_gram);
-        release(d_hessian);
-        release(d_factor);
-        release(d_singular_values);
-        release(d_svd_u);
-        release(d_svd_v);
-        release(d_svd_vector);
-        release(d_lu_work);
-        release(d_svd_work);
+        release(d_coefficients, stream, stream_ordered_allocations);
+        release(d_information, stream, stream_ordered_allocations);
+        release(d_information_next, stream, stream_ordered_allocations);
+        release(d_trial_beta, stream, stream_ordered_allocations);
+        release(d_candidate, stream, stream_ordered_allocations);
+        release(d_delta, stream, stream_ordered_allocations);
+        release(d_history_vector, stream, stream_ordered_allocations);
+        release(d_gradient, stream, stream_ordered_allocations);
+        release(d_direction, stream, stream_ordered_allocations);
+        release(d_gram, stream, stream_ordered_allocations);
+        release(d_hessian, stream, stream_ordered_allocations);
+        release(d_factor, stream, stream_ordered_allocations);
+        release(d_singular_values, stream, stream_ordered_allocations);
+        release(d_svd_u, stream, stream_ordered_allocations);
+        release(d_svd_v, stream, stream_ordered_allocations);
+        release(d_svd_vector, stream, stream_ordered_allocations);
+        release(d_factor_work, stream, stream_ordered_allocations);
+        release(d_svd_work, stream, stream_ordered_allocations);
+        release(d_reduction_results, stream, stream_ordered_allocations);
         void* pivots = d_pivots;
-        release(pivots);
+        release(pivots, stream, stream_ordered_allocations);
         d_pivots = nullptr;
         void* solver_info = d_solver_info;
-        release(solver_info);
+        release(solver_info, stream, stream_ordered_allocations);
         d_solver_info = nullptr;
-        release(d_design);
-        release(d_y);
-        release(d_weights);
-        release(d_residual);
-        release(d_score);
-        release(d_curvature);
-        release(d_loss);
-        release(d_weighted_design);
+        release(d_design, stream, stream_ordered_allocations);
+        release(d_y, stream, stream_ordered_allocations);
+        release(d_weights, stream, stream_ordered_allocations);
+        release(d_residual, stream, stream_ordered_allocations);
+        release(d_score, stream, stream_ordered_allocations);
+        release(d_curvature, stream, stream_ordered_allocations);
+        release(d_loss, stream, stream_ordered_allocations);
+        release(d_weighted_design, stream, stream_ordered_allocations);
+        if (stream_ordered_allocations && stream != nullptr) {
+            cudaStreamSynchronize(stream);
+        }
+        if (h_solver_info != nullptr) {
+            cudaFreeHost(h_solver_info);
+            h_solver_info = nullptr;
+        }
+        if (h_reduction_results != nullptr) {
+            cudaFreeHost(h_reduction_results);
+            h_reduction_results = nullptr;
+        }
         if (svd_params != nullptr) {
             cusolverDnDestroyGesvdjInfo(svd_params);
         }
@@ -476,6 +661,9 @@ struct RhCudaEngine {
         }
         if (cublas != nullptr) {
             cublasDestroy(cublas);
+        }
+        if (cublas_reduction != nullptr) {
+            cublasDestroy(cublas_reduction);
         }
         if (stream != nullptr) {
             cudaStreamDestroy(stream);
@@ -503,6 +691,13 @@ void validate_options(const RhCudaEngineOptions* options) {
     if (options->n_parameters <= 0 || options->n_parameters > std::numeric_limits<int>::max()) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "n_parameters is outside the CUDA dense-solver range");
     }
+    if ((options->reserved0 & ~RH_CUDA_ENGINE_FLAG_KNOWN_MASK) != 0) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "engine options contain unknown tuning flags");
+    }
+    if ((options->reserved0 & RH_CUDA_ENGINE_FLAG_FAST_MATH) != 0 &&
+        options->dtype != RH_CUDA_DTYPE_FLOAT32) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "fast math is supported only by float32 engines");
+    }
 }
 
 template <typename T>
@@ -516,74 +711,161 @@ const T* typed(const void* value) {
 }
 
 template <typename T>
+bool prefer_syrkx_for_gram(int rows, int parameters) noexcept {
+    /*
+     * SYRKX saves roughly half of the matrix multiplication work, but it also
+     * needs a separate p-by-p mirror kernel and cuBLAS selects less efficient
+     * kernels for narrow output matrices.  The crossover is dtype-dependent:
+     * the standard shape sweep on an RTX 5070 Ti puts it above p=90 for both
+     * types, while p=256 wins decisively.  Keep GEMM for narrow and short
+     * batches; this also avoids paying the mirror cost when p^2 dominates the
+     * useful row work.
+     */
+    constexpr int minimum_parameters = std::is_same_v<T, float> ? 192 : 128;
+    return parameters >= minimum_parameters && rows >= parameters;
+}
+
+template <typename T>
+void compute_weighted_gram(RhCudaEngine* engine, int rows, int parameters) {
+    const T one = static_cast<T>(1);
+    const T zero = static_cast<T>(0);
+    if (prefer_syrkx_for_gram<T>(rows, parameters)) {
+        check_cublas(
+            Blas<T>::syrkx(
+                engine->cublas,
+                parameters,
+                rows,
+                &one,
+                typed<T>(engine->d_design),
+                parameters,
+                typed<T>(engine->d_weighted_design),
+                parameters,
+                &zero,
+                typed<T>(engine->d_gram),
+                parameters
+            ),
+            "compute weighted Gram matrix with SYRKX"
+        );
+        check_cuda(
+            rh_cuda::launch_mirror_lower_triangle(
+                typed<T>(engine->d_gram), parameters, engine->stream
+            ),
+            "mirror weighted Gram matrix"
+        );
+        return;
+    }
+    check_cublas(
+        Blas<T>::gemm(
+            engine->cublas,
+            CUBLAS_OP_N,
+            CUBLAS_OP_T,
+            parameters,
+            parameters,
+            rows,
+            &one,
+            typed<T>(engine->d_design),
+            parameters,
+            typed<T>(engine->d_weighted_design),
+            parameters,
+            &zero,
+            typed<T>(engine->d_gram),
+            parameters
+        ),
+        "compute weighted Gram matrix with GEMM"
+    );
+}
+
+template <typename T>
 void allocate_static_buffers(RhCudaEngine* engine) {
     const size_t p = static_cast<size_t>(engine->n_parameters);
     const size_t square = checked_elements(engine->n_parameters, engine->n_parameters, "state matrix");
 
-    allocate<T>(&engine->d_coefficients, p, "coefficients");
-    allocate<T>(&engine->d_information, square, "information");
-    allocate<T>(&engine->d_information_next, square, "next information");
-    allocate<T>(&engine->d_trial_beta, p, "trial coefficients");
-    allocate<T>(&engine->d_candidate, p, "candidate coefficients");
-    allocate<T>(&engine->d_delta, p, "coefficient delta");
-    allocate<T>(&engine->d_history_vector, p, "history vector");
-    allocate<T>(&engine->d_gradient, p, "gradient");
-    allocate<T>(&engine->d_direction, p, "Newton direction");
-    allocate<T>(&engine->d_gram, square, "weighted gram");
-    allocate<T>(&engine->d_hessian, square, "Hessian");
-    allocate<T>(&engine->d_factor, square, "factor matrix");
-    allocate<T>(&engine->d_singular_values, p, "singular values");
-    allocate<T>(&engine->d_svd_u, square, "SVD U");
-    allocate<T>(&engine->d_svd_v, square, "SVD V");
-    allocate<T>(&engine->d_svd_vector, p, "SVD vector");
+    const auto allocate_engine = [&](void** pointer, size_t elements, const char* name) {
+        allocate<T>(
+            pointer,
+            elements,
+            name,
+            engine->stream,
+            engine->stream_ordered_allocations,
+            engine->memory_pool
+        );
+    };
+    allocate_engine(&engine->d_coefficients, p, "coefficients");
+    allocate_engine(&engine->d_information, square, "information");
+    allocate_engine(&engine->d_information_next, square, "next information");
+    allocate_engine(&engine->d_trial_beta, p, "trial coefficients");
+    allocate_engine(&engine->d_candidate, p, "candidate coefficients");
+    allocate_engine(&engine->d_delta, p, "coefficient delta");
+    allocate_engine(&engine->d_history_vector, p, "history vector");
+    allocate_engine(&engine->d_gradient, p, "gradient");
+    allocate_engine(&engine->d_direction, p, "Newton direction");
+    allocate_engine(&engine->d_gram, square, "weighted gram");
+    allocate_engine(&engine->d_hessian, square, "Hessian");
+    allocate_engine(&engine->d_factor, square, "factor matrix");
+    allocate_engine(&engine->d_reduction_results, 4, "device reduction results");
+    allocate<int>(
+        reinterpret_cast<void**>(&engine->d_pivots),
+        p,
+        "LU pivots",
+        engine->stream,
+        engine->stream_ordered_allocations,
+        engine->memory_pool
+    );
+    allocate<int>(
+        reinterpret_cast<void**>(&engine->d_solver_info),
+        2,
+        "solver info",
+        engine->stream,
+        engine->stream_ordered_allocations,
+        engine->memory_pool
+    );
     check_cuda(
-        cudaMalloc(reinterpret_cast<void**>(&engine->d_pivots), p * sizeof(int)),
-        "LU pivots"
+        cudaMallocHost(reinterpret_cast<void**>(&engine->h_solver_info), 2 * sizeof(int)),
+        "pinned host solver info"
     );
-    check_cuda(cudaMalloc(reinterpret_cast<void**>(&engine->d_solver_info), sizeof(int)), "solver info");
-
-    check_cusolver(cusolverDnCreateGesvdjInfo(&engine->svd_params), "cusolverDnCreateGesvdjInfo");
-    check_cusolver(
-        cusolverDnXgesvdjSetTolerance(engine->svd_params, static_cast<double>(std::numeric_limits<T>::epsilon())),
-        "cusolverDnXgesvdjSetTolerance"
+    check_cuda(
+        cudaMallocHost(&engine->h_reduction_results, 4 * sizeof(double)),
+        "pinned host objective reductions"
     );
-    check_cusolver(cusolverDnXgesvdjSetMaxSweeps(engine->svd_params, 100), "cusolverDnXgesvdjSetMaxSweeps");
 
     const int n = static_cast<int>(engine->n_parameters);
+    int cholesky_lwork = 0;
+    int lu_lwork = 0;
     check_cusolver(
-        Solver<T>::getrf_buffer_size(engine->solver, n, typed<T>(engine->d_factor), n, &engine->lu_lwork),
+        Solver<T>::potrf_buffer_size(
+            engine->solver, n, typed<T>(engine->d_factor), n, &cholesky_lwork
+        ),
+        "cusolverDn*potrf_bufferSize"
+    );
+    check_cusolver(
+        Solver<T>::getrf_buffer_size(
+            engine->solver, n, typed<T>(engine->d_factor), n, &lu_lwork
+        ),
         "cusolverDn*getrf_bufferSize"
     );
-    check_cusolver(
-        Solver<T>::gesvdj_buffer_size(
-            engine->solver,
-            typed<T>(engine->d_factor),
-            typed<T>(engine->d_singular_values),
-            typed<T>(engine->d_svd_u),
-            typed<T>(engine->d_svd_v),
-            n,
-            &engine->svd_lwork,
-            engine->svd_params
-        ),
-        "cusolverDn*gesvdj_bufferSize"
+    engine->factor_lwork = std::max(cholesky_lwork, lu_lwork);
+    allocate<T>(
+        &engine->d_factor_work,
+        static_cast<size_t>(engine->factor_lwork),
+        "dense factorization workspace",
+        engine->stream,
+        engine->stream_ordered_allocations,
+        engine->memory_pool
     );
-    allocate<T>(&engine->d_lu_work, static_cast<size_t>(engine->lu_lwork), "LU workspace");
-    allocate<T>(&engine->d_svd_work, static_cast<size_t>(engine->svd_lwork), "SVD workspace");
-
     check_cuda(cudaMemsetAsync(engine->d_coefficients, 0, p * sizeof(T), engine->stream), "zero coefficients");
     check_cuda(cudaMemsetAsync(engine->d_information, 0, square * sizeof(T), engine->stream), "zero information");
     check_cuda(cudaStreamSynchronize(engine->stream), "initial state synchronization");
 }
 
 void release_batch_buffers(RhCudaEngine* engine) noexcept {
-    release(engine->d_design);
-    release(engine->d_y);
-    release(engine->d_weights);
-    release(engine->d_residual);
-    release(engine->d_score);
-    release(engine->d_curvature);
-    release(engine->d_loss);
-    release(engine->d_weighted_design);
+    release(engine->d_design, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_y, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_weights, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_residual, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_score, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_curvature, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_loss, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_weighted_design, engine->stream, engine->stream_ordered_allocations);
     engine->capacity_rows = 0;
 }
 
@@ -595,14 +877,24 @@ void ensure_batch_capacity(RhCudaEngine* engine, int64_t rows) {
     release_batch_buffers(engine);
     const size_t vector = static_cast<size_t>(rows);
     const size_t matrix = checked_elements(rows, engine->n_parameters, "batch design");
-    allocate<T>(&engine->d_design, matrix, "batch design");
-    allocate<T>(&engine->d_y, vector, "batch target");
-    allocate<T>(&engine->d_weights, vector, "batch weights");
-    allocate<T>(&engine->d_residual, vector, "residual");
-    allocate<T>(&engine->d_score, vector, "score");
-    allocate<T>(&engine->d_curvature, vector, "curvature");
-    allocate<T>(&engine->d_loss, vector, "loss");
-    allocate<T>(&engine->d_weighted_design, matrix, "weighted design");
+    const auto allocate_batch = [&](void** pointer, size_t elements, const char* name) {
+        allocate<T>(
+            pointer,
+            elements,
+            name,
+            engine->stream,
+            engine->stream_ordered_allocations,
+            engine->memory_pool
+        );
+    };
+    allocate_batch(&engine->d_design, matrix, "batch design");
+    allocate_batch(&engine->d_y, vector, "batch target");
+    allocate_batch(&engine->d_weights, vector, "batch weights");
+    allocate_batch(&engine->d_residual, vector, "residual");
+    allocate_batch(&engine->d_score, vector, "score");
+    allocate_batch(&engine->d_curvature, vector, "curvature");
+    allocate_batch(&engine->d_loss, vector, "loss");
+    allocate_batch(&engine->d_weighted_design, matrix, "weighted design");
     engine->capacity_rows = rows;
 }
 
@@ -620,24 +912,63 @@ void validate_config(const RhCudaUnpenalizedConfig* config, const RhCudaEngine* 
     }
 }
 
-void validate_batch(const RhCudaHostBatch* batch, const RhCudaEngine* engine) {
-    check_header(batch, "host batch");
-    if (batch->x_design == nullptr || batch->y == nullptr) {
+struct BatchView {
+    const void* x_design;
+    const void* y;
+    const void* sample_weight;
+    int64_t n_rows;
+    int64_t n_columns;
+    double batch_weight;
+    cudaMemcpyKind copy_kind;
+};
+
+class ScopedPointerAlias {
+public:
+    ScopedPointerAlias(void** slot, const void* replacement, bool enabled)
+        : slot_(enabled ? slot : nullptr), original_(enabled ? *slot : nullptr) {
+        if (slot_ != nullptr) {
+            *slot_ = const_cast<void*>(replacement);
+        }
+    }
+
+    ~ScopedPointerAlias() {
+        if (slot_ != nullptr) {
+            *slot_ = original_;
+        }
+    }
+
+    ScopedPointerAlias(const ScopedPointerAlias&) = delete;
+    ScopedPointerAlias& operator=(const ScopedPointerAlias&) = delete;
+
+private:
+    void** slot_;
+    void* original_;
+};
+
+void validate_batch(
+    const BatchView& batch,
+    const RhCudaUnpenalizedConfig* config,
+    const RhCudaEngine* engine
+) {
+    if (batch.x_design == nullptr || batch.y == nullptr) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "x_design and y must not be null");
     }
-    if (batch->n_rows <= 0 || batch->n_rows > std::numeric_limits<int>::max()) {
+    if (batch.n_rows <= 0 || batch.n_rows > std::numeric_limits<int>::max()) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "n_rows must be in the CUDA BLAS range");
     }
-    if (batch->n_columns != engine->n_parameters) {
-        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "x_design column count does not match engine n_parameters");
+    if (batch.n_columns != engine->n_parameters && batch.n_columns != config->n_features_in) {
+        fail(
+            RH_CUDA_STATUS_INVALID_ARGUMENT,
+            "feature columns must match n_features_in or the expanded engine parameters"
+        );
     }
-    if (!finite_positive(batch->batch_weight)) {
+    if (!finite_positive(batch.batch_weight)) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "batch_weight must be finite and positive");
     }
 }
 
-double bandwidth_for(const RhCudaEngine* engine, const RhCudaHostBatch* batch, const RhCudaUnpenalizedConfig* config) {
-    const double n_total = engine->weight_sum + batch->batch_weight;
+double bandwidth_for(const RhCudaEngine* engine, double batch_weight, const RhCudaUnpenalizedConfig* config) {
+    const double n_total = engine->weight_sum + batch_weight;
     if (!finite_positive(n_total)) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "cumulative sample weight must be finite and positive");
     }
@@ -646,25 +977,76 @@ double bandwidth_for(const RhCudaEngine* engine, const RhCudaHostBatch* batch, c
     return std::min(raw, config->tau);
 }
 
+void validate_device_pointer(const RhCudaEngine* engine, const void* pointer, const char* name) {
+    if (pointer == nullptr) {
+        return;
+    }
+    cudaPointerAttributes attributes{};
+    check_cuda(cudaPointerGetAttributes(&attributes, pointer), name);
+    if (attributes.type != cudaMemoryTypeDevice || attributes.device != engine->device_id) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "device batch pointer is not on the engine CUDA device");
+    }
+}
+
 template <typename T>
-void copy_host_batch(RhCudaEngine* engine, const RhCudaHostBatch* batch) {
-    ensure_batch_capacity<T>(engine, batch->n_rows);
-    const size_t matrix = checked_elements(batch->n_rows, engine->n_parameters, "host batch design");
-    const size_t vector = static_cast<size_t>(batch->n_rows);
-    check_cuda(
-        cudaMemcpyAsync(engine->d_design, batch->x_design, matrix * sizeof(T), cudaMemcpyHostToDevice, engine->stream),
-        "copy X_design to device"
-    );
-    check_cuda(
-        cudaMemcpyAsync(engine->d_y, batch->y, vector * sizeof(T), cudaMemcpyHostToDevice, engine->stream),
-        "copy y to device"
-    );
-    if (batch->sample_weight != nullptr) {
+void copy_batch(RhCudaEngine* engine, const BatchView& batch) {
+    ensure_batch_capacity<T>(engine, batch.n_rows);
+    const size_t matrix = checked_elements(batch.n_rows, batch.n_columns, "batch features");
+    const size_t vector = static_cast<size_t>(batch.n_rows);
+    if (batch.copy_kind == cudaMemcpyDeviceToDevice) {
+        validate_device_pointer(engine, batch.x_design, "inspect device X");
+        validate_device_pointer(engine, batch.y, "inspect device y");
+        validate_device_pointer(engine, batch.sample_weight, "inspect device sample_weight");
+    }
+    if (batch.n_columns == engine->n_parameters) {
         check_cuda(
             cudaMemcpyAsync(
-                engine->d_weights, batch->sample_weight, vector * sizeof(T), cudaMemcpyHostToDevice, engine->stream
+                engine->d_design,
+                batch.x_design,
+                matrix * sizeof(T),
+                batch.copy_kind,
+                engine->stream
             ),
-            "copy sample_weight to device"
+            "copy X_design into engine workspace"
+        );
+    } else {
+        const T* unexpanded = typed<T>(batch.x_design);
+        if (batch.copy_kind != cudaMemcpyDeviceToDevice) {
+            check_cuda(
+                cudaMemcpyAsync(
+                    engine->d_weighted_design,
+                    batch.x_design,
+                    matrix * sizeof(T),
+                    batch.copy_kind,
+                    engine->stream
+                ),
+                "copy unexpanded features into engine workspace"
+            );
+            unexpanded = typed<T>(engine->d_weighted_design);
+        }
+        check_cuda(
+            rh_cuda::launch_append_intercept(
+                unexpanded,
+                typed<T>(engine->d_design),
+                batch.n_rows,
+                batch.n_columns,
+                engine->stream
+            ),
+            "append intercept column on device"
+        );
+    }
+    if (batch.copy_kind != cudaMemcpyDeviceToDevice) {
+        check_cuda(
+            cudaMemcpyAsync(engine->d_y, batch.y, vector * sizeof(T), batch.copy_kind, engine->stream),
+            "copy y into engine workspace"
+        );
+    }
+    if (batch.sample_weight != nullptr) {
+        check_cuda(
+            cudaMemcpyAsync(
+                engine->d_weights, batch.sample_weight, vector * sizeof(T), batch.copy_kind, engine->stream
+            ),
+            "copy sample_weight into engine workspace"
         );
     }
 }
@@ -700,14 +1082,20 @@ void compute_residual(RhCudaEngine* engine, int rows, const T* beta) {
     );
 }
 
+struct ObjectiveResult {
+    double objective = 0.0;
+    double difference_norm = 0.0;
+    double beta_norm = 0.0;
+};
+
 template <typename T>
-double smooth_objective(
+void enqueue_smooth_objective(
     RhCudaEngine* engine,
     int rows,
     const T* beta,
     const T* weights,
     T tau,
-    double n_total
+    const T* previous_beta = nullptr
 ) {
     const int parameters = static_cast<int>(engine->n_parameters);
     compute_residual<T>(engine, rows, beta);
@@ -717,9 +1105,14 @@ double smooth_objective(
         ),
         "launch Huber loss"
     );
-    T current_loss = static_cast<T>(0);
+    T* reduction_results = typed<T>(engine->d_reduction_results);
     check_cublas(
-        Blas<T>::asum(engine->cublas, rows, typed<T>(engine->d_loss), &current_loss),
+        Blas<T>::asum(
+            engine->cublas_reduction,
+            rows,
+            typed<T>(engine->d_loss),
+            reduction_results
+        ),
         "reduce Huber loss"
     );
 
@@ -746,19 +1139,201 @@ double smooth_objective(
         ),
         "compute historical objective term"
     );
-    T historical = static_cast<T>(0);
     check_cublas(
         Blas<T>::dot(
-            engine->cublas,
+            engine->cublas_reduction,
             parameters,
             typed<T>(engine->d_delta),
             typed<T>(engine->d_history_vector),
-            &historical
+            reduction_results + 1
         ),
         "reduce historical objective term"
     );
-    return (static_cast<double>(current_loss) + 0.5 * static_cast<double>(historical)) / n_total;
+    if (previous_beta != nullptr) {
+        /*
+         * Candidate acceptance and Newton convergence are both host-side
+         * decisions.  Queue the two convergence reductions behind the
+         * objective work so all four scalars cross PCIe in one transfer and
+         * require only one stream synchronization.  Rejected backtracking
+         * candidates simply discard these two inexpensive reductions.
+         */
+        check_cuda(
+            rh_cuda::launch_subtract(
+                beta,
+                previous_beta,
+                typed<T>(engine->d_delta),
+                parameters,
+                engine->stream
+            ),
+            "form Newton coefficient difference"
+        );
+        check_cublas(
+            Blas<T>::nrm2(
+                engine->cublas_reduction,
+                parameters,
+                typed<T>(engine->d_delta),
+                reduction_results + 2
+            ),
+            "reduce Newton coefficient difference"
+        );
+        check_cublas(
+            Blas<T>::nrm2(
+                engine->cublas_reduction,
+                parameters,
+                beta,
+                reduction_results + 3
+            ),
+            "reduce Newton coefficient norm"
+        );
+    }
+    T* host_results = typed<T>(engine->h_reduction_results);
+    const size_t result_count = previous_beta == nullptr ? 2 : 4;
+    check_cuda(
+        cudaMemcpyAsync(
+            host_results,
+            reduction_results,
+            result_count * sizeof(T),
+            cudaMemcpyDeviceToHost,
+            engine->stream
+        ),
+        "read objective reductions"
+    );
 }
+
+template <typename T>
+ObjectiveResult finish_smooth_objective(
+    RhCudaEngine* engine,
+    double n_total,
+    bool has_previous_beta
+) {
+    check_cuda(cudaStreamSynchronize(engine->stream), "wait for objective reductions");
+    T* host_results = typed<T>(engine->h_reduction_results);
+    ObjectiveResult result;
+    result.objective = (
+        static_cast<double>(host_results[0]) + 0.5 * static_cast<double>(host_results[1])
+    ) / n_total;
+    if (has_previous_beta) {
+        result.difference_norm = static_cast<double>(host_results[2]);
+        result.beta_norm = static_cast<double>(host_results[3]);
+    }
+    return result;
+}
+
+template <typename T>
+ObjectiveResult smooth_objective(
+    RhCudaEngine* engine,
+    int rows,
+    const T* beta,
+    const T* weights,
+    T tau,
+    double n_total,
+    const T* previous_beta = nullptr
+) {
+    enqueue_smooth_objective<T>(engine, rows, beta, weights, tau, previous_beta);
+    return finish_smooth_objective<T>(engine, n_total, previous_beta != nullptr);
+}
+
+/*
+ * One update owns one candidate-objective graph. Captured pointers therefore
+ * cannot outlive a borrowed DLPack producer, and shape/config changes always
+ * recapture. Capture is deliberately best-effort: unsupported cuBLAS/CUDA
+ * combinations clear the capture and execute the strict stream path.
+ */
+class CandidateObjectiveGraph final {
+public:
+    explicit CandidateObjectiveGraph(RhCudaEngine* engine)
+        : engine_(engine), enabled_((engine->enabled_flags & RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS) != 0) {}
+
+    ~CandidateObjectiveGraph() noexcept {
+        if (execution_ != nullptr) {
+            cudaGraphExecDestroy(execution_);
+        }
+        if (graph_ != nullptr) {
+            cudaGraphDestroy(graph_);
+        }
+    }
+
+    CandidateObjectiveGraph(const CandidateObjectiveGraph&) = delete;
+    CandidateObjectiveGraph& operator=(const CandidateObjectiveGraph&) = delete;
+
+    template <typename T>
+    ObjectiveResult evaluate(
+        int rows,
+        const T* beta,
+        const T* weights,
+        T tau,
+        double n_total,
+        const T* previous_beta
+    ) {
+        if (!enabled_) {
+            return smooth_objective<T>(
+                engine_, rows, beta, weights, tau, n_total, previous_beta
+            );
+        }
+        if (execution_ == nullptr && !capture<T>(rows, beta, weights, tau, previous_beta)) {
+            ++engine_->graph_fallbacks;
+            engine_->enabled_flags &= ~RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS;
+            enabled_ = false;
+            return smooth_objective<T>(
+                engine_, rows, beta, weights, tau, n_total, previous_beta
+            );
+        }
+        check_cuda(cudaGraphLaunch(execution_, engine_->stream), "launch candidate objective graph");
+        if (launched_once_) {
+            ++engine_->graph_replays;
+        } else {
+            launched_once_ = true;
+        }
+        return finish_smooth_objective<T>(engine_, n_total, true);
+    }
+
+private:
+    template <typename T>
+    bool capture(int rows, const T* beta, const T* weights, T tau, const T* previous_beta) {
+        const cudaError_t begin = cudaStreamBeginCapture(
+            engine_->stream, cudaStreamCaptureModeThreadLocal
+        );
+        if (begin != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        try {
+            enqueue_smooth_objective<T>(engine_, rows, beta, weights, tau, previous_beta);
+        } catch (...) {
+            cudaGraph_t abandoned = nullptr;
+            cudaStreamEndCapture(engine_->stream, &abandoned);
+            if (abandoned != nullptr) {
+                cudaGraphDestroy(abandoned);
+            }
+            cudaGetLastError();
+            return false;
+        }
+        const cudaError_t end = cudaStreamEndCapture(engine_->stream, &graph_);
+        if (end != cudaSuccess || graph_ == nullptr) {
+            if (graph_ != nullptr) {
+                cudaGraphDestroy(graph_);
+                graph_ = nullptr;
+            }
+            cudaGetLastError();
+            return false;
+        }
+        const cudaError_t instantiate = cudaGraphInstantiate(
+            &execution_, graph_, nullptr, nullptr, 0
+        );
+        if (instantiate != cudaSuccess || execution_ == nullptr) {
+            cudaGetLastError();
+            return false;
+        }
+        ++engine_->graph_captures;
+        return true;
+    }
+
+    RhCudaEngine* engine_;
+    bool enabled_ = false;
+    bool launched_once_ = false;
+    cudaGraph_t graph_ = nullptr;
+    cudaGraphExec_t execution_ = nullptr;
+};
 
 template <typename T>
 void compute_gradient_hessian(
@@ -772,7 +1347,12 @@ void compute_gradient_hessian(
     T ridge
 ) {
     const int parameters = static_cast<int>(engine->n_parameters);
-    compute_residual<T>(engine, rows, beta);
+    /*
+     * solve_unpenalized evaluates the objective for the current trial before
+     * every gradient/Hessian evaluation.  That objective leaves the matching
+     * residual resident in d_residual, so recomputing y - X beta here would
+     * duplicate a full-vector copy and GEMV on every Newton iteration.
+     */
     check_cuda(
         rh_cuda::launch_residual_score_curvature(
             typed<T>(engine->d_residual),
@@ -846,26 +1426,7 @@ void compute_gradient_hessian(
         ),
         "form weighted design"
     );
-    /* X^T (W X), using row-major buffers interpreted as column-major transposes. */
-    check_cublas(
-        Blas<T>::gemm(
-            engine->cublas,
-            CUBLAS_OP_N,
-            CUBLAS_OP_T,
-            parameters,
-            parameters,
-            rows,
-            &one,
-            typed<T>(engine->d_design),
-            parameters,
-            typed<T>(engine->d_weighted_design),
-            parameters,
-            &zero,
-            typed<T>(engine->d_gram),
-            parameters
-        ),
-        "compute weighted Gram matrix"
-    );
+    compute_weighted_gram<T>(engine, rows, parameters);
     const int64_t square = engine->n_parameters * engine->n_parameters;
     check_cuda(
         rh_cuda::launch_add_matrix(
@@ -890,7 +1451,77 @@ void compute_gradient_hessian(
 }
 
 template <typename T>
+void ensure_svd_workspace(RhCudaEngine* engine) {
+    if (engine->svd_params != nullptr) {
+        return;
+    }
+
+    /*
+     * The normal renewable Hessian is SPD and uses POTRF/POTRS. Creating
+     * gesvdj metadata and allocating U/V/workspace during every cold engine
+     * construction cost several milliseconds even when the fallback was
+     * never reached. Keep the exact minimum-norm path, but initialize its
+     * resources only after LU has actually reported singularity.
+     */
+    const size_t p = static_cast<size_t>(engine->n_parameters);
+    const size_t square = checked_elements(
+        engine->n_parameters, engine->n_parameters, "lazy SVD matrix"
+    );
+    const auto allocate_svd = [&](void** pointer, size_t elements, const char* name) {
+        allocate<T>(
+            pointer,
+            elements,
+            name,
+            engine->stream,
+            engine->stream_ordered_allocations,
+            engine->memory_pool
+        );
+    };
+    allocate_svd(&engine->d_singular_values, p, "singular values");
+    allocate_svd(&engine->d_svd_u, square, "SVD U");
+    allocate_svd(&engine->d_svd_v, square, "SVD V");
+    allocate_svd(&engine->d_svd_vector, p, "SVD vector");
+
+    check_cusolver(
+        cusolverDnCreateGesvdjInfo(&engine->svd_params),
+        "cusolverDnCreateGesvdjInfo"
+    );
+    check_cusolver(
+        cusolverDnXgesvdjSetTolerance(
+            engine->svd_params,
+            static_cast<double>(std::numeric_limits<T>::epsilon())
+        ),
+        "cusolverDnXgesvdjSetTolerance"
+    );
+    check_cusolver(
+        cusolverDnXgesvdjSetMaxSweeps(engine->svd_params, 100),
+        "cusolverDnXgesvdjSetMaxSweeps"
+    );
+
+    const int n = static_cast<int>(engine->n_parameters);
+    check_cusolver(
+        Solver<T>::gesvdj_buffer_size(
+            engine->solver,
+            typed<T>(engine->d_factor),
+            typed<T>(engine->d_singular_values),
+            typed<T>(engine->d_svd_u),
+            typed<T>(engine->d_svd_v),
+            n,
+            &engine->svd_lwork,
+            engine->svd_params
+        ),
+        "cusolverDn*gesvdj_bufferSize"
+    );
+    allocate_svd(
+        &engine->d_svd_work,
+        static_cast<size_t>(engine->svd_lwork),
+        "SVD workspace"
+    );
+}
+
+template <typename T>
 void solve_minimum_norm_svd(RhCudaEngine* engine, bool* used_fallback) {
+    ensure_svd_workspace<T>(engine);
     const int parameters = static_cast<int>(engine->n_parameters);
     const size_t square = checked_elements(engine->n_parameters, engine->n_parameters, "SVD factor");
     check_cuda(
@@ -994,7 +1625,7 @@ void solve_minimum_norm_svd(RhCudaEngine* engine, bool* used_fallback) {
 }
 
 template <typename T>
-void solve_direction(RhCudaEngine* engine, bool* used_fallback) {
+void solve_direction_lu(RhCudaEngine* engine, bool* used_fallback) {
     const int parameters = static_cast<int>(engine->n_parameters);
     const size_t square = checked_elements(engine->n_parameters, engine->n_parameters, "LU factor");
     check_cuda(
@@ -1013,7 +1644,7 @@ void solve_direction(RhCudaEngine* engine, bool* used_fallback) {
             parameters,
             typed<T>(engine->d_factor),
             parameters,
-            typed<T>(engine->d_lu_work),
+            typed<T>(engine->d_factor_work),
             engine->d_pivots,
             engine->d_solver_info
         ),
@@ -1052,7 +1683,13 @@ void solve_direction(RhCudaEngine* engine, bool* used_fallback) {
         "cusolverDn*getrs"
     );
     check_cuda(
-        cudaMemcpyAsync(&info, engine->d_solver_info, sizeof(int), cudaMemcpyDeviceToHost, engine->stream),
+        cudaMemcpyAsync(
+            &info,
+            engine->d_solver_info,
+            sizeof(int),
+            cudaMemcpyDeviceToHost,
+            engine->stream
+        ),
         "read LU solve info"
     );
     check_cuda(cudaStreamSynchronize(engine->stream), "wait for LU solve");
@@ -1066,17 +1703,123 @@ void solve_direction(RhCudaEngine* engine, bool* used_fallback) {
 }
 
 template <typename T>
+bool solve_direction(
+    RhCudaEngine* engine,
+    bool allow_cholesky,
+    bool* used_fallback
+) {
+    if (!allow_cholesky || !engine->information_is_symmetric) {
+        solve_direction_lu<T>(engine, used_fallback);
+        return false;
+    }
+    const int parameters = static_cast<int>(engine->n_parameters);
+    const size_t square = checked_elements(
+        engine->n_parameters, engine->n_parameters, "Cholesky factor"
+    );
+    check_cuda(
+        cudaMemcpyAsync(
+            engine->d_factor,
+            engine->d_hessian,
+            square * sizeof(T),
+            cudaMemcpyDeviceToDevice,
+            engine->stream
+        ),
+        "copy Hessian for Cholesky"
+    );
+    check_cusolver(
+        Solver<T>::potrf(
+            engine->solver,
+            parameters,
+            typed<T>(engine->d_factor),
+            parameters,
+            typed<T>(engine->d_factor_work),
+            engine->factor_lwork,
+            engine->d_solver_info
+        ),
+        "cusolverDn*potrf"
+    );
+    check_cublas(
+        Blas<T>::copy(
+            engine->cublas,
+            parameters,
+            typed<T>(engine->d_gradient),
+            typed<T>(engine->d_direction)
+        ),
+        "copy gradient into Cholesky solve RHS"
+    );
+    check_cusolver(
+        Solver<T>::potrs(
+            engine->solver,
+            parameters,
+            typed<T>(engine->d_factor),
+            parameters,
+            typed<T>(engine->d_direction),
+            parameters,
+            engine->d_solver_info + 1
+        ),
+        "cusolverDn*potrs"
+    );
+    check_cuda(
+        cudaMemcpyAsync(
+            engine->h_solver_info,
+            engine->d_solver_info,
+            2 * sizeof(int),
+            cudaMemcpyDeviceToHost,
+            engine->stream
+        ),
+        "queue Cholesky factorization and solve info"
+    );
+    // The immediately following candidate objective synchronizes this same
+    // stream. Deferring the host inspection removes one round trip per Newton
+    // iteration while the pinned destination remains engine-owned and alive.
+    return true;
+}
+
+template <typename T>
+bool cholesky_candidate_is_valid(RhCudaEngine* engine, bool* used_fallback) {
+    const int* info = engine->h_solver_info;
+    if (info[0] < 0) {
+        fail(
+            RH_CUDA_STATUS_INTERNAL_ERROR,
+            "Cholesky factorization received an invalid cuSOLVER argument"
+        );
+    }
+    if (info[0] > 0) {
+        /*
+         * The renewable Hessian is symmetric positive semidefinite in exact
+         * arithmetic, but numerical rank deficiency can still make it
+         * singular. POTRS is deliberately queued before reading POTRF's
+         * device status, then its tentative output is discarded here and the
+         * established LU -> SVD correctness path recomputes the direction.
+         * This removes a host round trip from the positive-definite path
+         * without weakening the fallback semantics.
+         */
+        solve_direction_lu<T>(engine, used_fallback);
+        return false;
+    }
+    if (info[1] != 0) {
+        fail(
+            RH_CUDA_STATUS_NUMERICAL_ERROR,
+            info[1] < 0 ? "Cholesky solve received an invalid cuSOLVER argument"
+                        : "Cholesky solve failed to produce a finite direction"
+        );
+    }
+    return true;
+}
+
+template <typename T>
 void final_information(
     RhCudaEngine* engine,
     int rows,
     const T* weights,
     T tau,
-    T bandwidth
+    T bandwidth,
+    bool residual_is_current
 ) {
     const int parameters = static_cast<int>(engine->n_parameters);
-    const T one = static_cast<T>(1);
-    const T zero = static_cast<T>(0);
-    compute_residual<T>(engine, rows, typed<T>(engine->d_trial_beta));
+    if (!residual_is_current) {
+        compute_residual<T>(engine, rows, typed<T>(engine->d_trial_beta));
+    }
     check_cuda(
         rh_cuda::launch_residual_score_curvature(
             typed<T>(engine->d_residual),
@@ -1102,25 +1845,7 @@ void final_information(
         ),
         "form final weighted design"
     );
-    check_cublas(
-        Blas<T>::gemm(
-            engine->cublas,
-            CUBLAS_OP_N,
-            CUBLAS_OP_T,
-            parameters,
-            parameters,
-            rows,
-            &one,
-            typed<T>(engine->d_design),
-            parameters,
-            typed<T>(engine->d_weighted_design),
-            parameters,
-            &zero,
-            typed<T>(engine->d_gram),
-            parameters
-        ),
-        "compute final information increment"
-    );
+    compute_weighted_gram<T>(engine, rows, parameters);
     check_cuda(
         rh_cuda::launch_add_matrix(
             typed<T>(engine->d_information),
@@ -1138,6 +1863,7 @@ struct SolveOutcome {
     bool converged = false;
     double objective = 0.0;
     bool used_fallback = false;
+    bool residual_is_current = true;
 };
 
 template <typename T>
@@ -1161,7 +1887,8 @@ SolveOutcome solve_unpenalized(
     SolveOutcome outcome;
     outcome.objective = smooth_objective<T>(
         engine, rows, typed<T>(engine->d_trial_beta), weights, tau, n_total
-    );
+    ).objective;
+    CandidateObjectiveGraph candidate_graph(engine);
 
     for (int iteration = 1; iteration <= static_cast<int>(config->max_iter); ++iteration) {
         compute_gradient_hessian<T>(
@@ -1174,11 +1901,18 @@ SolveOutcome solve_unpenalized(
             n_total,
             static_cast<T>(config->ridge)
         );
-        solve_direction<T>(engine, &outcome.used_fallback);
+        bool cholesky_status_pending = solve_direction<T>(
+            engine,
+            config->ridge > 0.0,
+            &outcome.used_fallback
+        );
 
         bool accepted = false;
+        outcome.residual_is_current = false;
         double candidate_objective = outcome.objective;
-        for (int backtrack = 0; backtrack <= 26; ++backtrack) {
+        ObjectiveResult candidate_result;
+        int backtrack = 0;
+        while (backtrack <= 26) {
             const T step = std::ldexp(static_cast<T>(1), -backtrack);
             check_cuda(
                 rh_cuda::launch_candidate(
@@ -1191,13 +1925,30 @@ SolveOutcome solve_unpenalized(
                 ),
                 "form line-search candidate"
             );
-            candidate_objective = smooth_objective<T>(
-                engine, rows, typed<T>(engine->d_candidate), weights, tau, n_total
+            candidate_result = candidate_graph.evaluate<T>(
+                rows,
+                typed<T>(engine->d_candidate),
+                weights,
+                tau,
+                n_total,
+                typed<T>(engine->d_trial_beta)
             );
+            candidate_objective = candidate_result.objective;
+            if (cholesky_status_pending) {
+                cholesky_status_pending = false;
+                if (!cholesky_candidate_is_valid<T>(engine, &outcome.used_fallback)) {
+                    // POTRF failed. LU/SVD has replaced the tentative
+                    // direction; discard this candidate and restart the line
+                    // search from a full step without advancing the counter.
+                    backtrack = 0;
+                    continue;
+                }
+            }
             if (candidate_objective <= outcome.objective) {
                 accepted = true;
                 break;
             }
+            ++backtrack;
         }
         if (!accepted) {
             outcome.iterations = iteration;
@@ -1206,35 +1957,16 @@ SolveOutcome solve_unpenalized(
         }
 
         check_cuda(
-            rh_cuda::launch_subtract(
-                typed<T>(engine->d_candidate),
-                typed<T>(engine->d_trial_beta),
-                typed<T>(engine->d_delta),
-                parameters,
-                engine->stream
-            ),
-            "form Newton coefficient difference"
-        );
-        T difference_norm = static_cast<T>(0);
-        T beta_norm = static_cast<T>(0);
-        check_cublas(
-            Blas<T>::nrm2(engine->cublas, parameters, typed<T>(engine->d_delta), &difference_norm),
-            "reduce Newton coefficient difference"
-        );
-        check_cublas(
-            Blas<T>::nrm2(engine->cublas, parameters, typed<T>(engine->d_candidate), &beta_norm),
-            "reduce Newton coefficient norm"
-        );
-        check_cuda(
             rh_cuda::launch_copy(
                 typed<T>(engine->d_trial_beta), typed<T>(engine->d_candidate), parameters, engine->stream
             ),
             "commit accepted Newton candidate to workspace"
         );
+        outcome.residual_is_current = true;
         outcome.objective = candidate_objective;
         outcome.iterations = iteration;
-        if (static_cast<double>(difference_norm) <=
-            config->tolerance * (1.0 + static_cast<double>(beta_norm))) {
+        if (candidate_result.difference_norm <=
+            config->tolerance * (1.0 + candidate_result.beta_norm)) {
             outcome.converged = true;
             return outcome;
         }
@@ -1245,27 +1977,107 @@ SolveOutcome solve_unpenalized(
 }
 
 template <typename T>
+void enqueue_state_copy(
+    RhCudaEngine* engine,
+    const T* coefficients,
+    const T* information,
+    RhCudaHostState* state
+) {
+    check_header(state, "host state");
+    if (state->coefficients == nullptr || state->information == nullptr) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "host state output buffers must not be null");
+    }
+    const size_t parameters = static_cast<size_t>(engine->n_parameters);
+    const size_t square = checked_elements(
+        engine->n_parameters, engine->n_parameters, "copied information"
+    );
+    check_cuda(
+        cudaMemcpyAsync(
+            state->coefficients,
+            coefficients,
+            parameters * sizeof(T),
+            cudaMemcpyDeviceToHost,
+            engine->stream
+        ),
+        "copy coefficients to host"
+    );
+
+    const T* portable_information = information;
+    if (!engine->information_is_symmetric) {
+        // Internal matrices are column-major while checkpoints are row-major.
+        // A symmetric matrix has the same byte layout in both conventions;
+        // only a restored general matrix requires an explicit transpose.
+        check_cuda(
+            rh_cuda::launch_transpose(
+                information,
+                typed<T>(engine->d_gram),
+                engine->n_parameters,
+                engine->n_parameters,
+                engine->stream
+            ),
+            "transpose information for host"
+        );
+        portable_information = typed<T>(engine->d_gram);
+    }
+    check_cuda(
+        cudaMemcpyAsync(
+            state->information,
+            portable_information,
+            square * sizeof(T),
+            cudaMemcpyDeviceToHost,
+            engine->stream
+        ),
+        "copy information to host"
+    );
+}
+
+void fill_state_metadata(
+    const RhCudaEngine* engine,
+    RhCudaHostState* state
+) {
+    state->n_samples_seen = engine->n_samples_seen;
+    state->batch_count = engine->batch_count;
+    state->previous_lambda = engine->previous_lambda;
+    state->weight_sum = engine->weight_sum;
+}
+
+template <typename T>
 RhCudaStatus update_typed(
     RhCudaEngine* engine,
-    const RhCudaHostBatch* batch,
+    const BatchView& batch,
     const RhCudaUnpenalizedConfig* config,
-    RhCudaDiagnostics* diagnostics
+    RhCudaDiagnostics* diagnostics,
+    RhCudaHostState* exported_state = nullptr
 ) {
     validate_config(config, engine);
-    validate_batch(batch, engine);
+    validate_batch(batch, config, engine);
     check_header(diagnostics, "diagnostics");
-    if (engine->n_samples_seen > std::numeric_limits<int64_t>::max() - batch->n_rows ||
+    if (exported_state != nullptr) {
+        check_header(exported_state, "host state");
+        if (exported_state->coefficients == nullptr || exported_state->information == nullptr) {
+            fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "host state output buffers must not be null");
+        }
+    }
+    if (engine->n_samples_seen > std::numeric_limits<int64_t>::max() - batch.n_rows ||
         engine->batch_count == std::numeric_limits<int64_t>::max()) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "state counters would overflow");
     }
 
-    const double n_total = engine->weight_sum + batch->batch_weight;
-    const double bandwidth = bandwidth_for(engine, batch, config);
-    copy_host_batch<T>(engine, batch);
-    const T* weights = batch->sample_weight == nullptr ? nullptr : typed<T>(engine->d_weights);
+    const double n_total = engine->weight_sum + batch.batch_weight;
+    const double bandwidth = bandwidth_for(engine, batch.batch_weight, config);
+    copy_batch<T>(engine, batch);
+    // DLPack keeps the producer target alive until this call returns. Alias it
+    // directly during the solver instead of copying it into owned workspace;
+    // the guard restores the allocation pointer on every exception path.
+    ScopedPointerAlias target_alias(
+        &engine->d_y,
+        batch.y,
+        batch.copy_kind == cudaMemcpyDeviceToDevice
+    );
+    const T* weights = batch.sample_weight == nullptr ? nullptr : typed<T>(engine->d_weights);
     const SolveOutcome outcome = solve_unpenalized<T>(
         engine,
-        static_cast<int>(batch->n_rows),
+        static_cast<int>(batch.n_rows),
         weights,
         config,
         n_total,
@@ -1274,11 +2086,24 @@ RhCudaStatus update_typed(
     );
     final_information<T>(
         engine,
-        static_cast<int>(batch->n_rows),
+        static_cast<int>(batch.n_rows),
         weights,
         static_cast<T>(config->tau),
-        static_cast<T>(bandwidth)
+        static_cast<T>(bandwidth),
+        outcome.residual_is_current
     );
+
+    if (exported_state != nullptr) {
+        // Both outputs still live in staging buffers. Queue their D2H copies
+        // before the update's transactional completion so callers pay for one
+        // stream wait rather than update + copy_state waits.
+        enqueue_state_copy<T>(
+            engine,
+            typed<T>(engine->d_trial_beta),
+            typed<T>(engine->d_information_next),
+            exported_state
+        );
+    }
 
     /*
      * All state writes above target staging buffers.  Wait before swapping
@@ -1288,10 +2113,13 @@ RhCudaStatus update_typed(
     std::swap(engine->d_coefficients, engine->d_trial_beta);
     std::swap(engine->d_information, engine->d_information_next);
 
-    engine->n_samples_seen += batch->n_rows;
+    engine->n_samples_seen += batch.n_rows;
     engine->batch_count += 1;
     engine->previous_lambda = 0.0;
     engine->weight_sum = n_total;
+    if (exported_state != nullptr) {
+        fill_state_metadata(engine, exported_state);
+    }
 
     diagnostics->iterations = outcome.iterations;
     diagnostics->converged = outcome.converged ? 1 : 0;
@@ -1510,11 +2338,45 @@ RhCudaStatus rh_cuda_engine_create(
         engine->dtype = options->dtype;
         engine->device_id = options->device_id;
         engine->n_parameters = options->n_parameters;
+        engine->requested_flags = options->reserved0;
+        engine->enabled_flags = options->reserved0;
+        int memory_pools_supported = 0;
+        check_cuda(
+            cudaDeviceGetAttribute(
+                &memory_pools_supported,
+                cudaDevAttrMemoryPoolsSupported,
+                options->device_id
+            ),
+            "query stream-ordered allocation support"
+        );
+        engine->stream_ordered_allocations = memory_pools_supported != 0;
+        if (engine->stream_ordered_allocations) {
+            // Use a library-owned pool so retention never mutates CUDA's
+            // process-wide default allocator or another framework's policy.
+            engine->memory_pool = shared_device_pool(options->device_id);
+        }
         check_cuda(cudaStreamCreateWithFlags(&engine->stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
         check_cublas(cublasCreate(&engine->cublas), "cublasCreate");
         check_cublas(cublasSetStream(engine->cublas, engine->stream), "cublasSetStream");
         check_cublas(cublasSetPointerMode(engine->cublas, CUBLAS_POINTER_MODE_HOST), "cublasSetPointerMode");
-        check_cublas(cublasSetMathMode(engine->cublas, CUBLAS_PEDANTIC_MATH), "cublasSetMathMode");
+        const cublasMath_t dense_math_mode =
+            (engine->enabled_flags & RH_CUDA_ENGINE_FLAG_FAST_MATH) != 0
+            ? CUBLAS_TF32_TENSOR_OP_MATH
+            : CUBLAS_PEDANTIC_MATH;
+        check_cublas(cublasSetMathMode(engine->cublas, dense_math_mode), "cublasSetMathMode");
+        check_cublas(cublasCreate(&engine->cublas_reduction), "cublasCreate reduction handle");
+        check_cublas(
+            cublasSetStream(engine->cublas_reduction, engine->stream),
+            "cublasSetStream reduction handle"
+        );
+        check_cublas(
+            cublasSetPointerMode(engine->cublas_reduction, CUBLAS_POINTER_MODE_DEVICE),
+            "cublasSetPointerMode reduction handle"
+        );
+        check_cublas(
+            cublasSetMathMode(engine->cublas_reduction, CUBLAS_PEDANTIC_MATH),
+            "cublasSetMathMode reduction handle"
+        );
         check_cusolver(cusolverDnCreate(&engine->solver), "cusolverDnCreate");
         check_cusolver(cusolverDnSetStream(engine->solver, engine->stream), "cusolverDnSetStream");
         if (engine->dtype == RH_CUDA_DTYPE_FLOAT32) {
@@ -1556,13 +2418,13 @@ RhCudaStatus rh_cuda_engine_restore(RhCudaEngine* engine, const RhCudaHostStateV
         const size_t parameters = static_cast<size_t>(engine->n_parameters);
         const size_t square = checked_elements(engine->n_parameters, engine->n_parameters, "restored information");
         if (engine->dtype == RH_CUDA_DTYPE_FLOAT32) {
-            validate_finite_state(
+            engine->information_is_symmetric = validate_finite_state(
                   static_cast<const float*>(state->coefficients),
                   static_cast<const float*>(state->information),
                   parameters
             );
         } else {
-            validate_finite_state(
+            engine->information_is_symmetric = validate_finite_state(
                   static_cast<const double*>(state->coefficients),
                   static_cast<const double*>(state->information),
                   parameters
@@ -1630,61 +2492,23 @@ RhCudaStatus rh_cuda_engine_restore(RhCudaEngine* engine, const RhCudaHostStateV
 
 RhCudaStatus rh_cuda_engine_copy_state(RhCudaEngine* engine, RhCudaHostState* state) {
     return guarded(engine, [&]() -> RhCudaStatus {
-        check_header(state, "host state");
-        if (state->coefficients == nullptr || state->information == nullptr) {
-            fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "host state output buffers must not be null");
-        }
-        const size_t parameters = static_cast<size_t>(engine->n_parameters);
-        const size_t square = checked_elements(engine->n_parameters, engine->n_parameters, "copied information");
-        const size_t item_size = engine->dtype == RH_CUDA_DTYPE_FLOAT32 ? sizeof(float) : sizeof(double);
-        check_cuda(
-            cudaMemcpyAsync(
-                state->coefficients,
-                engine->d_coefficients,
-                parameters * item_size,
-                cudaMemcpyDeviceToHost,
-                engine->stream
-            ),
-            "copy coefficients to host"
-        );
         if (engine->dtype == RH_CUDA_DTYPE_FLOAT32) {
-            check_cuda(
-                rh_cuda::launch_transpose(
-                    typed<float>(engine->d_information),
-                    typed<float>(engine->d_information_next),
-                    engine->n_parameters,
-                    engine->n_parameters,
-                    engine->stream
-                ),
-                "transpose float32 information for host"
+            enqueue_state_copy<float>(
+                engine,
+                typed<float>(engine->d_coefficients),
+                typed<float>(engine->d_information),
+                state
             );
         } else {
-            check_cuda(
-                rh_cuda::launch_transpose(
-                    typed<double>(engine->d_information),
-                    typed<double>(engine->d_information_next),
-                    engine->n_parameters,
-                    engine->n_parameters,
-                    engine->stream
-                ),
-                "transpose float64 information for host"
+            enqueue_state_copy<double>(
+                engine,
+                typed<double>(engine->d_coefficients),
+                typed<double>(engine->d_information),
+                state
             );
         }
-        check_cuda(
-            cudaMemcpyAsync(
-                state->information,
-                engine->d_information_next,
-                square * item_size,
-                cudaMemcpyDeviceToHost,
-                engine->stream
-            ),
-            "copy information to host"
-        );
         check_cuda(cudaStreamSynchronize(engine->stream), "complete state copy");
-        state->n_samples_seen = engine->n_samples_seen;
-        state->batch_count = engine->batch_count;
-        state->previous_lambda = engine->previous_lambda;
-        state->weight_sum = engine->weight_sum;
+        fill_state_metadata(engine, state);
         return RH_CUDA_STATUS_SUCCESS;
     });
 }
@@ -1696,10 +2520,80 @@ RhCudaStatus rh_cuda_engine_update_host(
     RhCudaDiagnostics* diagnostics
 ) {
     return guarded(engine, [&]() -> RhCudaStatus {
+        check_header(batch, "host batch");
+        const BatchView view{
+            batch->x_design,
+            batch->y,
+            batch->sample_weight,
+            batch->n_rows,
+            batch->n_columns,
+            batch->batch_weight,
+            cudaMemcpyHostToDevice,
+        };
         if (engine->dtype == RH_CUDA_DTYPE_FLOAT32) {
-            return update_typed<float>(engine, batch, config, diagnostics);
+            return update_typed<float>(engine, view, config, diagnostics);
         }
-        return update_typed<double>(engine, batch, config, diagnostics);
+        return update_typed<double>(engine, view, config, diagnostics);
+    });
+}
+
+RhCudaStatus rh_cuda_engine_update_host_with_state(
+    RhCudaEngine* engine,
+    const RhCudaHostBatch* batch,
+    const RhCudaUnpenalizedConfig* config,
+    RhCudaDiagnostics* diagnostics,
+    RhCudaHostState* state
+) {
+    return guarded(engine, [&]() -> RhCudaStatus {
+        check_header(batch, "host batch");
+        const BatchView view{
+            batch->x_design,
+            batch->y,
+            batch->sample_weight,
+            batch->n_rows,
+            batch->n_columns,
+            batch->batch_weight,
+            cudaMemcpyHostToDevice,
+        };
+        if (engine->dtype == RH_CUDA_DTYPE_FLOAT32) {
+            return update_typed<float>(engine, view, config, diagnostics, state);
+        }
+        return update_typed<double>(engine, view, config, diagnostics, state);
+    });
+}
+
+RhCudaStatus rh_cuda_engine_stream(RhCudaEngine* engine, uintptr_t* stream) {
+    return guarded(engine, [&]() -> RhCudaStatus {
+        if (stream == nullptr) {
+            fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "stream output must not be null");
+        }
+        *stream = reinterpret_cast<uintptr_t>(engine->stream);
+        return RH_CUDA_STATUS_SUCCESS;
+    });
+}
+
+RhCudaStatus rh_cuda_engine_update_device_with_state(
+    RhCudaEngine* engine,
+    const RhCudaDeviceBatch* batch,
+    const RhCudaUnpenalizedConfig* config,
+    RhCudaDiagnostics* diagnostics,
+    RhCudaHostState* state
+) {
+    return guarded(engine, [&]() -> RhCudaStatus {
+        check_header(batch, "device batch");
+        const BatchView view{
+            batch->x_design,
+            batch->y,
+            batch->sample_weight,
+            batch->n_rows,
+            batch->n_columns,
+            batch->batch_weight,
+            cudaMemcpyDeviceToDevice,
+        };
+        if (engine->dtype == RH_CUDA_DTYPE_FLOAT32) {
+            return update_typed<float>(engine, view, config, diagnostics, state);
+        }
+        return update_typed<double>(engine, view, config, diagnostics, state);
     });
 }
 
@@ -1715,6 +2609,21 @@ RhCudaStatus rh_cuda_engine_predict_host(RhCudaEngine* engine, const RhCudaHostP
 RhCudaStatus rh_cuda_engine_synchronize(RhCudaEngine* engine) {
     return guarded(engine, [&]() -> RhCudaStatus {
         check_cuda(cudaStreamSynchronize(engine->stream), "engine synchronize");
+        return RH_CUDA_STATUS_SUCCESS;
+    });
+}
+
+RhCudaStatus rh_cuda_engine_features(
+    RhCudaEngine* engine,
+    RhCudaEngineFeatures* features
+) {
+    return guarded(engine, [&]() -> RhCudaStatus {
+        check_header(features, "engine features");
+        features->requested_flags = engine->requested_flags;
+        features->enabled_flags = engine->enabled_flags;
+        features->graph_captures = engine->graph_captures;
+        features->graph_replays = engine->graph_replays;
+        features->graph_fallbacks = engine->graph_fallbacks;
         return RH_CUDA_STATUS_SUCCESS;
     });
 }

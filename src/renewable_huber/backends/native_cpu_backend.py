@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from ..state import RenewableHuberState
 
 _EXPECTED_ABI_VERSION = 1
-_EXPECTED_PYTHON_API_VERSION = 1
+_EXPECTED_PYTHON_API_VERSION = 2
 
 
 class NativeCpuBackend(NumPyBackend):
@@ -29,7 +29,7 @@ class NativeCpuBackend(NumPyBackend):
     name = "native_cpu"
     device = "cpu"
 
-    def __init__(self, dtype: str = "float64") -> None:
+    def __init__(self, dtype: str = "float64", *, n_threads: int | None = None) -> None:
         super().__init__(dtype)
         try:
             from renewable_huber import _native_cpu
@@ -57,14 +57,23 @@ class NativeCpuBackend(NumPyBackend):
                 f"{_EXPECTED_PYTHON_API_VERSION}, received {version!r}"
             )
         self._native_module = _native_cpu
+        self._requested_n_threads = n_threads
         self._engine: Any | None = None
-        self._engine_batch_count: int | None = None
+        self._engine_state_token: int | None = None
 
     @property
     def native_version(self) -> str:
         """Return the loaded native version metadata."""
 
         return str(self._native_module.version())
+
+    @property
+    def effective_n_jobs(self) -> int | None:
+        """Return the requested or engine-confirmed native worker count."""
+
+        if self._engine is None:
+            return self._requested_n_threads
+        return int(self._engine.n_threads)
 
     def renewable_update(
         self,
@@ -101,8 +110,12 @@ class NativeCpuBackend(NumPyBackend):
         except Exception:
             self._discard_engine()
             raise
-        self._engine_batch_count = int(result["batch_count"])
-        return self._decode_result(result, state)
+        # The engine has advanced, so it no longer mirrors ``state``. Leave
+        # the token invalid if result decoding itself fails.
+        self._engine_state_token = None
+        next_state, diagnostics = self._decode_result(result, state)
+        self._engine_state_token = next_state.mirror_token
+        return next_state, diagnostics
 
     def native_predict(self, X: np.ndarray, state: RenewableHuberState) -> np.ndarray:
         """Predict through the resident native coefficient vector."""
@@ -127,13 +140,17 @@ class NativeCpuBackend(NumPyBackend):
             if n_parameters is None:
                 n_parameters = int(state.coefficients.shape[0])
             try:
-                self._engine = self._native_module.NativeCpuEngine(self.dtype.name, n_parameters)
+                self._engine = self._native_module.NativeCpuEngine(
+                    self.dtype.name,
+                    n_parameters,
+                    n_threads=self._requested_n_threads,
+                )
             except Exception as error:
                 self._discard_engine()
                 raise BackendUnavailableError(
                     "The native CPU engine could not initialize"
                 ) from error
-        elif self._engine_batch_count == state.batch_count:
+        elif self._engine_state_token == state.mirror_token:
             return
 
         try:
@@ -148,11 +165,11 @@ class NativeCpuBackend(NumPyBackend):
         except Exception:
             self._discard_engine()
             raise
-        self._engine_batch_count = int(state.batch_count)
+        self._engine_state_token = state.mirror_token
 
     def _discard_engine(self) -> None:
         self._engine = None
-        self._engine_batch_count = None
+        self._engine_state_token = None
 
     def _decode_result(
         self, result: dict[str, Any], previous_state: RenewableHuberState
@@ -160,9 +177,16 @@ class NativeCpuBackend(NumPyBackend):
         from ..core import UpdateDiagnostics
         from ..state import RenewableHuberState
 
+        coefficients = np.asarray(result["coefficients"], dtype=self.dtype)
+        information = np.asarray(result["information"], dtype=self.dtype)
+        # Current extension builds return fresh Python-owned snapshots. Keep
+        # copying results from older builds and test doubles defensively.
+        if not bool(result.get("state_is_detached", False)):
+            coefficients = coefficients.copy()
+            information = information.copy()
         state = RenewableHuberState(
-            coefficients=np.asarray(result["coefficients"], dtype=self.dtype).copy(),
-            information=np.asarray(result["information"], dtype=self.dtype).copy(),
+            coefficients=coefficients,
+            information=information,
             n_samples_seen=int(result["n_samples_seen"]),
             batch_count=int(result["batch_count"]),
             previous_lambda=float(result["previous_lambda"]),

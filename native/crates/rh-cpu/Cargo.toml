@@ -8,9 +8,10 @@ repository.workspace = true
 description = "Portable high-performance CPU engine for Renewable Huber."
 
 [dependencies]
-matrixmultiply = { version = "0.3", features = ["threading"] }
+matrixmultiply = "0.3"
 nalgebra.workspace = true
 num-traits.workspace = true
+rayon = "1.10"
 rh-core = { path = "../rh-core" }
 
 [dev-dependencies]

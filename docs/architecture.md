@@ -27,16 +27,24 @@ RenewableHuberRegressor
 
 Backend 只在第一次 `fit`／`partial_fit` 時解析：
 
+Native CPU 的公開 `n_jobs` 先由 Python 驗證與解析，再於 resident
+`NativeCpuEngine` 建立時傳入一次。正整數與 `-1` 會建立 estimator-local
+Rayon thread pool，使不同 estimator 的 worker 上限彼此隔離；`None` 則沿用
+extension 的 process-global Rayon pool，以避免預設路徑反覆建立執行緒。
+兩種模式都不會修改 process-global Rayon 或 BLAS 設定。Checkpoint 儲存原始
+constructor 值（`None`、`-1` 或正整數），fitted estimator 則以 `n_jobs_`
+公開實際 worker 數；其他 backend 明確忽略此設定。
+
 - `backend="auto", device="auto"` 與 `backend="auto", device="cpu"` 固定解析成 NumPy。
 - `backend="auto", device="cuda"` 解析成 CuPy，且需要可用的 NVIDIA CUDA 裝置。
 - `backend="native_cpu"` 明確選擇選用的 Rust/PyO3 whole-batch CPU 核心；
   P1 不會由 `auto` 自動選取。
-- `backend="native_cuda"` 明確選擇選用的 Rust/CUDA whole-batch GPU 核心；
+- `backend="native_cuda"` 明確選擇選用的 Rust/CUDA whole-batch GPU 核心；除了相容的 NumPy host input，也接受相同裝置、相同 dtype、C-contiguous 的 CUDA DLPack tensor；
   P2 不會由 `auto` 自動選取，且目前只支援 `penalty="none"`。
 - `backend="torch"` 與 `backend="tensorflow"` 必須由呼叫端明確選擇；不會依輸入 tensor 推斷。
 - `device="auto"` 對 Torch 與 TensorFlow 也選擇 CPU；CUDA 必須明確要求。
 
-輸入會由選定 backend 轉型並移至它的裝置。跨框架輸入沒有 DLPack 零複製保證，可能發生配置或主機／裝置複製。PyTorch tensor 會先 detach；TensorFlow 只支援 eager execution。
+輸入會由選定 backend 轉型並移至它的裝置。一般跨框架輸入沒有 DLPack 零複製保證，可能發生配置或主機／裝置複製；`native_cuda` device-update 是明確例外，它會消費 CuPy／PyTorch CUDA 或 TensorFlow eager GPU 的 DLPack capsule，並以 device-to-device copy 搬入 engine workspace，全程不經 host。CuPy／PyTorch producer 會收到 consumer stream；TensorFlow legacy exporter 無法協商 stream，因此先建立明確 producer synchronization boundary。PyTorch tensor 使用共享 storage 的 detached view；TensorFlow 只支援 eager execution。Native CUDA 的 device-resident `predict` 尚未提供，會拒絕 CUDA tensor 而不執行隱式 D2H copy。
 
 ## 演算法正確性邊界
 

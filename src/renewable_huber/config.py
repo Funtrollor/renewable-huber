@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass
 from math import isfinite
 from numbers import Integral, Real
@@ -42,6 +43,9 @@ class EstimatorConfig:
     backend: BackendName = "auto"
     device: DeviceName = "auto"
     dtype: DTypeName = "float64"
+    n_jobs: int | None = None
+    cuda_graphs: bool = False
+    cuda_fast_math: bool = False
 
     def validate(self) -> None:
         if not _is_finite_real(self.tau) or self.tau <= 0:
@@ -78,6 +82,28 @@ class EstimatorConfig:
             raise ValidationError("device must be 'auto', 'cpu', or 'cuda'")
         if self.dtype not in ("float32", "float64"):
             raise ValidationError("dtype must be either 'float32' or 'float64'")
+        if self.n_jobs is not None and (
+            isinstance(self.n_jobs, bool)
+            or not isinstance(self.n_jobs, Integral)
+            or self.n_jobs == 0
+            or self.n_jobs < -1
+        ):
+            raise ValidationError("n_jobs must be None, -1, or a positive integer")
+        if not isinstance(self.cuda_graphs, bool):
+            raise ValidationError("cuda_graphs must be a boolean")
+        if not isinstance(self.cuda_fast_math, bool):
+            raise ValidationError("cuda_fast_math must be a boolean")
+        if self.cuda_fast_math and self.backend == "native_cuda" and self.dtype != "float32":
+            raise ValidationError("cuda_fast_math requires dtype='float32'")
+
+    def resolved_n_jobs(self) -> int | None:
+        """Resolve the native CPU worker count while preserving ``None`` defaults."""
+
+        if self.n_jobs is None:
+            return None
+        if self.n_jobs == -1:
+            return max(os.cpu_count() or 1, 1)
+        return int(self.n_jobs)
 
     def to_dict(self) -> dict[str, object]:
         """Return JSON-compatible configuration metadata."""

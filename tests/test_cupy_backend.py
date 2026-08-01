@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from renewable_huber import RenewableHuberRegressor
+from renewable_huber.backends.cupy_backend import CuPyBackend
 
 
 def _cupy_ready() -> bool:
@@ -49,6 +50,16 @@ class CuPyBackendTests(unittest.TestCase):
             rtol=2e-5,
             atol=2e-5,
         )
+
+    def test_cold_backends_reuse_windows_cuda_dll_registration(self) -> None:
+        first = CuPyBackend(dtype="float32")
+        second = CuPyBackend(dtype="float32")
+
+        # On Windows the live DirectoryHandle must be process-scoped. Creating
+        # one handle per cold estimator eventually exhausts loader state. Other
+        # platforms deliberately return None because they do not use this API.
+        if first._cuda_dll_directory is not None:
+            self.assertIs(first._cuda_dll_directory, second._cuda_dll_directory)
 
     def test_auto_cuda_selection_and_checkpoint_preserve_gpu_backend(self) -> None:
         model = RenewableHuberRegressor(backend="auto", device="cuda", dtype="float32")
