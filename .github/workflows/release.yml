@@ -47,7 +47,9 @@ jobs:
         working-directory: native
         run: |
           cargo fmt --all -- --check
-          cargo test --locked --workspace --all-targets
+          # PyO3 extensions are validated by the wheel jobs; standalone Linux
+          # test executables cannot resolve extension-module CPython symbols.
+          cargo test --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets
           cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Build base wheel and sdist
         run: python -m build --outdir dist-base
