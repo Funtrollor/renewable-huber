@@ -115,11 +115,13 @@ python scripts/benchmarks/run_interleaved_benchmark.py `
 
 The runner writes every one-sample round, two merged schema-v2 records, and a
 machine-readable gate report. It requires the existing fixed-runner checks and
-also gates the median of the nine aligned `candidate / baseline` ratios. The
-manual GPU workflow builds isolated baseline native CPU/CUDA extensions and
-runs this gate on the fixed Ryzen/RTX host. Merging fails if calibration chooses
-different `sample_repetitions` for different rounds of one binary; the workflow
-uses a conservative cap so short WDDM calls retain one fixed sampling contract.
+also gates the median of the nine aligned `candidate / baseline` ratios.
+GPU capture is local-only: build isolated baseline and candidate CPU/CUDA
+extensions on the fixed Ryzen/RTX host and run this command there. The gate
+fails if calibration chooses different `sample_repetitions` for different
+rounds of one binary; use a conservative cap so short WDDM calls retain one
+fixed sampling contract. Record the tested commit and environment alongside
+the JSON report, but do not commit generated artifacts.
 
 For a diagnostic record that was not captured by the interleaved runner, the
 older non-paired checker remains available:

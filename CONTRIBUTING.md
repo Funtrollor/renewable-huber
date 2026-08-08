@@ -69,8 +69,9 @@ if it changes the documented numerical contract.
 - Update `CHANGELOG.md` under `Unreleased` for user-visible behavior.
 - Do not commit datasets, model files, generated build artifacts, research PDFs, credentials, or
   local benchmark output.
-- Let CI pass on all required platforms. GPU validation is manual because untrusted pull-request
-  code must never run automatically on the self-hosted GPU runner.
+- Let CI pass on all required CPU platforms. Run GPU correctness, CUDA smoke,
+  profiling, and performance gates locally on the fixed GPU host; GPU
+  validation must not run in GitHub Actions for pull requests.
 - Use Conventional Commit-style imperative subjects when practical, for example
   `perf: fuse CUDA renewal kernels`.
 

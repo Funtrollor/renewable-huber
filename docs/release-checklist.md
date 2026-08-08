@@ -7,7 +7,8 @@
 - [ ] `CHANGELOG.md`、README 支援範圍與 API 文件已更新。
 - [ ] Golden corpus、Python 測試、Rust tests、Ruff、rustfmt、Clippy 全部通過。
 - [ ] 固定硬體上的 CPU 與 CUDA performance gates 無效能或正確性回歸。
-- [ ] 手動 GPU validation 已在 CUDA 12 self-hosted runner 通過。
+- [ ] 本機固定 CUDA 12 主機的 GPU correctness、C ABI smoke、shape sweep 與
+      interleaved performance gate 已通過，並記錄 commit、環境與 JSON 證據。
 - [ ] `python scripts/native/validate_release_artifacts.py --source-only` 通過。
 - [ ] Release commit 已合併到 `main`，tag 名稱為 `vX.Y.Z`。
 
@@ -19,7 +20,9 @@
 - [ ] CUDA wheel 具備公開 API version、native ABI 與 capability metadata。
 - [ ] CUDA fat binary architecture 清單符合 release policy，使用者不需本機 `nvcc`。
 - [ ] 完整 artifact set 沒有重複檔名，且版本與 dependency contract 全部相符。
-- [ ] CPU/CUDA wheels 與 matching base wheel 在乾淨環境可一起安裝並通過 `pip check`。
+- [ ] CPU wheels 與 matching base wheel 在 CI 乾淨環境可一起安裝並通過
+      `pip check`；本機建置的 CUDA candidate wheel 已在固定 GPU 主機通過
+      `smoke_test_cuda_wheels.py`。
 - [ ] GitHub Release 包含 base wheel/sdist 及所有 native wheels。
 
 ## PyPI 發布
