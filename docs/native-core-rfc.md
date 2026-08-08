@@ -111,9 +111,17 @@ native/
     rh-python-cuda/   CUDA PyO3 module and host NumPy adapter
   cuda/
     include/rh_cuda.h
-    src/engine.cu
-    src/huber_kernels.cu
-    src/linalg.cpp
+    src/c_api.cu          extern "C" entry points, guards, error translation
+    src/pipeline.cu       one batch transition, host prediction
+    src/linear_solver.cu  Cholesky -> LU -> lazy SVD ladder
+    src/objective.cu      objective, gradient/Hessian, candidate CUDA Graph
+    src/batch.cu          batch validation, staging, intercept append
+    src/workspace.cu      device allocation and the engine destructor
+    src/engine_internal.cu  memory-pool registry, Failure key function
+    src/huber_kernels.cu  elementwise and fused device kernels
+    src/abi_contract.cpp  static_asserts pinning the public struct layout
+  contracts/
+    rh_cuda_contract.json  single source of truth for the CUDA ABI
   python-cpu/         CPU wheel metadata and legal files
   python-cuda/        CUDA wheel metadata and legal files
 ```

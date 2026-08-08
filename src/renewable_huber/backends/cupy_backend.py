@@ -29,6 +29,7 @@ class CuPyBackend:
     """
 
     name = "cupy"
+    supports_elementwise_workspace = True
 
     def __init__(self, dtype: str = "float64") -> None:
         try:

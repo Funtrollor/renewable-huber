@@ -103,7 +103,13 @@ typedef struct RhCudaHostState {
     double weight_sum;
 } RhCudaHostState;
 
-/* Immutable unpenalized configuration for one update. */
+/*
+ * Immutable unpenalized configuration for one update.  n_features_in counts
+ * the columns of the caller's feature matrix, excluding any intercept, and it
+ * fixes the engine's intercept contract: n_parameters must equal n_features_in
+ * when the model has no intercept, or n_features_in + 1 when it has one.  No
+ * other relationship between the two is accepted.
+ */
 typedef struct RhCudaUnpenalizedConfig {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -116,8 +122,22 @@ typedef struct RhCudaUnpenalizedConfig {
 } RhCudaUnpenalizedConfig;
 
 /*
- * Host-fed C-contiguous batch.  x_design is row-major with shape
- * (n_rows, n_parameters); intercept construction belongs to the caller.
+ * Host-fed C-contiguous batch.  x_design is row-major with n_rows rows and
+ * n_columns columns, where n_columns must be either of:
+ *
+ *   n_parameters   - the design matrix is already expanded and is copied as
+ *                    is.  When the model has an intercept the caller owns its
+ *                    construction and must place it in the trailing column.
+ *   n_features_in  - unexpanded features.  The engine appends the intercept
+ *                    itself, on device, as a trailing all-ones column.  This
+ *                    requires the intercept contract n_parameters ==
+ *                    n_features_in + 1 and is the path the Python CUDA
+ *                    backend takes, so that no host-side copy is needed to
+ *                    widen the batch.
+ *
+ * Both widths produce identical results; they differ only in where the
+ * intercept column is materialized.
+ *
  * y and sample_weight, when non-null, are contiguous vectors of n_rows in
  * the engine dtype.  sample_weight has the same frequency-weight semantics
  * as the Python reference.  Passing NULL means all weights are one.
@@ -138,6 +158,12 @@ typedef struct RhCudaHostBatch {
  * Device-resident, C-contiguous batch. Pointers must address allocations on
  * the engine's CUDA device and contain values in the engine dtype. The caller
  * (normally a DLPack consumer) retains ownership until this call returns.
+ *
+ * n_columns follows exactly the same contract as RhCudaHostBatch: either
+ * n_parameters for an already-expanded design, or n_features_in to have the
+ * engine append the trailing all-ones intercept column itself.  On this path
+ * the narrow form reads the caller's device memory directly, without an
+ * intermediate staging copy.
  */
 typedef struct RhCudaDeviceBatch {
     uint32_t abi_version;

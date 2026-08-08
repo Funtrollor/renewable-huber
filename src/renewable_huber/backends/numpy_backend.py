@@ -13,6 +13,9 @@ class NumPyBackend:
     name = "numpy"
     device = "cpu"
     xp = np
+    # xp.empty_like gives the portable solver a workspace it can reuse
+    # across elementwise passes instead of allocating one per iteration.
+    supports_elementwise_workspace = True
 
     def __init__(self, dtype: str = "float64") -> None:
         self.dtype = np.dtype(dtype)

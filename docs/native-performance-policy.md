@@ -97,7 +97,32 @@ a result captured while another workload is active must not be promoted.
 Capture a v2 baseline and candidate on the same self-hosted runner. Use at
 least three warmups and nine measured samples. With the default stabilized
 protocol, a sample may aggregate several independent operations while retaining
-per-operation units. Then run:
+per-operation units.
+
+For acceptance, baseline and candidate must be captured as aligned pairs. The
+runner alternates `A -> B`, then `B -> A`, so neither binary owns only the cold
+or hot half of the session:
+
+```powershell
+python scripts/benchmarks/run_interleaved_benchmark.py `
+  --baseline-python C:\bench\base\Scripts\python.exe `
+  --baseline-repo C:\bench\base-source `
+  --candidate-python C:\bench\candidate\Scripts\python.exe `
+  --candidate-repo . `
+  --output-dir artifacts/interleaved `
+  --rounds 9 --profile smoke --backend all --penalty none --dtype both
+```
+
+The runner writes every one-sample round, two merged schema-v2 records, and a
+machine-readable gate report. It requires the existing fixed-runner checks and
+also gates the median of the nine aligned `candidate / baseline` ratios. The
+manual GPU workflow builds isolated baseline native CPU/CUDA extensions and
+runs this gate on the fixed Ryzen/RTX host. Merging fails if calibration chooses
+different `sample_repetitions` for different rounds of one binary; the workflow
+uses a conservative cap so short WDDM calls retain one fixed sampling contract.
+
+For a diagnostic record that was not captured by the interleaved runner, the
+older non-paired checker remains available:
 
 ```powershell
 python scripts/benchmarks/check_performance_regression.py `
@@ -127,10 +152,11 @@ policy. A diagnostic run may pass
 `--no-require-competitor-parity`, but that result cannot justify dispatch
 promotion.
 
-The thresholds are guardrails, not statistical proof of a speedup. Repeated
-noisy measurements should be recaptured rather than accepted by increasing a
-tolerance. Correctness still comes first: the golden/differential suite must
-pass independently of the timing gate.
+The thresholds are guardrails, not statistical proof of a speedup. A paired
+GPU change below roughly 10% remains indistinguishable from this host's normal
+noise even when it passes. Repeated noisy measurements should be recaptured
+rather than accepted by increasing a tolerance. Correctness still comes first:
+the golden/differential suite must pass independently of the timing gate.
 
 ## Native CPU thread scaling
 

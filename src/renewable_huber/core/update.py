@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import log, sqrt
 from typing import Any
 
+from ..backends.capabilities import capabilities_of
 from ..backends.protocol import ArrayBackend
 from ..config import EstimatorConfig
 from ..state import RenewableHuberState
@@ -113,9 +114,13 @@ def _huber_score(residual: Any, tau: float, backend: ArrayBackend) -> Any:
 
 
 def _huber_loss(residual: Any, tau: float, backend: ArrayBackend) -> Any:
-    """Use the CUDA C++ Huber-loss kernel when the active backend provides one."""
+    """Use a fused Huber-loss kernel when the active backend provides one.
 
-    accelerated_loss = getattr(backend, "cuda_huber_loss", None)
+    A backend may advertise the kernel and still decline a particular input by
+    returning ``None``, so presence alone is not enough to skip the fallback.
+    """
+
+    accelerated_loss = capabilities_of(backend).huber_loss
     if accelerated_loss is not None:
         loss = accelerated_loss(residual, tau)
         if loss is not None:
@@ -126,9 +131,9 @@ def _huber_loss(residual: Any, tau: float, backend: ArrayBackend) -> Any:
 def _smoothed_curvature(
     residual: Any, config: EstimatorConfig, bandwidth: float, backend: ArrayBackend
 ) -> Any:
-    """Use a fused CUDA C++ curvature kernel when the active backend provides one."""
+    """Use a fused curvature kernel when the active backend provides one."""
 
-    accelerated_curvature = getattr(backend, "cuda_smoothed_curvature", None)
+    accelerated_curvature = capabilities_of(backend).smoothed_curvature
     if accelerated_curvature is not None:
         curvature = accelerated_curvature(residual, config.tau, bandwidth)
         if curvature is not None:
@@ -141,7 +146,7 @@ def _huber_score_and_smoothed_curvature(
 ) -> tuple[Any, Any]:
     """Evaluate the paper's current score and historical-information curvature."""
 
-    accelerated_terms = getattr(backend, "cuda_huber_score_and_smoothed_curvature", None)
+    accelerated_terms = capabilities_of(backend).huber_score_and_smoothed_curvature
     if accelerated_terms is not None:
         terms = accelerated_terms(residual, config.tau, bandwidth)
         if terms is not None:
@@ -410,11 +415,11 @@ def renewable_update(
     """Process exactly one data batch and return the next sufficient state."""
 
     state.validate()
-    native_update = getattr(backend, "renewable_update", None)
-    if native_update is not None:
+    capabilities = capabilities_of(backend)
+    if capabilities.native_update is not None:
         if batch_weight is None:
             batch_weight = float(X.shape[0])
-        return native_update(
+        return capabilities.native_update(
             X,
             y,
             state,
@@ -432,7 +437,7 @@ def renewable_update(
     bandwidth = _bandwidth(n_total, n_predictors, config.bandwidth_scale, config.tau)
     lambda_value = _lambda(n_total, n_predictors, config)
     workspace = None
-    if config.penalty == "none" and backend.name in {"numpy", "cupy"}:
+    if config.penalty == "none" and capabilities.elementwise_workspace:
         workspace = backend.xp.empty_like(X)
 
     if config.penalty == "l1":

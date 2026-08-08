@@ -15,9 +15,20 @@ set(CMAKE_CUDA_EXTENSIONS OFF)
 
 find_package(CUDAToolkit REQUIRED)
 
+# Listed explicitly rather than globbed: rh-cuda-ffi/build.rs relies on CMake
+# reconfiguring deterministically when this list changes.
 set(RH_CUDA_SOURCES
-    src/engine.cu
+    src/c_api.cu
+    src/engine_internal.cu
+    src/workspace.cu
+    src/batch.cu
+    src/objective.cu
+    src/linear_solver.cu
+    src/pipeline.cu
     src/huber_kernels.cu
+    # Defines no symbols; holds the static_asserts that pin the public struct
+    # layout to native/contracts/rh_cuda_contract.json.
+    src/abi_contract.cpp
 )
 
 if(RH_CUDA_BUILD_SHARED)

@@ -6,6 +6,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=RH_CUDA_CMAKE_PROFILE");
     println!("cargo:rerun-if-env-changed=RH_CUDA_ARCHITECTURES");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
+    println!("cargo:rerun-if-env-changed=CUDA_HOME");
+    println!("cargo:rerun-if-env-changed=CUDA_ROOT");
     println!("cargo:rerun-if-changed=../../cuda/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../cuda/include/rh_cuda.h");
     // Cargo watches a directory recursively, so CUDA kernel/header edits cannot
@@ -63,18 +65,79 @@ fn main() {
     // The CMake static archive deliberately leaves CUDA runtime libraries
     // dynamic.  Cargo does not consume CMake target usage requirements, so
     // name the transitive libraries explicitly for the extension linker.
-    if let Some(cuda_path) = env::var_os("CUDA_PATH") {
-        let cuda_path = PathBuf::from(cuda_path);
-        let library_dir = if cfg!(target_os = "windows") {
-            cuda_path.join("lib/x64")
-        } else {
-            cuda_path.join("lib64")
-        };
-        if library_dir.is_dir() {
-            println!("cargo:rustc-link-search=native={}", library_dir.display());
-        }
+    if let Some(library_dir) = cuda_library_dir() {
+        println!("cargo:rustc-link-search=native={}", library_dir.display());
     }
     println!("cargo:rustc-link-lib=dylib=cudart");
     println!("cargo:rustc-link-lib=dylib=cublas");
     println!("cargo:rustc-link-lib=dylib=cusolver");
+
+    // The engine is C++ and throws, so the archive needs the C++ runtime for
+    // its exception personality routine. MSVC supplies this through default
+    // library directives embedded in the .lib, which is why linking worked on
+    // Windows; rustc passes -nodefaultlibs, so with the GNU toolchain the
+    // extension links cleanly and then fails at import with
+    // `undefined symbol: __gxx_personality_v0`.
+    if cfg!(target_os = "linux") {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    } else if cfg!(target_os = "macos") {
+        println!("cargo:rustc-link-lib=dylib=c++");
+    }
+}
+
+/// Locate the directory holding the CUDA runtime libraries.
+///
+/// The Windows installer exports `CUDA_PATH`, so relying on it alone worked
+/// there and silently produced `unable to find library -lcudart` on Linux,
+/// where no installer sets it.  Search the usual environment variables, then
+/// derive the prefix from whichever `nvcc` is on `PATH`, then fall back to the
+/// conventional location.
+///
+/// Returning `None` is not a failure: a distribution-packaged toolkit installs
+/// into a directory the linker already searches.
+fn cuda_library_dir() -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = ["CUDA_PATH", "CUDA_HOME", "CUDA_ROOT"]
+        .iter()
+        .filter_map(env::var_os)
+        .map(PathBuf::from)
+        .collect();
+
+    // nvcc lives in <root>/bin, so its grandparent is the toolkit root. This is
+    // the most reliable signal available: the CUDA sources have just been
+    // compiled, so some nvcc was certainly found.
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path) {
+            let nvcc = directory.join(if cfg!(target_os = "windows") {
+                "nvcc.exe"
+            } else {
+                "nvcc"
+            });
+            if nvcc.is_file() {
+                if let Some(root) = directory.parent() {
+                    roots.push(root.to_path_buf());
+                }
+            }
+        }
+    }
+
+    roots.push(PathBuf::from(if cfg!(target_os = "windows") {
+        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+    } else {
+        "/usr/local/cuda"
+    }));
+
+    // `lib64` is a symlink to `targets/<arch>/lib` on a standard Linux install;
+    // both are listed so an unusual layout still resolves.
+    let suffixes: &[&str] = if cfg!(target_os = "windows") {
+        &["lib/x64"]
+    } else {
+        &["lib64", "targets/x86_64-linux/lib", "lib"]
+    };
+
+    roots.iter().find_map(|root| {
+        suffixes
+            .iter()
+            .map(|suffix| root.join(suffix))
+            .find(|candidate| candidate.is_dir())
+    })
 }

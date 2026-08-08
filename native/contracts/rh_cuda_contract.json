@@ -1,0 +1,166 @@
+{
+  "$comment": "Single source of truth for the renewable-huber CUDA contract. The C header, the Rust FFI mirror, the C++ static_asserts, and the PyO3 result dicts each mirror this file, and tests/test_native_cuda_contract.py fails when any of them drifts. Change this file first, then update every mirror it names.",
+  "pointer_size": 8,
+  "abi_version": 1,
+  "python_api_version": 3,
+  "status_codes": {
+    "SUCCESS": 0,
+    "INVALID_ARGUMENT": 1,
+    "UNAVAILABLE": 2,
+    "ALLOCATION_FAILED": 3,
+    "CUDA_ERROR": 4,
+    "CUBLAS_ERROR": 5,
+    "CUSOLVER_ERROR": 6,
+    "NUMERICAL_ERROR": 7,
+    "INTERNAL_ERROR": 8
+  },
+  "dtype_codes": {
+    "FLOAT32": 1,
+    "FLOAT64": 2
+  },
+  "engine_flags": {
+    "CUDA_GRAPHS": 1,
+    "FAST_MATH": 2,
+    "KNOWN_MASK": 3
+  },
+  "structs": {
+    "RhCudaEngineOptions": {
+      "size": 32,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["dtype", 8, 4],
+        ["device_id", 12, 4],
+        ["n_parameters", 16, 8],
+        ["reserved0", 24, 8]
+      ]
+    },
+    "RhCudaHostStateView": {
+      "size": 56,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["coefficients", 8, 8],
+        ["information", 16, 8],
+        ["n_samples_seen", 24, 8],
+        ["batch_count", 32, 8],
+        ["previous_lambda", 40, 8],
+        ["weight_sum", 48, 8]
+      ]
+    },
+    "RhCudaHostState": {
+      "size": 56,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["coefficients", 8, 8],
+        ["information", 16, 8],
+        ["n_samples_seen", 24, 8],
+        ["batch_count", 32, 8],
+        ["previous_lambda", 40, 8],
+        ["weight_sum", 48, 8]
+      ]
+    },
+    "RhCudaUnpenalizedConfig": {
+      "size": 56,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["n_features_in", 8, 8],
+        ["max_iter", 16, 8],
+        ["tau", 24, 8],
+        ["bandwidth_scale", 32, 8],
+        ["tolerance", 40, 8],
+        ["ridge", 48, 8]
+      ]
+    },
+    "RhCudaHostBatch": {
+      "size": 56,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["x_design", 8, 8],
+        ["y", 16, 8],
+        ["sample_weight", 24, 8],
+        ["n_rows", 32, 8],
+        ["n_columns", 40, 8],
+        ["batch_weight", 48, 8]
+      ]
+    },
+    "RhCudaDeviceBatch": {
+      "size": 56,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["x_design", 8, 8],
+        ["y", 16, 8],
+        ["sample_weight", 24, 8],
+        ["n_rows", 32, 8],
+        ["n_columns", 40, 8],
+        ["batch_weight", 48, 8]
+      ]
+    },
+    "RhCudaHostPrediction": {
+      "size": 40,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["x_design", 8, 8],
+        ["prediction", 16, 8],
+        ["n_rows", 24, 8],
+        ["n_columns", 32, 8]
+      ]
+    },
+    "RhCudaDiagnostics": {
+      "size": 48,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["iterations", 8, 8],
+        ["converged", 16, 4],
+        ["used_regularized_fallback", 20, 4],
+        ["objective", 24, 8],
+        ["lambda_value", 32, 8],
+        ["bandwidth", 40, 8]
+      ]
+    },
+    "RhCudaRuntimeInfo": {
+      "size": 24,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["runtime_version", 8, 4],
+        ["driver_version", 12, 4],
+        ["device_count", 16, 4],
+        ["reserved0", 20, 4]
+      ]
+    },
+    "RhCudaEngineFeatures": {
+      "size": 48,
+      "fields": [
+        ["abi_version", 0, 4],
+        ["struct_size", 4, 4],
+        ["requested_flags", 8, 8],
+        ["enabled_flags", 16, 8],
+        ["graph_captures", 24, 8],
+        ["graph_replays", 32, 8],
+        ["graph_fallbacks", 40, 8]
+      ]
+    }
+  },
+  "functions": ["rh_cuda_abi_version", "rh_cuda_last_error", "rh_cuda_is_available", "rh_cuda_device_count", "rh_cuda_runtime_info", "rh_cuda_engine_create", "rh_cuda_engine_destroy", "rh_cuda_engine_restore", "rh_cuda_engine_copy_state", "rh_cuda_engine_update_host", "rh_cuda_engine_update_host_with_state", "rh_cuda_engine_stream", "rh_cuda_engine_update_device_with_state", "rh_cuda_engine_predict_host", "rh_cuda_engine_synchronize", "rh_cuda_engine_features", "rh_cuda_engine_last_error"],
+  "batch_column_contract": {
+    "accepted_widths": ["n_parameters", "n_features_in"],
+    "narrow_width_behavior": "the engine appends a trailing all-ones intercept column on device",
+    "intercept_invariant": "n_parameters == n_features_in or n_parameters == n_features_in + 1",
+    "applies_to": ["RhCudaHostBatch", "RhCudaDeviceBatch"]
+  },
+  "python_result_keys": {
+    "state": ["coefficients", "information", "n_samples_seen", "batch_count", "previous_lambda", "weight_sum"],
+    "diagnostics": ["iterations", "converged", "used_regularized_fallback", "objective", "lambda_value", "bandwidth"],
+    "update_extra": ["state_is_detached"],
+    "update_device_extra": ["state_is_detached", "input_transport"],
+    "features": ["cuda_graphs_requested", "cuda_graphs_enabled", "fast_math_requested", "fast_math_enabled", "graph_captures", "graph_replays", "graph_fallbacks"],
+    "version": ["abi_version", "python_api_version", "engine_version", "initial_state", "device_input", "cuda_graphs", "fast_math", "supports_cuda_graphs", "supports_fast_math", "cuda_available", "runtime_version", "driver_version", "device_count"]
+  }
+}

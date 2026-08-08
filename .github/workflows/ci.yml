@@ -123,6 +123,14 @@ jobs:
         run: python scripts/generate_native_golden.py --check
       - name: Verify base/native release metadata contract
         run: python scripts/native/validate_release_artifacts.py --source-only
+      - name: Verify CUDA C ABI struct layout
+        # rh_cuda.h includes only <stdint.h>, so the layout static_asserts
+        # compile without a GPU or a CUDA Toolkit. This is the cheapest place
+        # to catch a real layout change; tests/test_native_cuda_contract.py
+        # then checks that every language's mirror still agrees with it.
+        run: >-
+          g++ -std=c++17 -fsyntax-only -I native/cuda/include
+          native/cuda/src/abi_contract.cpp
 
   optional-backend:
     name: ${{ matrix.name }} CPU
