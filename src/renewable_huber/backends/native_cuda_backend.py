@@ -8,7 +8,7 @@ import numpy as np
 
 from ..exceptions import BackendUnavailableError, ValidationError
 from ._dlpack import adapt_cuda_dlpack
-from .numpy_backend import NumPyBackend
+from .native_base import NativeEngineBackend
 
 if TYPE_CHECKING:
     from ..config import EstimatorConfig
@@ -19,7 +19,7 @@ _EXPECTED_ABI_VERSION = 1
 _EXPECTED_PYTHON_API_VERSION = 3
 
 
-class NativeCudaBackend(NumPyBackend):
+class NativeCudaBackend(NativeEngineBackend):
     """Host/DLPack adapter for the whole-batch native CUDA solver.
 
     Validation and checkpoint data intentionally remain NumPy-backed. The
@@ -29,6 +29,13 @@ class NativeCudaBackend(NumPyBackend):
 
     name = "native_cuda"
     device = "cuda"
+    # See NativeCpuBackend: the portable elementwise path is unreachable.
+    supports_elementwise_workspace = False
+
+    _EXPECTED_ABI_VERSION = _EXPECTED_ABI_VERSION
+    _EXPECTED_PYTHON_API_VERSION = _EXPECTED_PYTHON_API_VERSION
+    _EXTENSION_LABEL = "native CUDA"
+    _ENGINE_INIT_ERROR = "The native CUDA engine could not initialize on the requested device"
 
     def __init__(
         self,
@@ -50,21 +57,11 @@ class NativeCudaBackend(NumPyBackend):
 
         try:
             version = _native_cuda.version()
-            compatible = (
-                isinstance(version, dict)
-                and version.get("abi_version") == _EXPECTED_ABI_VERSION
-                and version.get("python_api_version") == _EXPECTED_PYTHON_API_VERSION
-            )
         except Exception as error:
             raise BackendUnavailableError(
                 "The native CUDA extension did not provide compatible version metadata"
             ) from error
-        if not compatible:
-            raise BackendUnavailableError(
-                "The native CUDA extension is incompatible with this renewable-huber build; "
-                f"expected ABI {_EXPECTED_ABI_VERSION} and Python API "
-                f"{_EXPECTED_PYTHON_API_VERSION}, received {version!r}"
-            )
+        self._verify_version(version)
         if cuda_graphs and version.get("supports_cuda_graphs") is not True:
             raise BackendUnavailableError(
                 "The native CUDA extension does not support requested CUDA Graph tuning"
@@ -209,12 +206,6 @@ class NativeCudaBackend(NumPyBackend):
         namespace = self._device_namespace(value)
         return self._device_scalar(namespace.sum(value))
 
-    @property
-    def native_version(self) -> str:
-        """Return the loaded native ABI version."""
-
-        return str(self._native_module.version())
-
     def renewable_update(
         self,
         X: np.ndarray,
@@ -246,7 +237,7 @@ class NativeCudaBackend(NumPyBackend):
         weights = sample_weight
         if not device_input and sample_weight is not None:
             weights = np.ascontiguousarray(sample_weight, dtype=self.dtype)
-        try:
+        with self._engine_call():
             update = self._engine.update_device if device_input else self._engine.update
             x_input = X if device_input else np.ascontiguousarray(X, dtype=self.dtype)
             y_input = y if device_input else np.ascontiguousarray(y, dtype=self.dtype)
@@ -263,20 +254,7 @@ class NativeCudaBackend(NumPyBackend):
                 tol=float(config.tol),
                 ridge=float(config.ridge),
             )
-        except Exception:
-            # A hard native error may leave a CUDA stream or scratch buffer in
-            # an unusable state. The authoritative host state was not advanced,
-            # so discard the opaque engine and recreate it from that mirror on
-            # the next call instead of attempting a silent continuation.
-            self._engine = None
-            self._engine_state_token = None
-            raise
-        # The engine has advanced, so it no longer mirrors ``state``. Leave
-        # the token invalid if result decoding itself fails.
-        self._engine_state_token = None
-        next_state, diagnostics = self._decode_result(result, state)
-        self._engine_state_token = next_state.mirror_token
-        return next_state, diagnostics
+        return self._adopt_result(result, state)
 
     def native_design_matrix(self, X: np.ndarray, *, fit_intercept: bool) -> np.ndarray:
         """Leave host features unexpanded; CUDA appends the intercept column.
@@ -294,114 +272,39 @@ class NativeCudaBackend(NumPyBackend):
     def native_predict(self, X: np.ndarray, state: RenewableHuberState) -> np.ndarray:
         """Predict through the resident CUDA coefficient vector."""
 
-        if self._engine is None or self._engine_state_token != state.mirror_token:
-            self.restore_native_state(state)
-        try:
+        self.restore_native_state(state)
+        with self._engine_call():
             if self._cuda_dlpack_device(X) is not None:
                 raise ValidationError(
                     "native CUDA device-resident prediction is not supported yet; "
                     "pass a host array explicitly (no implicit device-to-host copy is performed)"
                 )
             prediction = self._engine.predict(np.ascontiguousarray(X, dtype=self.dtype))
-        except Exception:
-            self._engine = None
-            self._engine_state_token = None
-            raise
         return np.asarray(prediction, dtype=self.dtype)
 
-    def restore_native_state(
-        self,
-        state: RenewableHuberState,
-        *,
-        n_parameters: int | None = None,
-    ) -> None:
-        """Restore portable state while retaining an existing engine workspace.
+    def _create_engine(self, n_parameters: int) -> Any:
+        tuning: dict[str, bool] = {}
+        if self._cuda_graphs:
+            tuning["cuda_graphs"] = True
+        if self._cuda_fast_math:
+            tuning["fast_math"] = True
+        return self._native_module.NativeCudaEngine(
+            self.dtype.name, n_parameters, self._device_id, **tuning
+        )
 
-        This internal hook is also used by the benchmark harness to measure a
-        repeatable steady-state transition without timing handle creation.
+    def _new_engine_already_holds(self, state: RenewableHuberState) -> bool:
+        """Skip the first restore when a new engine already equals ``state``.
+
+        Avoids a redundant H2D copy, transpose, and stream sync on the first
+        fit, while still restoring any non-canonical user state.
         """
 
-        created_engine = self._engine is None
-        if created_engine:
-            if n_parameters is None:
-                n_parameters = int(state.coefficients.shape[0])
-            try:
-                tuning: dict[str, bool] = {}
-                if self._cuda_graphs:
-                    tuning["cuda_graphs"] = True
-                if self._cuda_fast_math:
-                    tuning["fast_math"] = True
-                self._engine = self._native_module.NativeCudaEngine(
-                    self.dtype.name, n_parameters, self._device_id, **tuning
-                )
-            except Exception as error:
-                self._engine = None
-                self._engine_state_token = None
-                raise BackendUnavailableError(
-                    "The native CUDA engine could not initialize on the requested device"
-                ) from error
-        elif self._engine_state_token == state.mirror_token:
-            return
-        if (
-            created_engine
-            and self._initial_state_is_canonical_empty
+        return (
+            self._initial_state_is_canonical_empty
             and state.n_samples_seen == 0
             and state.batch_count == 0
             and state.previous_lambda == 0.0
             and state.effective_weight == 0.0
             and not np.any(state.coefficients)
             and not np.any(state.information)
-        ):
-            # A new engine is already initialized to this canonical empty
-            # state. Avoid a redundant H2D copy, transpose, and stream sync on
-            # the first fit while still restoring non-canonical user states.
-            self._engine_state_token = state.mirror_token
-            return
-        try:
-            self._engine.restore(
-                np.ascontiguousarray(state.coefficients, dtype=self.dtype),
-                np.ascontiguousarray(state.information, dtype=self.dtype),
-                int(state.n_samples_seen),
-                int(state.batch_count),
-                float(state.previous_lambda),
-                float(state.effective_weight),
-            )
-        except Exception:
-            self._engine = None
-            self._engine_state_token = None
-            raise
-        self._engine_state_token = state.mirror_token
-
-    def _decode_result(
-        self, result: dict[str, Any], previous_state: RenewableHuberState
-    ) -> tuple[RenewableHuberState, UpdateDiagnostics]:
-        from ..core import UpdateDiagnostics
-        from ..state import RenewableHuberState
-
-        coefficients = np.asarray(result["coefficients"], dtype=self.dtype)
-        information = np.asarray(result["information"], dtype=self.dtype)
-        # Current extension builds explicitly advertise that state arrays are
-        # fresh Python-owned snapshots. Older builds and test doubles retain
-        # the defensive copy required by the backend protocol.
-        if not bool(result.get("state_is_detached", False)):
-            coefficients = coefficients.copy()
-            information = information.copy()
-        state = RenewableHuberState(
-            coefficients=coefficients,
-            information=information,
-            n_samples_seen=int(result["n_samples_seen"]),
-            batch_count=int(result["batch_count"]),
-            previous_lambda=float(result["previous_lambda"]),
-            n_features_in=previous_state.n_features_in,
-            fit_intercept=previous_state.fit_intercept,
-            weight_sum=float(result["weight_sum"]),
         )
-        diagnostics = UpdateDiagnostics(
-            iterations=int(result["iterations"]),
-            converged=bool(result["converged"]),
-            objective=float(result["objective"]),
-            lambda_value=float(result["lambda_value"]),
-            bandwidth=float(result["bandwidth"]),
-            used_regularized_fallback=bool(result["used_regularized_fallback"]),
-        )
-        return state, diagnostics

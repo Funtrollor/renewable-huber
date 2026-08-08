@@ -13,6 +13,24 @@ results, documentation fixes, and focused code contributions are welcome.
 
 ## Development setup
 
+WSL2/Linux is the primary native-core development environment. Bootstrap a
+new WSL checkout with one of the declared profiles:
+
+```bash
+bash scripts/setup-wsl-toolchain.sh             # add --cuda for CUDA 12
+bash scripts/setup-wsl-venv.sh --profile minimal
+# or: cpu-full / cuda-full
+```
+
+`minimal` covers the base package and native CPU extension. `cpu-full` also
+installs pandas, SciPy, scikit-learn, PyTorch and TensorFlow. `cuda-full` adds
+CuPy, builds the native CUDA extension and fails verification when WSL GPU
+passthrough is unavailable. `scripts/verify_wsl_environment.py` reports every
+required component explicitly; an unavailable integration must never be
+mistaken for a fully passing suite.
+
+The PowerShell setup below remains supported for Windows-only work.
+
 Create an isolated environment with Python 3.10–3.12:
 
 ```powershell
@@ -55,6 +73,11 @@ if it changes the documented numerical contract.
   code must never run automatically on the self-hosted GPU runner.
 - Use Conventional Commit-style imperative subjects when practical, for example
   `perf: fuse CUDA renewal kernels`.
+
+For assisted development, Claude Code implements an accepted engineering plan
+and records its hand-off in `docs/agent-handoff.md`. Codex owns review,
+acceptance, commits, pushes and pull requests. The two agents must use separate
+worktrees when active concurrently.
 
 The `main` branch requires a pull request, an up-to-date branch, all cross-platform and optional
 CPU integration checks, package smoke tests, and resolved review conversations. Force pushes and

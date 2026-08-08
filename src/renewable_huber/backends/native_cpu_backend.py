@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from ..exceptions import BackendUnavailableError
-from .numpy_backend import NumPyBackend
+from .native_base import NativeEngineBackend
 
 if TYPE_CHECKING:
     from ..config import EstimatorConfig
@@ -18,7 +18,7 @@ _EXPECTED_ABI_VERSION = 1
 _EXPECTED_PYTHON_API_VERSION = 2
 
 
-class NativeCpuBackend(NumPyBackend):
+class NativeCpuBackend(NativeEngineBackend):
     """Host-state adapter for the whole-batch native Rust CPU solver.
 
     The public estimator keeps validation, feature names, and portable state
@@ -28,6 +28,14 @@ class NativeCpuBackend(NumPyBackend):
 
     name = "native_cpu"
     device = "cpu"
+    # Inherited from NumPyBackend but never applicable: this backend runs
+    # the whole batch natively and never reaches the portable solver.
+    supports_elementwise_workspace = False
+
+    _EXPECTED_ABI_VERSION = _EXPECTED_ABI_VERSION
+    _EXPECTED_PYTHON_API_VERSION = _EXPECTED_PYTHON_API_VERSION
+    _EXTENSION_LABEL = "native CPU"
+    _ENGINE_INIT_ERROR = "The native CPU engine could not initialize"
 
     def __init__(self, dtype: str = "float64", *, n_threads: int | None = None) -> None:
         super().__init__(dtype)
@@ -41,31 +49,16 @@ class NativeCpuBackend(NumPyBackend):
 
         try:
             version = _native_cpu.version()
-            compatible = (
-                isinstance(version, dict)
-                and version.get("abi_version") == _EXPECTED_ABI_VERSION
-                and version.get("python_api_version") == _EXPECTED_PYTHON_API_VERSION
-            )
         except Exception as error:
             raise BackendUnavailableError(
                 "The native CPU extension did not provide compatible version metadata"
             ) from error
-        if not compatible:
-            raise BackendUnavailableError(
-                "The native CPU extension is incompatible with this renewable-huber build; "
-                f"expected ABI {_EXPECTED_ABI_VERSION} and Python API "
-                f"{_EXPECTED_PYTHON_API_VERSION}, received {version!r}"
-            )
+        self._verify_version(version)
+
         self._native_module = _native_cpu
         self._requested_n_threads = n_threads
         self._engine: Any | None = None
         self._engine_state_token: int | None = None
-
-    @property
-    def native_version(self) -> str:
-        """Return the loaded native version metadata."""
-
-        return str(self._native_module.version())
 
     @property
     def effective_n_jobs(self) -> int | None:
@@ -74,6 +67,13 @@ class NativeCpuBackend(NumPyBackend):
         if self._engine is None:
             return self._requested_n_threads
         return int(self._engine.n_threads)
+
+    def _create_engine(self, n_parameters: int) -> Any:
+        return self._native_module.NativeCpuEngine(
+            self.dtype.name,
+            n_parameters,
+            n_threads=self._requested_n_threads,
+        )
 
     def renewable_update(
         self,
@@ -91,7 +91,7 @@ class NativeCpuBackend(NumPyBackend):
         weights = (
             None if sample_weight is None else np.ascontiguousarray(sample_weight, dtype=self.dtype)
         )
-        try:
+        with self._engine_call():
             result = self._engine.update(
                 np.ascontiguousarray(X, dtype=self.dtype),
                 np.ascontiguousarray(y, dtype=self.dtype),
@@ -107,99 +107,12 @@ class NativeCpuBackend(NumPyBackend):
                 tol=float(config.tol),
                 ridge=float(config.ridge),
             )
-        except Exception:
-            self._discard_engine()
-            raise
-        # The engine has advanced, so it no longer mirrors ``state``. Leave
-        # the token invalid if result decoding itself fails.
-        self._engine_state_token = None
-        next_state, diagnostics = self._decode_result(result, state)
-        self._engine_state_token = next_state.mirror_token
-        return next_state, diagnostics
+        return self._adopt_result(result, state)
 
     def native_predict(self, X: np.ndarray, state: RenewableHuberState) -> np.ndarray:
         """Predict through the resident native coefficient vector."""
 
         self.restore_native_state(state)
-        try:
+        with self._engine_call():
             prediction = self._engine.predict(np.ascontiguousarray(X, dtype=self.dtype))
-        except Exception:
-            self._discard_engine()
-            raise
         return np.asarray(prediction, dtype=self.dtype)
-
-    def restore_native_state(
-        self,
-        state: RenewableHuberState,
-        *,
-        n_parameters: int | None = None,
-    ) -> None:
-        """Restore portable state if the engine mirror is absent or stale."""
-
-        if self._engine is None:
-            if n_parameters is None:
-                n_parameters = int(state.coefficients.shape[0])
-            try:
-                self._engine = self._native_module.NativeCpuEngine(
-                    self.dtype.name,
-                    n_parameters,
-                    n_threads=self._requested_n_threads,
-                )
-            except Exception as error:
-                self._discard_engine()
-                raise BackendUnavailableError(
-                    "The native CPU engine could not initialize"
-                ) from error
-        elif self._engine_state_token == state.mirror_token:
-            return
-
-        try:
-            self._engine.restore(
-                np.ascontiguousarray(state.coefficients, dtype=self.dtype),
-                np.ascontiguousarray(state.information, dtype=self.dtype),
-                int(state.n_samples_seen),
-                int(state.batch_count),
-                float(state.previous_lambda),
-                float(state.effective_weight),
-            )
-        except Exception:
-            self._discard_engine()
-            raise
-        self._engine_state_token = state.mirror_token
-
-    def _discard_engine(self) -> None:
-        self._engine = None
-        self._engine_state_token = None
-
-    def _decode_result(
-        self, result: dict[str, Any], previous_state: RenewableHuberState
-    ) -> tuple[RenewableHuberState, UpdateDiagnostics]:
-        from ..core import UpdateDiagnostics
-        from ..state import RenewableHuberState
-
-        coefficients = np.asarray(result["coefficients"], dtype=self.dtype)
-        information = np.asarray(result["information"], dtype=self.dtype)
-        # Current extension builds return fresh Python-owned snapshots. Keep
-        # copying results from older builds and test doubles defensively.
-        if not bool(result.get("state_is_detached", False)):
-            coefficients = coefficients.copy()
-            information = information.copy()
-        state = RenewableHuberState(
-            coefficients=coefficients,
-            information=information,
-            n_samples_seen=int(result["n_samples_seen"]),
-            batch_count=int(result["batch_count"]),
-            previous_lambda=float(result["previous_lambda"]),
-            n_features_in=previous_state.n_features_in,
-            fit_intercept=previous_state.fit_intercept,
-            weight_sum=float(result["weight_sum"]),
-        )
-        diagnostics = UpdateDiagnostics(
-            iterations=int(result["iterations"]),
-            converged=bool(result["converged"]),
-            objective=float(result["objective"]),
-            lambda_value=float(result["lambda_value"]),
-            bandwidth=float(result["bandwidth"]),
-            used_regularized_fallback=bool(result["used_regularized_fallback"]),
-        )
-        return state, diagnostics

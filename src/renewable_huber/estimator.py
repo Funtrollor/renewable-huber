@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -9,10 +10,24 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from .backends import ArrayBackend, resolve_backend
+from .backends.capabilities import BackendCapabilities, capabilities_of
 from .config import BackendName, DeviceName, DTypeName, EstimatorConfig, Penalty
 from .core import UpdateDiagnostics, renewable_update
 from .exceptions import NotFittedError, ValidationError
 from .state import RenewableHuberState
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedBatch:
+    """Everything one validated batch contributes to the state transition."""
+
+    design: Any
+    target: Any
+    weights: Any | None
+    batch_weight: float
+    state: RenewableHuberState
+    first_batch: bool
+    feature_names: np.ndarray | None
 
 
 class RenewableHuberRegressor:
@@ -127,57 +142,17 @@ class RenewableHuberRegressor:
         if backend is None:
             backend = self._resolve_backend(config)
 
-        state = getattr(self, "_state", None)
-        if state is not None:
-            self._validate_feature_names(X)
-        X_array, y_array = self._validate_batch(X, y, backend)
-        weights, batch_weight = self._validate_sample_weight(
-            sample_weight, X_array.shape[0], backend
-        )
-
-        first_batch = state is None
-        feature_names = None
-        if state is None:
-            n_features_in = X_array.shape[1]
-            feature_names = self._feature_names(X)
-            state = RenewableHuberState.empty(
-                n_features_in,
-                fit_intercept=config.fit_intercept,
-                xp=backend.xp,
-                dtype=backend.dtype,
-            )
-        elif X_array.shape[1] != self.n_features_in_:
-            raise ValidationError(
-                f"X has {X_array.shape[1]} features, but RenewableHuberRegressor is expecting "
-                f"{self.n_features_in_} features as input"
-            )
-
-        design = self._design_matrix(X_array, backend=backend)
+        prepared = self._prepare_batch(X, y, sample_weight, config, backend)
         next_state, diagnostics = renewable_update(
-            design,
-            y_array,
-            state,
+            prepared.design,
+            prepared.target,
+            prepared.state,
             config,
             backend,
-            sample_weight=weights,
-            batch_weight=batch_weight,
+            sample_weight=prepared.weights,
+            batch_weight=prepared.batch_weight,
         )
-        self._backend = backend
-        self.backend_ = backend.name
-        self.device_ = backend.device
-        self.n_jobs_ = getattr(backend, "effective_n_jobs", None)
-        cuda_features = getattr(backend, "cuda_features", None)
-        if cuda_features is not None:
-            self.cuda_features_ = dict(cuda_features)
-        self._state = next_state
-        self._diagnostics = diagnostics
-        if first_batch:
-            self.n_features_in_ = next_state.n_features_in
-            if feature_names is not None:
-                self.feature_names_in_ = feature_names
-        self.n_samples_seen_ = next_state.n_samples_seen
-        self.n_iter_ = diagnostics.iterations
-        self._sync_public_coefficients()
+        self._commit(backend, next_state, diagnostics, prepared)
         return self
 
     def predict(self, X: ArrayLike) -> Any:
@@ -188,12 +163,10 @@ class RenewableHuberRegressor:
         self._validate_feature_names(X)
         X_array = self._validate_features(X, state.n_features_in, backend)
         design = self._design_matrix(X_array)
-        native_predict = getattr(backend, "native_predict", None)
-        if native_predict is not None:
-            prediction = native_predict(design, state)
-            cuda_features = getattr(backend, "cuda_features", None)
-            if cuda_features is not None:
-                self.cuda_features_ = dict(cuda_features)
+        capabilities = capabilities_of(backend)
+        if capabilities.native_predict is not None:
+            prediction = capabilities.native_predict(design, state)
+            self._sync_backend_attributes(capabilities)
             return prediction
         return backend.xp.matmul(design, state.coefficients)
 
@@ -293,10 +266,7 @@ class RenewableHuberRegressor:
         self._backend = self._resolve_backend(config)
         self.backend_ = self._backend.name
         self.device_ = self._backend.device
-        self.n_jobs_ = getattr(self._backend, "effective_n_jobs", None)
-        cuda_features = getattr(self._backend, "cuda_features", None)
-        if cuda_features is not None:
-            self.cuda_features_ = dict(cuda_features)
+        self._sync_backend_attributes(capabilities_of(self._backend))
         self._state = RenewableHuberState(
             coefficients=self._backend.asarray(state.coefficients),
             information=self._backend.asarray(state.information),
@@ -317,6 +287,81 @@ class RenewableHuberRegressor:
             ):
                 raise ValidationError("checkpoint feature names do not match feature metadata")
             self.feature_names_in_ = np.asarray(feature_names, dtype=object)
+        self._sync_public_coefficients()
+
+    def _prepare_batch(
+        self,
+        X: ArrayLike,
+        y: ArrayLike,
+        sample_weight: ArrayLike | None,
+        config: EstimatorConfig,
+        backend: ArrayBackend,
+    ) -> _PreparedBatch:
+        """Validate one batch and assemble everything the update needs.
+
+        Nothing here touches ``self``'s fitted state: a validation failure must
+        leave the estimator exactly as it was.
+        """
+
+        state = getattr(self, "_state", None)
+        first_batch = state is None
+        if state is not None:
+            self._validate_feature_names(X)
+        X_array, y_array = self._validate_batch(X, y, backend)
+        weights, batch_weight = self._validate_sample_weight(
+            sample_weight, X_array.shape[0], backend
+        )
+
+        feature_names = None
+        if first_batch:
+            feature_names = self._feature_names(X)
+            state = RenewableHuberState.empty(
+                X_array.shape[1],
+                fit_intercept=config.fit_intercept,
+                xp=backend.xp,
+                dtype=backend.dtype,
+            )
+        elif X_array.shape[1] != self.n_features_in_:
+            raise ValidationError(
+                f"X has {X_array.shape[1]} features, but RenewableHuberRegressor is expecting "
+                f"{self.n_features_in_} features as input"
+            )
+
+        return _PreparedBatch(
+            design=self._design_matrix(X_array, backend=backend),
+            target=y_array,
+            weights=weights,
+            batch_weight=batch_weight,
+            state=state,
+            first_batch=first_batch,
+            feature_names=feature_names,
+        )
+
+    def _commit(
+        self,
+        backend: ArrayBackend,
+        next_state: RenewableHuberState,
+        diagnostics: UpdateDiagnostics,
+        prepared: _PreparedBatch,
+    ) -> None:
+        """Adopt a completed transition and project it onto the public attributes.
+
+        Reached only after ``renewable_update`` returns, so a failed update
+        leaves every fitted attribute untouched.
+        """
+
+        self._backend = backend
+        self.backend_ = backend.name
+        self.device_ = backend.device
+        self._sync_backend_attributes(capabilities_of(backend))
+        self._state = next_state
+        self._diagnostics = diagnostics
+        if prepared.first_batch:
+            self.n_features_in_ = next_state.n_features_in
+            if prepared.feature_names is not None:
+                self.feature_names_in_ = prepared.feature_names
+        self.n_samples_seen_ = next_state.n_samples_seen
+        self.n_iter_ = diagnostics.iterations
         self._sync_public_coefficients()
 
     def _config(self) -> EstimatorConfig:
@@ -431,27 +476,33 @@ class RenewableHuberRegressor:
             raise ValidationError("sample_weight and X must contain the same number of samples")
         if not backend.is_finite(weights):
             raise ValidationError("sample_weight must not contain NaN or infinite values")
-        minimum_scalar = getattr(backend, "minimum_scalar", None)
+        capabilities = capabilities_of(backend)
         minimum = (
-            minimum_scalar(weights)
-            if callable(minimum_scalar)
+            capabilities.minimum_scalar(weights)
+            if capabilities.minimum_scalar is not None
             else backend.scalar(backend.xp.min(weights))
         )
         if minimum < 0:
             raise ValidationError("sample_weight must be non-negative")
-        sum_scalar = getattr(backend, "sum_scalar", None)
         weight_sum = (
-            sum_scalar(weights) if callable(sum_scalar) else backend.scalar(backend.xp.sum(weights))
+            capabilities.sum_scalar(weights)
+            if capabilities.sum_scalar is not None
+            else backend.scalar(backend.xp.sum(weights))
         )
         if weight_sum <= 0:
             raise ValidationError("sample_weight cannot be all zero")
         return weights, weight_sum
 
     def _design_matrix(self, X: Any, *, backend: ArrayBackend | None = None) -> Any:
+        # Only the update path passes ``backend``, so only it delegates the
+        # design matrix. predict() deliberately builds the expanded matrix on
+        # the host: the native CUDA engine's predict entry point requires the
+        # full n_parameters width, while its update accepts unexpanded features
+        # and appends the intercept on device.
         if backend is not None:
-            native_design = getattr(backend, "native_design_matrix", None)
-            if callable(native_design):
-                return native_design(X, fit_intercept=self.fit_intercept)
+            capabilities = capabilities_of(backend)
+            if capabilities.native_design_matrix is not None:
+                return capabilities.native_design_matrix(X, fit_intercept=self.fit_intercept)
         if self.fit_intercept:
             if backend is None:
                 backend = self._require_backend()
@@ -497,6 +548,20 @@ class RenewableHuberRegressor:
         dtype = getattr(value, "dtype", None)
         if dtype is not None and "complex" in str(dtype).lower():
             raise ValidationError(f"Complex data not supported for {name}")
+
+    def _sync_backend_attributes(self, capabilities: BackendCapabilities) -> None:
+        """Project the backend's live reports onto the public fitted attributes.
+
+        ``n_jobs_`` is always set, to ``None`` when the backend does not report
+        one. ``cuda_features_`` is only created by a backend that has them, so
+        its absence stays meaningful on non-CUDA backends.
+        """
+
+        self.n_jobs_ = capabilities.read_n_jobs() if capabilities.read_n_jobs else None
+        if capabilities.read_cuda_features is not None:
+            features = capabilities.read_cuda_features()
+            if features is not None:
+                self.cuda_features_ = dict(features)
 
     def _sync_public_coefficients(self) -> None:
         state = self._require_state()
