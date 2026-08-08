@@ -54,9 +54,16 @@ synchronisation boundary on each solver iteration; use Nsight Systems or
 CuPy's profiler around this benchmark before replacing convergence logic with
 a device-side implementation.
 
-For hardware validation, the repository includes a manual-only GitHub Actions
-workflow (`GPU validation`). Attach a trusted self-hosted runner with the labels
-`self-hosted`, `windows`, `x64`, and `gpu`; it never runs on pull-request events.
+Hardware validation is local-only and must not be dispatched through GitHub
+Actions. Use the fixed GPU host with the `cuda-full` environment, record the
+exact commit and dependency versions, and retain the generated JSON outside the
+repository for Codex review:
+
+```bash
+bash scripts/setup-wsl-venv.sh --profile cuda-full
+.venv/bin/python -m unittest tests.test_cuda_kernels tests.test_cupy_backend \
+  tests.test_native_cuda_backend tests.test_dlpack_adapters -v
+```
 
 The native-engine migration has a broader shape sweep and an NVTX-instrumented
 profiling workload:

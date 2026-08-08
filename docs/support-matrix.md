@@ -8,8 +8,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `numpy` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；三者均進行基線 CI | 無（基礎安裝） | `numpy.ndarray` | `device="cuda"` 會直接報錯；效能取決於 NumPy 連結的 BLAS/LAPACK。 |
 | `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.12；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.0` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。必須明確指定，不會由 `auto` 選取。安裝 wheel 不需本機 Rust toolchain。 |
-| `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；專案 GPU workflow 為 Windows self-hosted runner | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
-| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.12、Windows x86-64 CUDA 12 wheel；self-hosted GPU CI | `renewable-huber-native-cuda==0.6.0` | `numpy.ndarray`; CuPy、PyTorch CUDA、TensorFlow eager GPU tensor | Python API v3。Opt-in whole-batch engine；device update 使用同裝置、完全相同 dtype、C-contiguous DLPack，絕不經 host staging；`penalty="none"` only；device-resident `predict` 尚未支援。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不需本機 nvcc，但需要 NVIDIA driver 與 CUDA 12 runtime DLL。 |
+| `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；GPU correctness 與效能在固定本機主機驗證 | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
+| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.12、Windows x86-64 CUDA 12 wheel；本機固定 GPU 驗證 | `renewable-huber-native-cuda==0.6.0` | `numpy.ndarray`; CuPy、PyTorch CUDA、TensorFlow eager GPU tensor | Python API v3。Opt-in whole-batch engine；device update 使用同裝置、完全相同 dtype、C-contiguous DLPack，絕不經 host staging；`penalty="none"` only；device-resident `predict` 尚未支援。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不需本機 nvcc，但需要 NVIDIA driver 與 CUDA 12 runtime DLL。 |
 | `torch` | 是 | NVIDIA CUDA | `float32`, `float64` | CPU：Linux／Windows／macOS；CUDA：依 PyTorch wheel 支援的 Linux／Windows | `gpu-torch` | `torch.Tensor` | `device="auto"` 使用 CPU；輸入會 detach、移至指定裝置並轉 dtype，不提供 autograd layer，也不支援 MPS device。 |
 | `tensorflow` | 是 | TensorFlow 可見的 CUDA GPU | `float32`, `float64` | 依 TensorFlow wheel；CPU backend CI 在 Linux，CUDA 通常為 Linux／WSL2 環境 | `gpu-tensorflow` | `tensorflow.Tensor` | 僅 eager execution，不可直接在 `tf.function` 內使用；`device="auto"` 使用 CPU；不支援 Metal/MPS device。 |
 
@@ -24,7 +24,7 @@ Native CUDA 的 `cuda_graphs` 與 `cuda_fast_math` 都預設為 `False`。
 Graph capture 不可用時會安全回退 strict stream；fast math 只允許 float32
 TF32，不適用 float64。fitted estimator 以 `cuda_features_` 回報實際狀態與計數。
 
-表中的 OS 範圍仍受 optional dependency 本身的 Python、driver 與硬體相容性限制。專案 CI 對 NumPy 與 native CPU wheel 執行 Python 3.10-3.12 × Linux/Windows/macOS；native CPU release 另產生 Linux aarch64 與 Apple Silicon wheels。Torch、TensorFlow 與 scikit-learn optional job 在 Linux CPU 執行；CuPy/native CUDA 由手動與 release-gated 的 Windows CUDA 12 self-hosted workflow 驗證。CUDA release fat binary 目標為 SM 75、80、86、89、90、120；使用者安裝 wheel 不需 native build toolchain。
+表中的 OS 範圍仍受 optional dependency 本身的 Python、driver 與硬體相容性限制。專案 CI 對 NumPy 與 native CPU wheel 執行 Python 3.10-3.12 × Linux/Windows/macOS；native CPU release 另產生 Linux aarch64 與 Apple Silicon wheels。Torch、TensorFlow 與 scikit-learn optional job 在 Linux CPU 執行；CuPy/native CUDA correctness、profiling、乾淨安裝與效能只在固定本機 GPU 主機驗證，release workflow 僅對受信任 tag 編譯 CUDA artifacts 並檢查 metadata。CUDA release fat binary 目標為 SM 75、80、86、89、90、120；使用者安裝 wheel 不需 native build toolchain。
 
 ## Backend 與裝置選擇
 

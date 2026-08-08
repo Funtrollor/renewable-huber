@@ -45,6 +45,9 @@ The next minor release is `0.6.0`; the published stable package remains
 
 ### Changed
 
+- Pull-request GPU validation now runs only on the maintainer's fixed local GPU
+  host; GitHub Actions remains responsible for CPU CI and release artifact
+  assembly.
 - Explicit `backend="native_cuda"` requests now use the native engine and fail
   clearly when its extension or requested capability is unavailable; automatic
   backend selection remains unchanged.

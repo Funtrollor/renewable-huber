@@ -350,7 +350,8 @@ Windows 端的 session 紀錄已經搬過來：
 稽核報告寫「為 pytest 加上 `gpu`、`optional_backend`、`performance` markers」。實際情況：
 
 - **沒有任何測試 import pytest。** 全部是 `unittest.TestCase`。
-- **CI 一律跑 `python -m unittest`**（`ci.yml` 四處、`gpu-validation.yml` 一處），從來沒跑過 pytest。
+- **CI 一律跑 `python -m unittest`**；GPU suite 則由固定本機主機直接以
+  `python -m unittest` 執行，從來沒跑過 pytest。
 - **repo 裡沒有 `conftest.py`**，`pyproject.toml` 的 `[tool.pytest.ini_options]` 只有 `testpaths` 與 `addopts`。
 - `pytest` 雖在 `dev` extra 裡宣告，但沒有東西用它。
 

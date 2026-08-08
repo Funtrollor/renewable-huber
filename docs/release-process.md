@@ -27,16 +27,18 @@ CUDA 12 release matrix 目前為 CPython 3.10–3.12、Windows x86-64。Release 
 以上。使用者安裝已發布 wheel 時不需要 Rust、CMake、Visual Studio 或 `nvcc`，但仍需
 相容的 NVIDIA driver，以及 CUDA 12 的 `cudart`、cuBLAS、cuSOLVER runtime DLL。
 
-CUDA wheels 由標記為 `self-hosted, windows, x64, gpu, cuda12` 的受控 runner 建置。
-Pull request 不會在 self-hosted runner 自動執行；一般 GPU 驗證只能由維護者手動啟動，
-避免不受信任程式碼接觸內部機器。
+CUDA wheels 由標記為 `self-hosted, windows, x64, gpu, cuda12` 的受控 runner 在
+release tag 後建置。Pull request 與一般開發不使用 GitHub Actions GPU runner；
+correctness、profiling 與 performance 驗證都在維護者的固定本機 GPU 主機執行。
 
 ## Release gate
 
 1. 更新 `src/renewable_huber/_version.py`，並同步兩個 native `pyproject.toml` 的版本及
    精確 base dependency。
 2. 把 `CHANGELOG.md` 的 Unreleased 內容移到該版本，確認授權與引用資訊。
-3. 合併至 `main`，等待一般 CI、CPU wheel clean-install 與 GPU validation 通過。
+3. 在固定本機 GPU 主機完成 correctness、C ABI smoke 與 performance gates，保存
+   commit、環境指紋和 JSON 證據；合併至 `main` 後等待一般 CI 與 CPU wheel
+   clean-install 通過。
 4. 在本機先執行 metadata dry-run：
 
    ```powershell
@@ -46,7 +48,8 @@ Pull request 不會在 self-hosted runner 自動執行；一般 GPU 驗證只能
 5. 從 `main` commit 建立 `vX.Y.Z` tag。Release workflow 會拒絕版本不一致或不在
    `main` 歷史上的 tag。
 6. Workflow 建置 base wheel/sdist、15 個 CPU wheels、3 個 CUDA wheels，並執行
-   Twine、metadata、ABI capability、乾淨環境安裝和 GPU 測試。
+   Twine、metadata、ABI capability 與 artifact-set 檢查；GPU runtime 測試不在
+   GitHub Actions 執行，採用第 3 步的本機證據。
 7. 完整 artifact set 通過後才建立 GitHub Release。
 8. 三個 PyPI publish jobs 分別等待對應 GitHub Environment 的人工核准，再透過
    Trusted Publishing/OIDC 發布；不儲存長效 API token。

@@ -36,6 +36,29 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-09 — Codex — make development GPU validation local-only
+
+- Base SHA / branch: `6bb2a2f`, `codex/local-gpu-validation`.
+- Scope and decisions: cancelled GitHub run `31277407653` and removed the
+  manual GPU Actions workflow. Pull-request CUDA correctness, C ABI smoke,
+  profiling, shape sweeps and interleaved performance gates now run only on
+  the fixed local GPU host. The trusted-tag release workflow still builds the
+  CUDA wheel artifacts required for PyPI, but performs no GPU runtime test.
+- Files changed: removed `.github/workflows/gpu-validation.yml`; removed GPU
+  runtime tests from `.github/workflows/release.yml`; updated contribution,
+  release, support and performance documentation, changelog, maintainability
+  report and this hand-off.
+- Verification run: 206 Python tests passed with 43 documented optional/GPU
+  skips; Ruff check/format, native source metadata, `git diff --check`, stale
+  workflow-reference scan and focused workflow diff review passed.
+- Known risks or unresolved questions: GitHub branch protection cannot enforce
+  a local GPU result. Codex acceptance therefore requires the exact commit,
+  environment fingerprint and machine-readable JSON gate report before merging
+  CUDA behavior or performance changes.
+- Requested next action / owner: Claude Code implements P3 without adding a GPU
+  Actions job. P3 GPU profiles must be runnable locally and must fail when the
+  required device/dependencies are absent; Codex reviews the local evidence.
+
 ### 2026-08-09 — Codex — stages 1–3 implementation and publication
 
 - Base SHA / branch: reviewed working tree based on `08b75d3`,
@@ -64,14 +87,14 @@ concurrently; a message in this file is not a lock.
   the connector-created commit until `.git` is writable; fetch and align it
   before the next implementation session. Direct GitHub DNS and GPU access are
   blocked in this sandbox. Claude Code performed no Git mutation.
-- Requested next action / owner: Codex reviews the Draft PR and runs its manual
-  GPU validation with `baseline_ref=main`. Only after that passes should Claude
-  Code start the P3 brief below in a clean, synchronized worktree.
+- Requested next action / owner: superseded by the newer local-only GPU policy
+  entry above. Claude Code starts P3 only from a clean, synchronized worktree.
 
 ### 2026-08-09 — Codex — Claude Code implementation brief for maintainability P3
 
-- Base SHA / branch: use the Codex-published head of `codex/maintainability-p0`;
-  before editing, record the exact SHA here and confirm the worktree is clean.
+- Base SHA / branch: use the latest Codex-merged `main` containing the
+  local-only GPU policy; before editing, record the exact SHA here and confirm
+  the worktree is clean.
 - Ownership: Claude Code may edit a dedicated local worktree but must not
   commit, push, open a PR or change release state. Codex will review the
   uncommitted diff, run acceptance, and perform all Git mutations.
@@ -110,8 +133,10 @@ must prove `serialization.py` no longer references `_restore_state` or imports
 3. A required profile must fail when its dependency/device is absent instead
    of reporting a successful suite made entirely of skips. The ordinary `all`
    developer profile may retain documented optional skips.
-4. Update CI and GPU validation to invoke the appropriate required profiles,
-   while preserving direct `python -m unittest discover -s tests` compatibility.
+4. Update CPU CI and the documented local GPU validation command to invoke the
+   appropriate required profiles, while preserving direct
+   `python -m unittest discover -s tests` compatibility. Do not add a GPU
+   GitHub Actions job.
 5. Add self-tests for profile membership, duplicate modules and required-skip
    detection.
 
