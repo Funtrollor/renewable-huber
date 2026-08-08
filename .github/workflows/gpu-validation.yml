@@ -149,15 +149,15 @@ jobs:
             --rounds 9 --profile smoke --backend all --penalty none --dtype both `
             --lifecycle cold --operation partial-fit --warmup 1 `
             --minimum-sample-seconds 0.25 --max-sample-repetitions 16
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gpu-p2-validation
           path: artifacts/*.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fixed-runner-interleaved-regression
           path: artifacts/interleaved/**/*.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nonrelease-native-cuda-validation-wheel
           path: dist-native-cuda/*.whl
