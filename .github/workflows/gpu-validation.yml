@@ -20,9 +20,9 @@ jobs:
     runs-on: [self-hosted, windows, x64, gpu]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out the fixed-runner baseline
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.baseline_ref }}
           path: .gpu_test_packages/baseline-source
