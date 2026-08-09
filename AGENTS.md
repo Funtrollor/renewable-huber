@@ -26,6 +26,12 @@ added the `CheckpointPayload` boundary, executable unittest profiles and the
 shape-sweep module split. See `docs/agent-handoff.md` for the acceptance
 evidence and remaining follow-up work.
 
+On top of P3, `backend="auto"` on CPU may now select the Rust CPU engine from
+bounded runtime evidence measured on the current host. The design, its cost
+bounds and what it deliberately declines to do are in
+[`docs/cpu-auto-dispatch-rfc.md`](docs/cpu-auto-dispatch-rfc.md); the
+invariants it introduces are in the list below.
+
 ## Agent roles and hand-off
 
 - **Claude Code writes implementation code from an agreed engineering plan.**
@@ -117,6 +123,75 @@ report; these are the ones worth memorising.
   reads the required names out of the consumers' own import statements and
   checks them against `__all__` and the module attributes. Extra exports are
   fine; a missing one is not.
+- **`NativeCpuBackend` must keep inheriting NumPy's array handling and must
+  not gain a `native_design_matrix`.** `backend="auto"` on CPU validates and
+  prepares a batch on `NumPyBackend`, learns its shape, and only then may swap
+  in the native engine. That swap is sound *only* because both backends produce
+  identical `asarray`/`copy`/`reshape`/`to_numpy`/`scalar` results, share `xp`,
+  and build the same design matrix. Override one of them and the solver
+  silently receives different arrays than it was validated against, with every
+  other test still passing. Guarded by
+  `tests/test_cpu_auto_dispatch.py::BackendSwapSafetyTests`.
+- **The CPU dispatch policy must not read processor identity or write to
+  disk.** A brand string does not predict BLAS quality or thread count, and a
+  persisted calibration is wrong on the next machine with no version to
+  invalidate it. `tests/test_cpu_auto_dispatch.py::PolicyInputTests` parses
+  `cpu_dispatch.py` and fails on `platform.`, `uname`, `cpuinfo`, a brand
+  string, an `open(`, or an import of `json`/`pathlib`/`pickle`/`shelve`/
+  `sqlite3`/`tempfile`. It also pins the exact set of `os` and `sys` attributes
+  the module may touch — reached by a dot *or* by `getattr` — to exactly
+  `register_at_fork`, `sched_getaffinity`, `cpu_count` and `environ`, and
+  requires that `sys` is not imported at all. Every one of those returns a CPU
+  number, a count, or a caller-set string.
+- **`select_cpu_backend` must stay a pure function of shape, policy and cached
+  measurement.** It briefly kept a per-key `sticky_native` flag so a second
+  decision could be judged against a looser threshold. That made one
+  estimator's answer depend on what an unrelated estimator asked earlier in the
+  process — invisible to every caller and a real hazard under `GridSearchCV`.
+  Every native selection now clears `1 - enter_margin` on its own evidence.
+  `DecisionIndependenceTests` fails if order, repetition or any stored
+  selection state creeps back.
+- **A cached calibration is valid only for the execution context it was taken
+  in.** The cache key carries `RuntimeSignature`: the **sorted affinity mask
+  itself** where the platform reports one (a length alone makes two four-core
+  pinnings on different sockets look identical), the usable CPU count, the
+  `*_NUM_THREADS` environment, and effective BLAS/OpenMP pool sizes when
+  optional `threadpoolctl` is available. This last input matters because
+  scikit-learn/joblib can change pool sizes without changing the environment.
+  A changed signature *deletes* the stale entry,
+  and `fork` empties the whole map in the child as well as rebuilding its
+  locks — a joblib worker is routinely pinned to a subset of the parent's
+  cores. Reusing a parent's timings there is answering confidently from a
+  measurement of a different machine.
+- **The native extension's `parallel_threads` must stay out of the signature.**
+  It is not an independent input — `CalibrationKey.n_threads` already carries
+  the requested pool, and the affinity mask plus `RAYON_NUM_THREADS` carry what
+  it actually gets — and reading it makes calibration invalidate itself: the
+  value is unknown until the extension is imported, and calibrating is what
+  imports it, so the first calibration is silently paid for twice. The module
+  therefore imports no `sys` at all;
+  `NativeThreadIntrospectionTests` fails if either comes back.
+- **Probe timing must stay paired.** `engine_order` alternates which engine
+  runs first each round. With a fixed order, whichever engine goes first pays
+  the first-touch and pool-spin-up cost on every probe, which biases every
+  ratio the same way; running NumPy first always biases *towards native*.
+  `PairedTimingTests` includes a host that is fair apart from a first-touch
+  penalty and fails if the policy reads that penalty as a native win.
+- **The 0.25 s probe-start deadline is soft; the ladder is the hard bound.**
+  The clock is checked between probes only, so a started probe always finishes
+  and a calibration may overrun. What cannot be exceeded is
+  `DispatchPolicy.ladder_work_units()`, fixed before anything is measured.
+  Describing the deadline as a hard cap in docs or comments is a claim the code
+  does not keep.
+- **A backend chosen by the auto policy may be withdrawn on *any* ordinary
+  exception; one the caller named may not.** `partial_fit` retries on NumPy
+  when a native engine *it* selected fails to construct or raises on its first
+  update — `RuntimeError` from a Rust panic, `MemoryError`, `OSError`,
+  `TypeError` from a PyO3 mismatch, anything under `Exception` — and re-raises
+  when the caller asked for `native_cpu` explicitly. Narrowing the catch back
+  to `BackendUnavailableError` lets an engine the caller never requested break
+  their fit; collapsing the two halves makes an explicit request silently run
+  something else.
 - **Native tests that need no device belong in `core`.** The nine
   `NativeCudaSelectionTests` drive fakes, but lived in a module the `cuda`
   profile owned, so they silently stopped running in CPU CI while every suite
@@ -164,6 +239,13 @@ cmake --build build/static && ctest --test-dir build/static --output-on-failure
 Rebuild the extensions with `bash scripts/setup-wsl-venv.sh --cuda`.
 
 ## Measurement
+
+`scripts/benchmarks/benchmark_auto_dispatch.py` compares `auto` against both
+explicit CPU backends and separates the one-off calibration from steady-state
+cost. It interleaves the four engines round-robin and runs an untimed warmup of
+the *same* engine before every timed sample; without both, measuring four
+engines back to back in one process reported identical NumPy work as 335 ms
+under one label and 69 ms under another.
 
 The CUDA benchmark harness on this host drifts 2%–19% between runs of the *same
 binary* (`wide float32` is worst). Five runs of A followed by five of B compares

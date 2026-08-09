@@ -134,6 +134,10 @@ _LEAF_PROFILES: tuple[Profile, ...] = (
             "tests.test_backend_capabilities",
             "tests.test_checkpoint_payload",
             "tests.test_correctness_contract",
+            # The CPU auto-dispatch policy drives simulated hosts through an
+            # injected clock and probe runner, so it needs no Rust extension;
+            # see PORTABLE_NATIVE_MODULES below for why it must stay here.
+            "tests.test_cpu_auto_dispatch",
             "tests.test_cpu_optimizations",
             "tests.test_dlpack_adapters",
             "tests.test_estimator",
@@ -214,6 +218,7 @@ SHARED_MODULES = frozenset({"tests.test_dlpack_adapters"})
 # ``tests/test_profile_runner.py`` checks the modules really are portable.
 PORTABLE_NATIVE_MODULES = frozenset(
     {
+        "tests.test_cpu_auto_dispatch",
         "tests.test_native_cuda_selection",
         "tests.test_native_cuda_contract",
         "tests.test_native_golden",

@@ -16,7 +16,7 @@ RenewableHuberRegressor(
     max_iter=100,
     tol=1e-6,
     ridge=1e-8,
-    backend="auto",  # 預設 NumPy；只有 device="cuda" 時選 CuPy
+    backend="auto",  # CPU 上預設 NumPy，大批次可經量測改用 native_cpu；device="cuda" 時選 CuPy
     device="auto",
     dtype="float64",  # CPU precision；GPU 可使用 float32 加速
     n_jobs=None,
@@ -58,6 +58,7 @@ benchmark 依代表性資料形狀選擇。
 | `backend_` | 實際使用的運算後端。 |
 | `device_` | 實際裝置，例如 `cpu` 或 `cuda:0`。 |
 | `n_jobs_` | Native CPU 實際 worker 數；其他 backend 為 `None`。 |
+| `auto_dispatch_` | 僅在 `backend="auto"` 且非 CUDA 時出現：CPU dispatch 的決策紀錄（選中的 backend、文字理由、批次 work units、是否使用主機量測模型、預測比值與其上界、校準秒數、probe 數）。可直接 JSON 序列化，`reset()`／`set_params()` 會清除。 |
 | `state_` | 防禦性複製的可續跑狀態。 |
 | `diagnostics_` | 最後一個批次的迭代、收斂、loss、lambda 與 bandwidth。 |
 
