@@ -86,6 +86,19 @@ class NativeReleaseMetadataTests(unittest.TestCase):
         self.assertIn("assert _native_cuda.is_available()", full)
         self.assertIn("backend='native_cuda'", full)
 
+    def test_cuda_device_code_stays_whole_program_so_wheels_keep_ptx(self) -> None:
+        # The release workflow proves the shipped wheel carries SM 120 PTX, but
+        # only on a Windows runner with a CUDA toolkit. This reads the one
+        # setting that decides it, so CPU CI rejects the regression in advance.
+        cmake = (Path(__file__).parents[1] / "native" / "cuda" / "CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CUDA_SEPARABLE_COMPILATION OFF", cmake)
+        self.assertNotIn("CUDA_SEPARABLE_COMPILATION ON", cmake)
+        # This property does nothing without separable compilation, so its
+        # return would mean the nvlink device link is back and the PTX is gone.
+        self.assertNotIn("CUDA_RESOLVE_DEVICE_SYMBOLS", cmake)
+
     def test_source_projects_match_base_release_exactly(self) -> None:
         self.assertEqual(check_source_metadata(), base_version())
         self.assertEqual(native_workspace_version(), base_version())

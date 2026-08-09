@@ -124,6 +124,10 @@ retained as an immutable historical record rather than moved or reused.
   closure, verifies the SASS/PTX payload, and clean-imports the wheel without a
   GPU. Published wheels do not bundle NVIDIA DLLs; users provide the compatible
   CUDA 12 runtime through their driver/toolkit installation.
+- Compiled the CUDA engine as whole-program device code so the release wheel
+  keeps its SM 120 PTX. Separable compilation links every architecture through
+  nvlink, which emits SASS only, and the resulting wheel would have run on
+  nothing newer than Blackwell.
 - Replaced the retired macOS 13 x86-64 release runner with macOS 15 Intel and
   moved the Apple Silicon release wheel to macOS 15.
 - Restricted `Requires-Python` to the tested CPython 3.10–3.12 range across

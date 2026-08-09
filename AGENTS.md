@@ -201,6 +201,16 @@ report; these are the ones worth memorising.
   in `PORTABLE_NATIVE_MODULES`; `validate_profiles` fails if one of those
   modules leaves `core`, and a self-test rejects unittest skip controls and
   executes the nine-test contract with the GPU hidden to prove it has no skips.
+- **`CUDA_SEPARABLE_COMPILATION` must stay `OFF` in `native/cuda/CMakeLists.txt`.**
+  Turning it on routes every architecture through nvlink, which emits SASS only.
+  The device-linked image the runtime registers then has no PTX, so the
+  suffix-free `120` in the release architecture list silently loses its virtual
+  half and the wheel stops working on any future GPU. Every kernel still runs
+  and every test still passes on present hardware, and the translation units
+  keep their own PTX, so object-level inspection looks correct. Guarded by
+  `tests/test_native_release_metadata.py::NativeReleaseMetadataTests::test_cuda_device_code_stays_whole_program_so_wheels_keep_ptx`
+  on CPU CI, and by the release workflow's `cuobjdump --list-ptx` check on the
+  built wheel.
 
 ## Verification
 
