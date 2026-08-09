@@ -75,7 +75,7 @@ jobs:
           "$RUNNER_TEMP/base-sdist-smoke/bin/python" -m pip install dist-base/*.tar.gz
           "$RUNNER_TEMP/base-sdist-smoke/bin/python" -m pip check
           "$RUNNER_TEMP/base-sdist-smoke/bin/renewable-huber" --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: base-distributions
           path: dist-base/*
@@ -148,7 +148,7 @@ jobs:
           python -m pip install ".[dev]"
           python -m pip install dist-native-cpu/*.whl
           python scripts/run_test_profile.py native-cpu --verbose
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-cpu-${{ matrix.architecture }}-py${{ matrix.python-version }}
           path: dist-native-cpu/*.whl
@@ -291,7 +291,7 @@ jobs:
         run: >-
           python scripts/native/smoke_test_cuda_wheels.py
           --base-dir dist-base --native-dir dist-native-cuda --import-only
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-cuda-windows-x86_64-py${{ matrix.python-version }}
           path: dist-native-cuda/*.whl
@@ -331,7 +331,7 @@ jobs:
         run: |
           python -m pip install twine
           python -m twine check release/base/* release/cpu/* release/cuda/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: complete-release-bundle
           path: release/**/*

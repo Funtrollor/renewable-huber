@@ -46,7 +46,7 @@ jobs:
             "$smoke/bin/renewable-huber" --version
           done
       - name: Preserve release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-pypi-distributions
           path: dist/*
