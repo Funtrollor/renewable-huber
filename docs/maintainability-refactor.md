@@ -1,11 +1,9 @@
-# 可維護性重構 P0–P2 交接報告
+# 可維護性重構 P0–P3 完成報告
 
-- 分支：`codex/maintainability-p0`（14 個本機 commit，重構基底 `27322c4`）
+- 基底：P0–P2 已合併；P3 基於 `14f9e72`
 - 依據：`renewable-huber 代碼結構與可維護性稽核報告`（稽核版本 df17d08）
-- 狀態：P0、P1、P2 完成並驗證；**P3 未進行**
-- 遠端狀態：Codex 以 GitHub Git Data API 將已審核工作樹發布到
-  `codex/maintainability-p0`；Claude Code 不執行 commit/push。本機
-  remote-tracking ref 必須在 `.git` 恢復可寫後 fetch 對齊。
+- 狀態：P0、P1、P2、P3 全部完成並驗證；完整驗收證據見
+  `docs/agent-handoff.md`
 
 ---
 
@@ -18,7 +16,7 @@
 | P0 | 修 C ABI 契約、建跨語言 contract、拆 `engine.cu` | 純 Python 基線 |
 | P1 | Python backend capability contract | Rust CPU 引擎 |
 | P2 | 拆 Rust 模組 | CUDA whole-batch 引擎 |
-| P3 | persistence 與測試 profile（**未做**） | — |
+| P3 | persistence 邊界、測試 profile、benchmark sweep 拆分（**完成**） | — |
 
 看到 "P2" 時務必先確認是哪一套。
 
@@ -337,25 +335,27 @@ Windows 端的 session 紀錄已經搬過來：
 
 ---
 
-## 8. 尚未進行：P3
+## 8. P3：已實作並通過 Codex 驗收
 
-稽核報告的 P3 有三項，**都沒做**：
+在 `claude/maintainability-p3`（基底 `14f9e72`）上完成，**刻意不 commit**。逐項證據與未決問題見 `docs/agent-handoff.md`。
 
-1. `CheckpointPayload` —— 目前 `serialization.load_model` 最後一行直接呼叫 estimator 的私有 `_restore_state`，persistence 層知道 estimator 的私有生命週期。
-2. 測試 profile。
-3. benchmark shape sweep 拆分。
+### 8.1 `CheckpointPayload` 邊界
 
-### 8.1 P3 第 2 項的前提是錯的，照抄會做白工
+`serialization.py` 變成純 codec：`CheckpointPayload` + `write_checkpoint` / `read_checkpoint`。它不再 import estimator、不建構 estimator、也不呼叫 `_restore_state`；那三件事移到 estimator 層的 `_checkpoint_payload()` 與 `_from_checkpoint_payload()`。`save()` / `load()` / `state_dict()` 的外部行為與 v2 檔案格式逐位元不變。
 
-稽核報告寫「為 pytest 加上 `gpu`、`optional_backend`、`performance` markers」。實際情況：
+**`save_model` / `load_model` 兩個模組層函式被移除** —— `load_model` 必然要建構 estimator，與這條邊界互斥。兩者都不在 `__all__`、不在任何文件裡，唯一呼叫者是 `estimator.py`。這是本次唯一的內部介面變更，交由 Codex 決定是否接受。
 
-- **沒有任何測試 import pytest。** 全部是 `unittest.TestCase`。
-- **CI 一律跑 `python -m unittest`**；GPU suite 則由固定本機主機直接以
-  `python -m unittest` 執行，從來沒跑過 pytest。
-- **repo 裡沒有 `conftest.py`**，`pyproject.toml` 的 `[tool.pytest.ini_options]` 只有 `testpaths` 與 `addopts`。
-- `pytest` 雖在 `dev` extra 裡宣告，但沒有東西用它。
+`diagnostics` 是 payload 的欄位但**沒有任何已發布格式會寫它**：解 v1/v2 一律得到 `None`，剛 `load()` 的模型讀 `diagnostics_` 仍拋 `NotFittedError`。要落檔就得升 v3，那是 Codex 的決定。
 
-只加 marker 對 CI 完全無作用。可行做法是加一個 root `conftest.py`，用 `pytest_collection_modifyitems` 依模組名自動標記，同時**不動那 18 個測試模組、也不破壞 `python -m unittest`**。這樣 pytest 使用者有 marker 可選，CI 維持現狀。
+### 8.2 測試 profile
+
+稽核報告寫「為 pytest 加上 markers」，前提是錯的：沒有任何測試 import pytest，CI 一律跑 `python -m unittest`，repo 裡也沒有 `conftest.py`。只加 marker 對 CI 完全無作用。
+
+實作改成 `scripts/run_test_profile.py`：`core` / `optional-cpu` / `native-cpu` / `cuda` / `performance` / `all` 六個 profile，成員逐條列出並可用 `--check` 驗一致性（重複、遺漏、錯字、不存在的 module、未知 requirement）。前五個是 **required**：先探測宣告的相依或裝置，缺了就 exit 2，不會把「整套都是 skip」報成成功。`python -m unittest discover -s tests` 完全不受影響。
+
+### 8.3 拆 `benchmark_shape_sweep.py`
+
+1,140 行拆成 `shape_sweep/` 底下五個模組（`shapes` / `environment` / `timing` / `runners` / `cli`），入口檔剩 100 行並 re-export 兩個 consumer 依賴的 11 個名字。schema-v2 記錄以 pre/post 對照證明結構相同：固定取樣區塊下 120 cases、52 skips、4 個 dataset checksum 一致；每個結果有 28 個欄位，其中 22 個非揮發欄位逐值相等。
 
 ---
 
@@ -364,7 +364,7 @@ Windows 端的 session 紀錄已經搬過來：
 重構過程中發現、判斷不屬於本次範圍而**刻意保留**的：
 
 1. CUDA `state_dict()` 走 `state_dict_from_parts`，**不含 `state_is_detached` key**（CPU 版有）。目前無害，因為 `_decode_result` 用 `.get(..., False)` 保守複製。manifest 已把這個差異明文化。
-2. `_restore_state` 不設 `_diagnostics`，所以剛 `load()` 的模型讀 `diagnostics_` 會拋 `NotFittedError`。
+2. `_restore_state` 不設 `_diagnostics`，所以剛 `load()` 的模型讀 `diagnostics_` 會拋 `NotFittedError`。P3.1 之後這變成**刻意且有測試守門**的行為：checkpoint 檔案裡沒有 diagnostics，捏一份出來比拋錯更糟。見第 8.1 節。
 3. 可攜式 core 從不設 `used_regularized_fallback`（永遠 `False`），但兩個 `_decode_result` 都把它當**必要** key。
 4. `_design_matrix` 只在傳入 `backend=` 時才委派 —— `partial_fit` 傳、`predict` 不傳。這是刻意的（CUDA engine 的 predict 需要完整 `n_parameters` 寬度，update 接受未展開的），已加註解說明。
 

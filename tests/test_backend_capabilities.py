@@ -13,7 +13,6 @@ from typing import Any
 
 import numpy as np
 
-from renewable_huber.backends import resolve_backend
 from renewable_huber.backends.capabilities import BackendCapabilities, capabilities_of
 from renewable_huber.backends.numpy_backend import NumPyBackend
 
@@ -119,44 +118,6 @@ class LiveAccessorTests(unittest.TestCase):
         self.assertEqual(
             read()["graph_replays"], 7, "CUDA graph counters were frozen at probe time"
         )
-
-
-class NativeBackendCapabilityTests(unittest.TestCase):
-    """Whatever a native backend advertises, the core must be able to find."""
-
-    def _capabilities(self, name: str) -> BackendCapabilities | None:
-        from renewable_huber.exceptions import BackendUnavailableError
-
-        try:
-            backend = resolve_backend(name, device="cpu" if name == "native_cpu" else "cuda")
-        except BackendUnavailableError:
-            return None
-        return capabilities_of(backend)
-
-    def test_native_cpu_advertises_update_predict_and_threads(self) -> None:
-        capabilities = self._capabilities("native_cpu")
-        if capabilities is None:
-            self.skipTest("the native CPU extension is not installed")
-        self.assertIsNotNone(capabilities.native_update)
-        self.assertIsNotNone(capabilities.native_predict)
-        self.assertIsNotNone(capabilities.read_n_jobs)
-        self.assertIsNone(capabilities.native_design_matrix)
-        self.assertFalse(capabilities.elementwise_workspace)
-
-    def test_native_cuda_advertises_design_ownership_and_device_reductions(self) -> None:
-        capabilities = self._capabilities("native_cuda")
-        if capabilities is None:
-            self.skipTest("the native CUDA extension or a CUDA device is unavailable")
-        self.assertIsNotNone(capabilities.native_update)
-        self.assertIsNotNone(capabilities.native_predict)
-        # The CUDA engine appends the intercept on device, so it owns the
-        # design matrix; losing this silently reintroduces a full host copy of
-        # every batch before each transfer.
-        self.assertIsNotNone(capabilities.native_design_matrix)
-        self.assertIsNotNone(capabilities.minimum_scalar)
-        self.assertIsNotNone(capabilities.sum_scalar)
-        self.assertIsNotNone(capabilities.read_cuda_features)
-        self.assertFalse(capabilities.elementwise_workspace)
 
 
 if __name__ == "__main__":

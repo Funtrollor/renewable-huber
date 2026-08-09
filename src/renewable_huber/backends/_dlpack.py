@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..exceptions import ValidationError
+from ..exceptions import BackendContractError, ValidationError
 
 _DL_DEVICE_CUDA = 2
 _TENSORFLOW_GPU_DEVICE = re.compile(r"(?:^|/)device:GPU:(\d+)$", re.IGNORECASE)
@@ -45,7 +45,7 @@ class TensorFlowCudaDlpackTensor:
                 "it cannot be consumed from tf.function"
             )
         if not bool(tensorflow.is_tensor(tensor)):
-            raise TypeError("TensorFlow DLPack input must be an eager tf.Tensor")
+            raise BackendContractError("TensorFlow DLPack input must be an eager tf.Tensor")
         device_id = _tensorflow_device_id(getattr(tensor, "device", None))
         if device_id is None:
             raise ValidationError(

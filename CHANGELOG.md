@@ -45,6 +45,15 @@ The next minor release is `0.6.0`; the published stable package remains
 
 ### Changed
 
+- Checkpoint persistence now uses a codec-only `CheckpointPayload` boundary;
+  the undocumented deep-import helpers `serialization.save_model` and
+  `serialization.load_model` were removed while the public estimator
+  `save()`/`load()` API and version-2 archive format remain unchanged.
+- CI now runs explicit required unittest profiles that reject missing
+  dependencies, missing devices and all-skipped native suites; GPU runtime
+  validation remains local to the maintainer host.
+- The shape-sweep benchmark was split into cohesive modules while preserving
+  its CLI, schema-v2 records and all consumer-visible helper imports.
 - Pull-request GPU validation now runs only on the maintainer's fixed local GPU
   host; GitHub Actions remains responsible for CPU CI and release artifact
   assembly.

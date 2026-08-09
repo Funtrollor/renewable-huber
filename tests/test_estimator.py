@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -13,6 +14,7 @@ from renewable_huber import (
     RenewableHuberRegressor,
     ValidationError,
 )
+from renewable_huber.exceptions import BackendContractError, RenewableHuberError
 
 
 class _TableLike:
@@ -234,6 +236,116 @@ class RenewableHuberRegressorTests(unittest.TestCase):
             RenewableHuberRegressor().predict(self.X)
         with self.assertRaises(BackendUnavailableError):
             RenewableHuberRegressor(backend="numpy", device="cuda").fit(self.X, self.y)
+
+
+class _RefusingBackend:
+    """A backend whose ``asarray`` refuses input for a stated reason.
+
+    Enough of the protocol to reach the estimator's coercion handling and no
+    more: what matters is which exception comes back out.
+    """
+
+    name = "refusing"
+    device = "cpu"
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def asarray(self, value: object) -> object:
+        raise self._error
+
+    def reshape(self, value: object, shape: tuple[int, ...]) -> object:
+        raise AssertionError("reshape must not be reached; asarray raises first")
+
+
+class BackendErrorPropagationTests(unittest.TestCase):
+    """A backend's own refusal must survive the estimator's input validation.
+
+    ``_validate_features`` rewrites an unrecognised ``TypeError`` into
+    scikit-learn's coercion message and an unrecognised ``ValueError`` into the
+    shape message, which is what those handlers exist for. Before the guards
+    were type-based they also swallowed the native CUDA DLPack contract errors:
+    a float32 device array given to a float64 model reported "float() argument
+    must be a string or a number", and a non-contiguous one reported "X must be
+    a two-dimensional numeric array". Both named the wrong problem, and the real
+    one survived only as ``__cause__``, which ``assertRaisesRegex`` never sees.
+
+    No GPU is needed: the propagation rule is what regresses, and a stub backend
+    exercises it exactly as the native CUDA backend does.
+    """
+
+    CONTRACT_MESSAGE = "native CUDA DLPack dtype must exactly match float64"
+    VALIDATION_MESSAGE = "native CUDA DLPack input must be C-contiguous"
+
+    def setUp(self) -> None:
+        rng = np.random.default_rng(4)
+        self.X = rng.normal(size=(12, 2))
+        self.y = rng.normal(size=12)
+
+    def test_backend_contract_error_is_a_type_error_and_a_package_error(self) -> None:
+        # Every existing ``except TypeError`` handler must keep catching it.
+        self.assertTrue(issubclass(BackendContractError, TypeError))
+        self.assertTrue(issubclass(BackendContractError, RenewableHuberError))
+
+    def test_every_validator_preserves_a_backend_contract_error(self) -> None:
+        for label, call in self._validators():
+            with self.subTest(validator=label):
+                backend = _RefusingBackend(BackendContractError(self.CONTRACT_MESSAGE))
+                with self.assertRaisesRegex(BackendContractError, "dtype must exactly match"):
+                    call(backend)
+
+    def test_every_validator_preserves_a_backend_validation_error(self) -> None:
+        for label, call in self._validators():
+            with self.subTest(validator=label):
+                backend = _RefusingBackend(ValidationError(self.VALIDATION_MESSAGE))
+                with self.assertRaisesRegex(ValidationError, "C-contiguous"):
+                    call(backend)
+
+    def test_fit_surfaces_the_backend_reason_end_to_end(self) -> None:
+        backend = _RefusingBackend(BackendContractError(self.CONTRACT_MESSAGE))
+        model = RenewableHuberRegressor(backend="numpy")
+        with mock.patch.object(RenewableHuberRegressor, "_resolve_backend", return_value=backend):
+            with self.assertRaisesRegex(BackendContractError, "dtype must exactly match"):
+                model.fit(self.X, self.y)
+
+    def test_an_unrecognised_type_error_still_gets_the_coercion_message(self) -> None:
+        # The handler these guards sit in front of must keep doing its job.
+        backend = _RefusingBackend(TypeError("an array library's internal detail"))
+        with self.assertRaisesRegex(TypeError, r"float\(\) argument must be a string or a number"):
+            RenewableHuberRegressor._validate_features(self.X, backend=backend)
+
+    def test_an_unrecognised_value_error_still_gets_the_shape_message(self) -> None:
+        backend = _RefusingBackend(ValueError("an array library's internal detail"))
+        with self.assertRaisesRegex(ValidationError, "two-dimensional numeric array"):
+            RenewableHuberRegressor._validate_features(self.X, backend=backend)
+
+    def test_real_non_numeric_input_keeps_its_documented_messages(self) -> None:
+        # Both rewrite paths, through a real backend. NumPy rejects a string
+        # array with ValueError and an object array with TypeError, so the two
+        # land in different handlers; neither is affected by the guards above.
+        with self.assertRaisesRegex(ValidationError, "two-dimensional numeric array"):
+            RenewableHuberRegressor().fit(np.array([["a", "b"], ["c", "d"]]), np.zeros(2))
+        objects = np.array([[{"x": 1}, {"y": 2}], [{"z": 3}, {"w": 4}]], dtype=object)
+        with self.assertRaisesRegex(TypeError, r"float\(\) argument must be a string or a number"):
+            RenewableHuberRegressor().fit(objects, np.zeros(2))
+
+    def _validators(self) -> tuple[tuple[str, object], ...]:
+        return (
+            (
+                "features",
+                lambda backend: RenewableHuberRegressor._validate_features(self.X, backend=backend),
+            ),
+            (
+                "target",
+                lambda backend: RenewableHuberRegressor._validate_target(self.y, 12, backend),
+            ),
+            (
+                "sample_weight",
+                lambda backend: RenewableHuberRegressor._validate_sample_weight(
+                    np.ones(12), 12, backend
+                ),
+            ),
+        )
 
 
 if __name__ == "__main__":

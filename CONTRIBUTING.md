@@ -58,6 +58,33 @@ ruff format --check src tests scripts
 python -m build
 ```
 
+`discover` remains supported and is the quickest local pass. It is tolerant by
+design: a suite whose dependency or device is missing reports success as a set
+of skips. For anything that has to *prove* it ran, use a named profile:
+
+```bash
+python scripts/run_test_profile.py --list     # membership and requirements
+python scripts/run_test_profile.py --check    # membership consistency only
+python scripts/run_test_profile.py core       # portable NumPy behaviour
+python scripts/run_test_profile.py all        # everything, optional skips kept
+```
+
+`core`, `optional-cpu`, `native-cpu`, `cuda` and `performance` are *required*
+profiles: each probes its declared dependency or device first and exits with
+status 2 when one is missing, so a green result cannot be an empty one. `all`
+is the developer default and keeps its documented optional skips. GPU work uses
+the `cuda` profile on the fixed local host; it must not run in GitHub Actions.
+Adding a test module without assigning it to a profile fails `--check`.
+
+`optional-cpu` is CPU-only by definition and enforces it: the runner sets
+`CUDA_VISIBLE_DEVICES=""` for that profile and restores the previous value
+afterwards. PyTorch and TensorFlow each initialise their own CUDA runtime in
+one process, and on a machine with a GPU the second one to do so can fail
+(`cusolverDnCreate` returning `CUSOLVER_STATUS_INTERNAL_ERROR`), which would
+make the profile's result depend on import order. No other profile forces any
+environment, so `cuda` still sees the device. `run_test_profile.py --list`
+prints the forced variables.
+
 Backend-specific changes must include parity tests against NumPy. Performance changes must include
 correctness tests and reproducible before/after benchmark output; a faster result is not accepted
 if it changes the documented numerical contract.

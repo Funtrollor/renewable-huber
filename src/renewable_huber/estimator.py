@@ -13,7 +13,13 @@ from .backends import ArrayBackend, resolve_backend
 from .backends.capabilities import BackendCapabilities, capabilities_of
 from .config import BackendName, DeviceName, DTypeName, EstimatorConfig, Penalty
 from .core import UpdateDiagnostics, renewable_update
-from .exceptions import NotFittedError, ValidationError
+from .exceptions import BackendContractError, NotFittedError, ValidationError
+from .serialization import (
+    FORMAT_VERSION,
+    CheckpointPayload,
+    read_checkpoint,
+    write_checkpoint,
+)
 from .state import RenewableHuberState
 
 
@@ -210,29 +216,25 @@ class RenewableHuberRegressor:
     def state_dict(self) -> dict[str, object]:
         """Return portable model data for custom checkpointing integrations."""
 
-        state = self._require_state()
-        backend = self._require_backend()
+        payload = self._checkpoint_payload()
+        state = payload.state
         return {
-            "config": self.get_params(),
-            "coefficients": backend.to_numpy(state.coefficients).copy(),
-            "information": backend.to_numpy(state.information).copy(),
+            "config": payload.config,
+            "coefficients": state.coefficients,
+            "information": state.information,
             "n_samples_seen": state.n_samples_seen,
             "batch_count": state.batch_count,
             "previous_lambda": state.previous_lambda,
             "n_features_in": state.n_features_in,
             "fit_intercept": state.fit_intercept,
             "weight_sum": state.effective_weight,
-            "feature_names_in": (
-                self.feature_names_in_.tolist() if hasattr(self, "feature_names_in_") else None
-            ),
+            "feature_names_in": payload.feature_names,
         }
 
     def save(self, path: str | Path) -> Path:
         """Save configuration and sufficient state as a safe ``.npz`` checkpoint."""
 
-        from .serialization import save_model
-
-        return save_model(self, path)
+        return write_checkpoint(self._checkpoint_payload(), path)
 
     @classmethod
     def load(
@@ -245,15 +247,77 @@ class RenewableHuberRegressor:
     ) -> RenewableHuberRegressor:
         """Restore a model, optionally migrating its state to another backend."""
 
-        from .serialization import load_model
-
-        return load_model(
-            path,
+        return cls._from_checkpoint_payload(
+            read_checkpoint(path),
             backend=backend,
             device=device,
             dtype=dtype,
-            estimator_class=cls,
         )
+
+    def _checkpoint_payload(self) -> CheckpointPayload:
+        """Project this fitted model onto the persistence boundary type.
+
+        The state is copied to host arrays here, so the serialization layer
+        never has to know which backend produced them. Diagnostics are left
+        unset: no released checkpoint format records them, and inventing a
+        last-batch summary the file cannot contain would be worse than absence.
+        """
+
+        state = self._require_state()
+        backend = self._require_backend()
+        host_state = RenewableHuberState(
+            coefficients=backend.to_numpy(state.coefficients).copy(),
+            information=backend.to_numpy(state.information).copy(),
+            n_samples_seen=state.n_samples_seen,
+            batch_count=state.batch_count,
+            previous_lambda=state.previous_lambda,
+            n_features_in=state.n_features_in,
+            fit_intercept=state.fit_intercept,
+            weight_sum=state.effective_weight,
+        )
+        return CheckpointPayload(
+            format_version=FORMAT_VERSION,
+            config=self.get_params(),
+            state=host_state,
+            feature_names=(
+                self.feature_names_in_.tolist() if hasattr(self, "feature_names_in_") else None
+            ),
+        )
+
+    @classmethod
+    def _from_checkpoint_payload(
+        cls,
+        payload: CheckpointPayload,
+        *,
+        backend: BackendName | None = None,
+        device: DeviceName | None = None,
+        dtype: DTypeName | None = None,
+    ) -> RenewableHuberRegressor:
+        """Build an estimator of this class from a decoded checkpoint payload.
+
+        ``cls`` is what gets constructed, so a subclass keeps its own type and
+        any extra behaviour when it loads its own checkpoint.
+        """
+
+        config = dict(payload.config)
+        if backend is not None:
+            config["backend"] = backend
+            # A backend change without an explicit device must not carry the
+            # saved device forward: "auto" re-resolves it for the new backend.
+            if device is None:
+                config["device"] = "auto"
+        if device is not None:
+            config["device"] = device
+        if dtype is not None:
+            config["dtype"] = dtype
+        try:
+            model = cls(**config)
+        except (KeyError, TypeError) as error:
+            raise ValidationError("Invalid renewable-huber checkpoint configuration") from error
+        model._restore_state(payload.state, feature_names=payload.feature_names)
+        if payload.diagnostics is not None:
+            model._diagnostics = payload.diagnostics
+        return model
 
     def _restore_state(
         self, state: RenewableHuberState, *, feature_names: list[str] | None = None
@@ -410,8 +474,18 @@ class RenewableHuberRegressor:
         RenewableHuberRegressor._reject_complex(X, "X")
         try:
             X_array = backend.asarray(X)
+        except BackendContractError:
+            # A backend refusing input for a stated reason has already said
+            # something more precise than the coercion message below. Only
+            # an unrecognised TypeError means "this is not numeric data".
+            raise
         except TypeError as error:
             raise TypeError("float() argument must be a string or a number") from error
+        except ValidationError:
+            # Same reasoning as BackendContractError above: ValidationError is
+            # ours and already names the violated rule, while a raw ValueError
+            # from array coercion carries no usable detail.
+            raise
         except ValueError as error:
             raise ValidationError(
                 "X must be a two-dimensional numeric array. Reshape your data."
@@ -444,8 +518,18 @@ class RenewableHuberRegressor:
         RenewableHuberRegressor._reject_complex(y, "y")
         try:
             y_array = backend.reshape(backend.asarray(y), (-1,))
+        except BackendContractError:
+            # A backend refusing input for a stated reason has already said
+            # something more precise than the coercion message below. Only
+            # an unrecognised TypeError means "this is not numeric data".
+            raise
         except TypeError as error:
             raise TypeError("float() argument must be a string or a number") from error
+        except ValidationError:
+            # Same reasoning as BackendContractError above: ValidationError is
+            # ours and already names the violated rule, while a raw ValueError
+            # from array coercion carries no usable detail.
+            raise
         except ValueError as error:
             raise ValidationError("y must be a one-dimensional numeric array") from error
         if y_array.shape[0] != expected_samples:
@@ -466,8 +550,18 @@ class RenewableHuberRegressor:
         RenewableHuberRegressor._reject_complex(sample_weight, "sample_weight")
         try:
             weights = backend.reshape(backend.asarray(sample_weight), (-1,))
+        except BackendContractError:
+            # A backend refusing input for a stated reason has already said
+            # something more precise than the coercion message below. Only
+            # an unrecognised TypeError means "this is not numeric data".
+            raise
         except TypeError as error:
             raise TypeError("float() argument must be a string or a number") from error
+        except ValidationError:
+            # Same reasoning as BackendContractError above: ValidationError is
+            # ours and already names the violated rule, while a raw ValueError
+            # from array coercion carries no usable detail.
+            raise
         except ValueError as error:
             raise ValidationError(
                 "sample_weight must be a one-dimensional numeric array"

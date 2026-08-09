@@ -14,6 +14,7 @@ import numpy as np
 import renewable_huber
 from renewable_huber import RenewableHuberRegressor
 from renewable_huber.backends import resolve_backend
+from renewable_huber.backends.capabilities import capabilities_of
 from renewable_huber.exceptions import BackendUnavailableError, NotFittedError
 from renewable_huber.state import RenewableHuberState
 
@@ -681,6 +682,26 @@ class NativeCpuGoldenTests(unittest.TestCase):
             np.asarray(batch["y"], dtype=dtype),
             sample_weight=(None if weights is None else np.asarray(weights, dtype=dtype)),
         )
+
+
+@unittest.skipUnless(_native_cpu_ready(), "the Rust native CPU extension is required")
+class NativeCpuCapabilityTests(unittest.TestCase):
+    """What this backend advertises is what the core is able to find.
+
+    These assertions live beside the other native CPU tests, not with the
+    portable capability tests, so the required ``native-cpu`` profile executes
+    them. In the portable module they could only skip themselves on a machine
+    without the extension, and a skip is precisely the outcome a required
+    profile exists to rule out.
+    """
+
+    def test_native_cpu_advertises_update_predict_and_threads(self) -> None:
+        capabilities = capabilities_of(resolve_backend("native_cpu", device="cpu"))
+        self.assertIsNotNone(capabilities.native_update)
+        self.assertIsNotNone(capabilities.native_predict)
+        self.assertIsNotNone(capabilities.read_n_jobs)
+        self.assertIsNone(capabilities.native_design_matrix)
+        self.assertFalse(capabilities.elementwise_workspace)
 
 
 if __name__ == "__main__":
