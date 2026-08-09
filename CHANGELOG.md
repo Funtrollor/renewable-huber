@@ -119,7 +119,11 @@ retained as an immutable historical record rather than moved or reused.
   development and local-only GPU validation.
 - Moved CUDA wheel compilation to a pinned CUDA 12.9 toolkit on GitHub-hosted
   Windows 2022/Visual Studio 2022 runners; GPU runtime correctness and
-  performance remain local-only.
+  performance remain local-only. The hosted build now installs and preflights
+  the complete cuBLAS/cuSOLVER/cuSPARSE/nvJitLink runtime and development
+  closure, verifies the SASS/PTX payload, and clean-imports the wheel without a
+  GPU. Published wheels do not bundle NVIDIA DLLs; users provide the compatible
+  CUDA 12 runtime through their driver/toolkit installation.
 - Replaced the retired macOS 13 x86-64 release runner with macOS 15 Intel and
   moved the Apple Silicon release wheel to macOS 15.
 - Restricted `Requires-Python` to the tested CPython 3.10–3.12 range across

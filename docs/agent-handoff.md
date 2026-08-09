@@ -36,6 +36,44 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-10 — Claude Code / Codex — CUDA release artifact closure
+
+- Base SHA / branch: `061db2b` on `claude/release-cuda-dev-libs`; no commit,
+  push, tag or release mutation at hand-off time.
+- Scope and decisions: manual release run `31323674124` built the source and all
+  15 CPU wheels, but each Windows CUDA job failed because the network installer
+  supplied runtime libraries without the separate development import libraries.
+  NVIDIA's CUDA 12.9 component table and the pinned Jimver action source confirm
+  the `_dev` split. Local PE inspection additionally proved that cuSOLVER loads
+  cuBLAS/cuBLASLt/cuSPARSE and cuSPARSE loads nvJitLink. The workflow therefore
+  requests and preflights that complete build/runtime closure without changing
+  native link declarations or any algorithm.
+- Claude's first patch correctly identified the missing dev packages but
+  replaced explicit runtime packages and added a skip-heavy test module; Codex
+  corrected both. Claude's follow-up proposed nonexistent `cublaslt` and
+  `nvjitlink_dev` installer package names and direct transitive linker entries;
+  Codex rejected and removed those changes. cuBLASLt remains supplied by the
+  cuBLAS packages, while nvJitLink is a single documented installer component.
+- Files changed: `.github/workflows/release.yml`, `CHANGELOG.md`, `README.md`,
+  `native/python-cuda/README.md`, `docs/support-matrix.md`,
+  `docs/release-process.md`, `docs/release-checklist.md`,
+  `scripts/native/smoke_test_cuda_wheels.py`,
+  `tests/test_native_release_metadata.py`, and this hand-off.
+- Verification run: 414 discovered tests (43 optional skips), core 301 (3
+  optional skips), performance 54, full Ruff check/format and `git diff
+  --check` passed. A local CUDA 12.9 object confirmed the `cuobjdump` SASS/PTX
+  output patterns, and the local Windows 12.9 toolkit contains all 17 preflight
+  files. The exact-main hosted release rehearsal remains required. The hosted
+  jobs now fail fast on missing components, inspect real SASS/PTX, and
+  clean-install/import the actual wheel without a GPU. The existing default
+  smoke still requires a real device and remains local-only.
+- Known risks or unresolved questions: only a real `windows-2022` rehearsal can
+  prove the NVIDIA network installer paths and `cuobjdump` output format. Do not
+  tag until all three CUDA jobs and the complete artifact-set gate pass.
+- Requested next action / owner: Codex runs all local acceptance gates, commits
+  and publishes a PR, merges only after CI, then reruns the complete build-only
+  release workflow from exact `main` before creating `v0.6.1`.
+
 ### 2026-08-10 — Claude Code / Codex — Python release metadata boundary
 
 - Base SHA / branch: `dedf5160e2ac00605b18a2fc0f08181bcac053e9` on

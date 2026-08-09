@@ -116,8 +116,9 @@ python -m pip install renewable-huber-native-cuda==0.6.1
 ```
 
 Wheel 已包含針對支援 GPU 架構編譯的 native extension，因此不需要 Rust、CMake、
-Visual Studio 或本機 `nvcc`；執行時仍需要相容的 NVIDIA driver，以及 CUDA 12
-`cudart`、cuBLAS、cuSOLVER runtime DLL。
+Visual Studio 或本機 `nvcc`。Wheel **不包含 NVIDIA CUDA DLL**；執行時仍需要
+相容的 NVIDIA driver，以及可由 `CUDA_PATH` 找到的 CUDA 12 runtime closure：
+`cudart`、cuBLAS／cuBLASLt、cuSOLVER、cuSPARSE 與 nvJitLink。
 
 安裝獨立 native CUDA extension 後，可明確選擇 Rust/CUDA whole-batch
 engine，直接以 DLPack 消費 CuPy、PyTorch CUDA 或 TensorFlow eager GPU
