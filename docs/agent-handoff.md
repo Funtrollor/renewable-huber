@@ -36,6 +36,57 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-10 — Claude Code — 0.6.1 published to GitHub and PyPI
+
+- Base SHA / branch: released from `a779793135fd5c9fd4c5d495bd0a1510250ddbe2`
+  on `main`, tagged `v0.6.1` (annotated, pointing at that exact commit).
+- Ownership exception: Codex reached its usage limit after merging PR #35 and
+  before it could re-run the rehearsal. The maintainer directed Claude Code to
+  finish the release, including the commits, the tag and the publish approvals.
+  Codex owns review, acceptance and release mutations again from here.
+- Scope and decisions: no publication step was skipped or relaxed. The one
+  blocker found on the way, CUDA wheels without forward-compatible PTX, was
+  fixed at the build rather than by loosening the check — see the entry below.
+  The immutable `v0.6.0` tag was neither moved nor reused.
+- Sequence, with the runs that prove each step: build-only rehearsal on
+  `c944943` (**31325795125**) built the source and all 15 CPU wheels and failed
+  all three CUDA jobs on the PTX check, which had never run to completion
+  before. PR **#36** fixed it, CI **26/26** green, merged as `a779793`. CI on
+  `a779793` **26/26** green (**31327700158**). Second build-only rehearsal
+  (**31327842074**) succeeded: `Validated release 0.6.1 (requires-python:
+  >=3.10,<3.13): base wheel=1, sdist=1, CPU=15, CUDA=3`, and the CUDA
+  architecture-payload step passed. Tag run (**31328532152**) created GitHub
+  Release **v0.6.1** with all **20** assets, then published the three
+  distributions through Trusted Publishing after per-environment approval.
+- Local release gate on the fixed GPU host, before any publish approval: the
+  **actual** release artifacts were downloaded from the release, not rebuilt.
+  `renewable_huber-0.6.1-py3-none-any.whl` SHA-256
+  `11706a4b1adf173f1815fd3d30034207cffaaba2c5e68ec08ec6757da44f79e3`,
+  `renewable_huber_native_cuda-0.6.1-cp311-cp311-win_amd64.whl` SHA-256
+  `e7cfc679cf7d224e95fc33e4ca3266557d9ddcc86c57b8e8b1782a1479de8647`.
+  `smoke_test_cuda_wheels.py` ran **without** `--import-only` under Windows
+  CPython 3.11 with CUDA 12.9 and reported `Clean wheel smoke passed`, so
+  `is_available()` and a real device fit/predict are covered. `cuobjdump` on the
+  published `.pyd` shows SASS 75/80/86/89/90/120 **and** `sm_120.ptx`.
+- Post-publish verification from PyPI proper, in three clean environments:
+  base-only (`pip check`, `renewable-huber --version` → 0.6.1, NumPy fit),
+  `renewable-huber-native-cpu==0.6.1` (`n_jobs=-1` → `n_jobs_` 24, fit and
+  predict), and `renewable-huber-native-cuda==0.6.1` on Windows (ABI 1, Python
+  API 3, engine 0.6.1, `is_available()` true, runtime 12090, driver 13020,
+  device fit and predict). PyPI now serves 2 base files, 15 CPU wheels and 3
+  CUDA wheels at 0.6.1.
+- Known risks or unresolved questions: the published CUDA matrix is still
+  Windows x86-64 only, and the local reproduction of the PTX defect used Linux
+  wheels. Approval of the three environments was performed through the API by
+  the maintainer's own token rather than the web UI; the recorded reviewer is
+  unchanged. `build/workspaces/` now holds several stale release worktrees from
+  this and earlier sessions, including `release-final-r5` at the release SHA and
+  `claude-cuda-ptx`, which are safe to prune.
+- Requested next action / owner: Codex reviews this record. A published version
+  can never be re-uploaded, so any correction ships as 0.6.2. The
+  `NativeCpuSelectionTests` split and the deferred Torch/TensorFlow GPU profile
+  from the P3 entries remain open.
+
 ### 2026-08-10 — Claude Code — CUDA release wheels shipped without forward-compatible PTX
 
 - Base SHA / branch: `c9449439aabaf0d22b56d0b96236ae096ce398da` (`main`) on
