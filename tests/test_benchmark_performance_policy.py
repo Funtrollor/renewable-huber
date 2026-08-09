@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import importlib
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import numpy as np
 
 from renewable_huber.state import RenewableHuberState
+from scripts.benchmarks import benchmark_auto_dispatch
 from scripts.benchmarks.benchmark_native_cpu_scaling import (
     _effective_threads,
     add_speedups,
@@ -25,6 +28,8 @@ from scripts.benchmarks.dispatch_policy import (
     recommend_backend,
 )
 from scripts.benchmarks.performance_policy import compare_records, validate_record
+from scripts.benchmarks.shape_sweep.shapes import PROFILES, Shape, make_batches
+from scripts.benchmarks.shape_sweep.timing import _fit_batch
 
 
 def _case(
@@ -722,6 +727,212 @@ class ShapeSweepReExportTests(unittest.TestCase):
     def test_the_entry_point_still_exposes_the_cli(self) -> None:
         self.assertTrue(callable(self.module.main))
         self.assertIn("main", self.module.__all__)
+
+
+class AutoDispatchBenchmarkContractTests(unittest.TestCase):
+    """The auto-dispatch harness must run the work its record describes.
+
+    Nothing here times anything: the estimator is replaced by a recorder, so
+    these assertions are about *which calls are made with which arrays*, which
+    is deterministic on any machine. A harness that fits one batch while its
+    header, its ``shape`` record and its ``work_units`` describe the whole
+    dataset reports a wrong number rather than failing, and only a check at
+    this level notices.
+    """
+
+    #: Small enough to be free, and four batches deep so "first batch" and
+    #: "whole dataset" cannot coincide.
+    SHAPE = Shape("contract", 128, 4, 32)
+
+    def _case(self, operation: str) -> Any:
+        return benchmark_auto_dispatch.Case(
+            shape=self.SHAPE,
+            profile="contract",
+            dtype="float64",
+            penalty="none",
+            operation=operation,
+        )
+
+    def _data(self) -> tuple[list[tuple[np.ndarray, np.ndarray]], tuple[np.ndarray, np.ndarray]]:
+        batches = make_batches(self.SHAPE, seed=7, dtype="float64")
+        return batches, _fit_batch(batches, xp=np)
+
+    @staticmethod
+    def _recorder() -> tuple[list[tuple[str, np.ndarray, np.ndarray]], type]:
+        calls: list[tuple[str, np.ndarray, np.ndarray]] = []
+
+        class Estimator:
+            def __init__(self, **_: Any) -> None:
+                self.backend_ = "numpy"
+
+            def fit(self, features: np.ndarray, target: np.ndarray) -> Any:
+                calls.append(("fit", features, target))
+                return self
+
+            def partial_fit(self, features: np.ndarray, target: np.ndarray) -> Any:
+                calls.append(("partial_fit", features, target))
+                return self
+
+        return calls, Estimator
+
+    def test_a_fit_case_consumes_the_whole_dataset_in_one_call(self) -> None:
+        batches, fit_batch = self._data()
+        calls, estimator = self._recorder()
+
+        with mock.patch.object(benchmark_auto_dispatch, "RenewableHuberRegressor", estimator):
+            benchmark_auto_dispatch._one_run("numpy", self._case("fit"), batches, fit_batch)
+
+        self.assertEqual([name for name, _, _ in calls], ["fit"])
+        _, features, target = calls[0]
+        # The row count the header and the shape record both claim.
+        self.assertEqual(features.shape[0], self.SHAPE.samples)
+        self.assertEqual(target.shape[0], self.SHAPE.samples)
+        self.assertGreater(len(batches), 1)
+
+    def test_a_stream_case_stays_per_batch(self) -> None:
+        batches, fit_batch = self._data()
+        calls, estimator = self._recorder()
+
+        with mock.patch.object(benchmark_auto_dispatch, "RenewableHuberRegressor", estimator):
+            benchmark_auto_dispatch._one_run("numpy", self._case("stream"), batches, fit_batch)
+
+        self.assertEqual([name for name, _, _ in calls], ["partial_fit"] * len(batches))
+        for (_, features, target), (expected_X, expected_y) in zip(calls, batches, strict=True):
+            self.assertIs(features, expected_X)
+            self.assertIs(target, expected_y)
+
+    def test_the_fit_batch_is_built_once_and_never_inside_a_timed_run(self) -> None:
+        batches, fit_batch = self._data()
+        calls, estimator = self._recorder()
+        case = self._case("fit")
+
+        with mock.patch.object(benchmark_auto_dispatch, "RenewableHuberRegressor", estimator):
+            benchmark_auto_dispatch._measure(case, batches, fit_batch, warmup=1, repeats=2)
+
+        # One untimed auto prime, then two steady rounds and a separate cold
+        # phase; every measured engine sample has one warmup and one timed run.
+        expected_runs = 1 + 2 * 2 * len(benchmark_auto_dispatch.STEADY_ENGINES) + 2 * 2
+        self.assertEqual(len(calls), expected_runs)
+        # Identity, not equality: rebuilding or copying the concatenation per
+        # run would put that cost inside the timed region for every sample.
+        for _, features, target in calls:
+            self.assertIs(features, fit_batch[0])
+            self.assertIs(target, fit_batch[1])
+
+    def test_work_units_count_all_samples_for_fit_and_the_first_batch_for_a_stream(
+        self,
+    ) -> None:
+        design_width = float(self.SHAPE.features + 1) ** 2
+        self.assertEqual(
+            benchmark_auto_dispatch._work_units(self._case("fit")),
+            float(self.SHAPE.samples) * design_width,
+        )
+        self.assertEqual(
+            benchmark_auto_dispatch._work_units(self._case("stream")),
+            float(self.SHAPE.batch_size) * design_width,
+        )
+
+    def test_a_single_batch_stream_is_counted_as_the_whole_dataset(self) -> None:
+        # ``make_batches`` never emits a batch longer than the dataset, so a
+        # stream that fits in one batch decides on every sample there is.
+        shape = Shape("one-batch", 64, 4, 4_096)
+        case = dataclasses.replace(self._case("stream"), shape=shape)
+        batches = make_batches(shape, seed=7, dtype="float64")
+
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0][0].shape[0], shape.samples)
+        self.assertEqual(
+            benchmark_auto_dispatch._work_units(case),
+            float(shape.samples) * float(shape.features + 1) ** 2,
+        )
+
+    def test_reported_work_units_match_the_batch_the_policy_is_asked_about(self) -> None:
+        batches, fit_batch = self._data()
+        for operation, deciding in (("fit", fit_batch), ("stream", batches[0])):
+            with self.subTest(operation=operation):
+                case = self._case(operation)
+                expected = float(deciding[0].shape[0]) * float(self.SHAPE.features + 1) ** 2
+                # ``_summarise`` tolerates an empty result set; the field under
+                # test is derived from the case, not from any timing.
+                summary = benchmark_auto_dispatch._summarise({}, case)
+                self.assertEqual(summary["work_units"], expected)
+
+    def test_every_shipped_shape_reports_both_operations_consistently(self) -> None:
+        for shapes in PROFILES.values():
+            for shape in shapes:
+                with self.subTest(shape=shape.name):
+                    width = float(shape.features + 1) ** 2
+                    fit_case = benchmark_auto_dispatch.Case(shape, "p", "float64", "none", "fit")
+                    stream_case = dataclasses.replace(fit_case, operation="stream")
+                    fit_units = benchmark_auto_dispatch._work_units(fit_case)
+                    stream_units = benchmark_auto_dispatch._work_units(stream_case)
+                    self.assertEqual(fit_units, float(shape.samples) * width)
+                    self.assertEqual(
+                        stream_units,
+                        float(min(shape.batch_size, shape.samples)) * width,
+                    )
+                    self.assertGreaterEqual(fit_units, stream_units)
+
+    def test_the_recorded_runtime_signature_makes_no_native_pool_claim(self) -> None:
+        # ``parallel_threads`` is deliberately not an input to the signature:
+        # reading it forces the extension to be imported, which is what
+        # calibrating does, so the first calibration would be paid twice. The
+        # harness must not describe the field as carrying it either.
+        signature = benchmark_auto_dispatch.current_runtime_signature()
+        fields = {field.name for field in dataclasses.fields(signature)}
+        self.assertNotIn("parallel_threads", fields)
+        source = Path(benchmark_auto_dispatch.__file__).read_text(encoding="utf-8")
+        for stale in ("parallel_threads", "native pool"):
+            self.assertNotIn(stale, source)
+
+    def test_engine_order_alternates_forward_and_reverse(self) -> None:
+        self.assertEqual(
+            benchmark_auto_dispatch._engine_order(0), benchmark_auto_dispatch.STEADY_ENGINES
+        )
+        self.assertEqual(
+            benchmark_auto_dispatch._engine_order(1),
+            tuple(reversed(benchmark_auto_dispatch.STEADY_ENGINES)),
+        )
+
+    def test_an_odd_repeat_count_is_rejected_as_unbalanced(self) -> None:
+        batches, fit_batch = self._data()
+        with self.assertRaisesRegex(ValueError, "positive even"):
+            benchmark_auto_dispatch._measure(
+                self._case("fit"), batches, fit_batch, warmup=0, repeats=3
+            )
+
+    def test_regret_is_the_median_of_aligned_ratios(self) -> None:
+        def result(seconds: list[float]) -> dict[str, Any]:
+            return {
+                "seconds": seconds,
+                "median_seconds": float(np.median(seconds)),
+                "auto_dispatch": None,
+            }
+
+        results = {
+            "numpy": result([1.0, 1.0, 100.0]),
+            "native_cpu": result([2.0, 2.0, 200.0]),
+            "auto_warm": result([1.0, 100.0, 100.0]),
+            "auto_cold": {
+                **result([2.0, 101.0, 102.0]),
+                "auto_dispatch": {"calibrated": True, "calibration_seconds": 1.0},
+            },
+        }
+        summary = benchmark_auto_dispatch._summarise(results, self._case("fit"))
+        self.assertEqual(summary["regret"], 1.0)
+        self.assertEqual(summary["calibration_overhead_seconds"], 1.0)
+        self.assertIn("aligned", summary["regret_statistic"])
+
+    def test_no_calibration_reports_no_overhead_instead_of_timer_noise(self) -> None:
+        result = {
+            "seconds": [1.0, 2.0],
+            "median_seconds": 1.5,
+            "auto_dispatch": {"calibrated": False, "calibration_seconds": 0.0},
+        }
+        summary = benchmark_auto_dispatch._summarise(
+            {"auto_cold": result, "auto_warm": result}, self._case("fit")
+        )
+        self.assertIsNone(summary["calibration_overhead_seconds"])
 
 
 if __name__ == "__main__":

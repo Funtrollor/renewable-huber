@@ -13,6 +13,7 @@ RenewableHuberRegressor
         ├── core.loss       (Huber loss、平滑 score、curvature)
         ├── core.update     (RHE Newton / RPSHE LAMM)
         └── backends
+             ├── cpu_dispatch (auto 的 host 量測與 NumPy/native 選擇)
              ├── NumPy      (CPU / BLAS / LAPACK)
              ├── CuPy       (CUDA C++ kernels / cuBLAS / cuSOLVER)
              ├── PyTorch    (CPU / CUDA tensors)
@@ -35,10 +36,17 @@ extension 的 process-global Rayon pool，以避免預設路徑反覆建立執�
 constructor 值（`None`、`-1` 或正整數），fitted estimator 則以 `n_jobs_`
 公開實際 worker 數；其他 backend 明確忽略此設定。
 
-- `backend="auto", device="auto"` 與 `backend="auto", device="cpu"` 固定解析成 NumPy。
-- `backend="auto", device="cuda"` 解析成 CuPy，且需要可用的 NVIDIA CUDA 裝置。
+- `backend="auto", device="auto"` 與 `backend="auto", device="cpu"` 先解析成
+  NumPy，並在該批次通過驗證、形狀已知之後交由
+  `backends.cpu_dispatch` 決定是否改用 `native_cpu`。因為兩個 CPU backend
+  共用完全相同的 host NumPy 陣列處理（`NativeCpuBackend` 直接繼承
+  `NumPyBackend` 的 `asarray`／`copy`／`reshape`／`to_numpy`／`scalar`／`xp`，
+  且不提供自己的 design matrix），這個替換不會改變 solver 收到的資料。
+  決策每條串流只做一次，不會在串流中途更換 engine。
+- `backend="auto", device="cuda"` 解析成 CuPy，且需要可用的 NVIDIA CUDA
+  裝置；CPU dispatch 完全不參與。
 - `backend="native_cpu"` 明確選擇選用的 Rust/PyO3 whole-batch CPU 核心；
-  P1 不會由 `auto` 自動選取。
+  明確指定時不會經過任何量測，失敗也不會被替換成 NumPy。
 - `backend="native_cuda"` 明確選擇選用的 Rust/CUDA whole-batch GPU 核心；除了相容的 NumPy host input，也接受相同裝置、相同 dtype、C-contiguous 的 CUDA DLPack tensor；
   P2 不會由 `auto` 自動選取，且目前只支援 `penalty="none"`。
 - `backend="torch"` 與 `backend="tensorflow"` 必須由呼叫端明確選擇；不會依輸入 tensor 推斷。

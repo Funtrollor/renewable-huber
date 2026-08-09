@@ -7,7 +7,7 @@
 | Backend | CPU | GPU | dtype | 作業系統範圍 | 安裝 extra | `predict` 回傳型別 | 主要限制 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `numpy` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；三者均進行基線 CI | 無（基礎安裝） | `numpy.ndarray` | `device="cuda"` 會直接報錯；效能取決於 NumPy 連結的 BLAS/LAPACK。 |
-| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.12；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.0` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。必須明確指定，不會由 `auto` 選取。安裝 wheel 不需本機 Rust toolchain。 |
+| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.12；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.0` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。可由 `auto` 在 CPU 上選取，但僅在批次夠大且本機執行期量測支持時；要固定使用請明確指定。安裝 wheel 不需本機 Rust toolchain。 |
 | `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；GPU correctness 與效能在固定本機主機驗證 | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
 | `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.12、Windows x86-64 CUDA 12 wheel；本機固定 GPU 驗證 | `renewable-huber-native-cuda==0.6.0` | `numpy.ndarray`; CuPy、PyTorch CUDA、TensorFlow eager GPU tensor | Python API v3。Opt-in whole-batch engine；device update 使用同裝置、完全相同 dtype、C-contiguous DLPack，絕不經 host staging；`penalty="none"` only；device-resident `predict` 尚未支援。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不需本機 nvcc，但需要 NVIDIA driver 與 CUDA 12 runtime DLL。 |
 | `torch` | 是 | NVIDIA CUDA | `float32`, `float64` | CPU：Linux／Windows／macOS；CUDA：依 PyTorch wheel 支援的 Linux／Windows | `gpu-torch` | `torch.Tensor` | `device="auto"` 使用 CPU；輸入會 detach、移至指定裝置並轉 dtype，不提供 autograd layer，也不支援 MPS device。 |
@@ -30,9 +30,9 @@ TF32，不適用 float64。fitted estimator 以 `cuda_features_` 回報實際狀
 
 | 設定 | 實際結果 |
 | --- | --- |
-| `backend="auto", device="auto"` | NumPy / CPU |
-| `backend="auto", device="cpu"` | NumPy / CPU |
-| `backend="auto", device="cuda"` | CuPy / 目前 CUDA device |
+| `backend="auto", device="auto"` | NumPy / CPU，或在 CPU dispatch 條件成立時改用 Rust native CPU |
+| `backend="auto", device="cpu"` | 同上 |
+| `backend="auto", device="cuda"` | CuPy / 目前 CUDA device（不套用 CPU dispatch） |
 | `backend="numpy", device="auto"` | NumPy / CPU |
 | `backend="native_cpu", device="auto"` | Rust native CPU / NumPy host arrays |
 | `backend="cupy", device="auto"` | CuPy / 目前 CUDA device |
@@ -40,6 +40,48 @@ TF32，不適用 float64。fitted estimator 以 `cuda_features_` 回報實際狀
 | `backend="torch", device="auto"` | Torch / CPU |
 | `backend="tensorflow", device="auto"` | TensorFlow / CPU |
 | 明確 backend + `device="cuda"` | 僅在該 backend 能看到 CUDA GPU 時成立，否則拋出 `BackendUnavailableError` |
+
+### CPU dispatch 規則
+
+`backend="auto"` 且 `device` 非 `"cuda"` 時，estimator 會在**第一個批次**（或
+checkpoint 還原後的第一個批次）決定使用 NumPy 或 `native_cpu`，之後整條串流
+不再更換 engine。決策依據只有兩項：本機是否能建立 native engine，以及本機
+執行期量測。
+
+- 量測是一組固定的小型 probe（1,024–8,192 列、7–33 個參數），與呼叫端的資料
+  無關，絕不會對使用者的批次重跑一次完整求解。每個 probe 以配對交錯方式量測
+  兩個 engine：每一輪都跑完兩者，且輪流交換誰先跑，避免先跑者固定承擔首次
+  觸碰記憶體與 thread pool 啟動的成本。
+- **成本硬上限是這組固定 ladder 本身**（`2.01e8` work units＝probe 數 × 輪數 ×
+  engine 數 × 迭代數），在任何主機上都不會超出。`0.25` 秒是**軟性**的
+  probe 啟動期限：只在 probe 之間檢查，已開始的 probe 一定跑完，因此實際耗時
+  可能略微超過該值。
+- 只有當批次的 `samples × parameters²` 至少為 `1.5e8` 時才會啟動量測；整組
+  probe 的成本約等於該批次 1.34 次迭代的工作量。
+- 量測結果快取在 **process 內**，不寫入磁碟，也不讀取 CPU 型號字串。快取 key
+  除了 `(dtype, penalty, n_jobs)`，還包含一組執行環境簽章：**排序後的 CPU
+  affinity mask 本身**（`sched_getaffinity`；平台不支援時退回 `cpu_count` 只
+  記數量，再不可用則記為 unknown）、七個 `*_NUM_THREADS` 環境變數，以及在
+  optional `threadpoolctl` 可用時讀到的實際 BLAS/OpenMP pool 大小。最後一項可
+  捕捉 scikit-learn/joblib 不修改環境變數的動態 thread limit。記錄的是
+  mask 而非只有數量，因此即使被重新綁到「同樣數量但不同」的核心集合，舊量測
+  也會失效。CPU affinity 或 thread 設定一改變，舊量測會被**刪除**而非沿用；
+  `fork` 之後子行程也會清空整份快取（子行程常被綁在不同核心上）。已有量測後，
+  `samples × parameters² ≥ 5.0e4` 的批次即可直接套用，不需再量測。
+- 模型預測的是 `native/NumPy` 比值，並加上一個保守的不確定度裕度（不是統計上
+  校準過的信賴區間）。**只有保守上界低於 0.85 才會改用 native，每一次判斷都
+  獨立套用同一個門檻**；不存在跨 estimator 的黏著狀態，因此同一形狀在同一
+  process 內永遠得到相同答案，與詢問順序無關。
+- extension 缺失、engine 無法建立、probe 例外、量測不足或外推過遠，一律安靜
+  回到 NumPy。由 `auto` 選中的 native engine 若在建立或第一次更新時拋出**任何
+  一般例外**，也會安靜改用 NumPy；明確指定 `backend="native_cpu"` 時則照常
+  拋出。fitted estimator 以 `auto_dispatch_` 回報實際決策與理由。
+
+明確指定 `backend="numpy"` 或 `backend="native_cpu"` 完全不觸發這套機制，
+明確要求的 `native_cpu` 失敗時仍會拋出 `BackendUnavailableError`。
+checkpoint 只保存 `backend="auto"`，不保存任何量測結果，因此還原後會在新主機
+上重新判斷。完整設計與成本推導見
+[CPU auto-dispatch RFC](cpu-auto-dispatch-rfc.md)。
 
 `auto` 不會檢查輸入是 NumPy、CuPy、Torch 或 TensorFlow tensor。若要保留框架原生回傳型別，必須明確指定該 backend。一般跨框架轉換沒有零複製保證；唯一例外是明確選擇 `native_cuda` 的 device-update 路徑：CuPy／PyTorch 直接實作 DLPack consumer-stream negotiation，TensorFlow eager 則透過 legacy capsule adapter 在 export 前呼叫 `tf.experimental.async_wait()`（或要求已明確啟用同步 eager execution）。後者仍是零拷貝，但會有必要的 producer synchronization。
 

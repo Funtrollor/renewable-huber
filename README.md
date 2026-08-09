@@ -10,7 +10,9 @@
 
 目前最新版本為 **0.5.1**，已發布至 [PyPI](https://pypi.org/project/renewable-huber/)，但仍處於 **pre-alpha** 開發階段。套件提供 NumPy/CPU、CuPy/CUDA、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 pandas 與 scikit-learn Pipeline／模型選擇工具。可用 `renewable-huber --version` 查詢已安裝版本。
 
-`backend="auto"` 採用可預期的裝置規則：一般情況固定選擇 NumPy/CPU，只有明確指定 `device="cuda"` 才選擇 CuPy。它不會根據傳入的 PyTorch 或 TensorFlow tensor 自動猜測 backend；需要這些框架時請明確設定 `backend="torch"` 或 `backend="tensorflow"`。完整支援範圍請見[支援矩陣](docs/support-matrix.md)。
+`backend="auto"` 採用可預期的裝置規則：只有明確指定 `device="cuda"` 才選擇 CuPy，其餘一律留在 CPU。在 CPU 上，`auto` 預設仍是 NumPy；只有當批次夠大、且本機執行期量測顯示 Rust native CPU engine 明確較快時，才會改用 `native_cpu`。這個判斷完全依據**當前主機與當前執行環境**的即時量測，不讀取 CPU 型號字串，也不寫入任何快取檔案。量測結果只存活於記憶體，而且只在量測當下的執行環境內有效：CPU affinity mask（不只是核心數量）、`*_NUM_THREADS` 設定，或 optional `threadpoolctl` 可觀測到的實際 BLAS/OpenMP thread-pool 大小一改變就會被丟棄，`fork` 之後的子行程也會清空重測。在同一組執行環境內，相同形狀永遠得到相同答案，不受其他 estimator 先問過什麼影響。任何一步失敗（extension 缺失、engine 無法建立、量測不足，或由 `auto` 選中的 native engine 拋出任何一般例外）都會安靜回到 NumPy。細節與成本上限請見 [CPU auto-dispatch RFC](docs/cpu-auto-dispatch-rfc.md)。
+
+`auto` 不會根據傳入的 PyTorch 或 TensorFlow tensor 自動猜測 backend；需要這些框架時請明確設定 `backend="torch"` 或 `backend="tensorflow"`。明確指定 `backend="numpy"` 或 `backend="native_cpu"` 時，完全不會觸發上述量測。完整支援範圍請見[支援矩陣](docs/support-matrix.md)。
 
 ## 安裝
 
@@ -53,8 +55,11 @@ joblib／`GridSearchCV(n_jobs=...)` 平行化多個模型，建議內層 estimat
 `n_jobs=1`，避免巢狀 thread pool 彼此搶占 CPU。
 
 它支援 `penalty="none"` 與 `penalty="l1"`，輸入為 C-contiguous NumPy
-`float32`／`float64`。P1 階段的 `backend="auto"` 在 CPU 上仍維持使用 NumPy。
-建置、正確性與 benchmark 細節請見 [Native-core P1](docs/native-core-p1.md)。
+`float32`／`float64`。`backend="auto"` 在 CPU 上可能選用這個 engine，但只在
+批次夠大且本機量測支持時才會發生；想要固定使用它，仍請明確指定
+`backend="native_cpu"`。建置、正確性與 benchmark 細節請見
+[Native-core P1](docs/native-core-p1.md)，dispatch 規則請見
+[CPU auto-dispatch RFC](docs/cpu-auto-dispatch-rfc.md)。
 
 依使用情境安裝對應 extra：
 

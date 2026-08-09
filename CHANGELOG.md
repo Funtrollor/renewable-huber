@@ -42,6 +42,20 @@ The next minor release is `0.6.0`; the published stable package remains
 - Release-gated native distributions: 15 CPU wheels across five OS/architecture
   targets and three Windows CUDA 12 plugin wheels, with exact base-version,
   clean-install, artifact-set, and OIDC publishing checks.
+- Runtime CPU dispatch for `backend="auto"`: a bounded, process-local host
+  calibration may now select the `native_cpu` engine for a large enough batch.
+  It reads no CPU brand or model string, persists nothing, generalises to
+  unseen shapes through a normalised log work/cost ratio model with a
+  conservative uncertainty allowance, and falls back to NumPy on any failure.
+  Every native selection clears the same entry margin independently, so no
+  estimator's choice influences another's; cached measurements are keyed on an
+  observable runtime signature (CPU affinity, thread environment, and optional
+  effective BLAS/OpenMP pool sizes) and are discarded when it changes or after
+  `fork`.
+  Fitted estimators report the decision through a new `auto_dispatch_`
+  attribute, and `scripts/benchmarks/benchmark_auto_dispatch.py` compares
+  `auto` against both explicit CPU backends while isolating calibration from
+  steady-state cost. See `docs/cpu-auto-dispatch-rfc.md`.
 
 ### Changed
 
@@ -59,7 +73,10 @@ The next minor release is `0.6.0`; the published stable package remains
   assembly.
 - Explicit `backend="native_cuda"` requests now use the native engine and fail
   clearly when its extension or requested capability is unavailable; automatic
-  backend selection remains unchanged.
+  CUDA backend selection remains unchanged.
+- `backends.resolve_backend("auto")` still resolves to NumPy on CPU. The
+  workload-aware choice happens one level up, in the estimator, because the
+  batch shape only exists after validation.
 - Native CPU residual, gradient, and weighted-Gram hot paths now use a
   size-gated Rayon/SIMD implementation with bounded scratch memory, a
   row-major small-batch gradient path, transactional zero-clone resident

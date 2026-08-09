@@ -21,6 +21,13 @@ def resolve_backend(
     ``auto`` resolves deterministically to NumPy unless the caller explicitly
     requests ``device='cuda'``.  This avoids silently moving a CPU workflow to
     a GPU while still making ``backend='auto', device='cuda'`` useful.
+
+    This function deliberately does **not** run the CPU dispatch policy.  It
+    has no workload: the choice between NumPy and the native CPU engine needs
+    the batch shape, which only exists after validation, so the estimator makes
+    it one level up through
+    :mod:`renewable_huber.backends.cpu_dispatch`.  Callers of
+    ``resolve_backend`` see exactly the behaviour they always did.
     """
 
     if name == "auto":

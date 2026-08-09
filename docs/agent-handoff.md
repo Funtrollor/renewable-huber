@@ -36,6 +36,347 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-09 — Codex — CPU auto-dispatch acceptance
+
+- Base SHA / branch: `a6e8a250bc103996a8d4c634261ea4540517a1e9`, reviewed in
+  `build/workspaces/claude-cpu-auto-dispatch` on `claude/cpu-auto-dispatch`.
+- Scope and decisions: **accepted after correction.** CPU `auto` uses a
+  process-local measured ratio surface rather than a CPU/shape lookup table.
+  Codex removed cross-estimator hysteresis, corrected the soft-deadline and
+  uncertainty claims, made fork/context invalidation conservative, added full
+  affinity plus optional effective BLAS/OpenMP thread-pool signatures, widened
+  auto-selected native failure fallback to ordinary exceptions, and corrected
+  the benchmark's data-volume, ordering, pairing and cold/steady contracts.
+  Explicit CPU backends, CUDA paths, algorithms and checkpoint format are
+  unchanged. `auto_dispatch_` is accepted as fitted observability state.
+- Files changed: four new files (`cpu_dispatch.py`, its RFC, 102 portable tests,
+  and the auto benchmark) plus estimator integration, benchmark contract tests,
+  unittest profile membership and public/maintainer documentation. Claude Code
+  wrote the initial implementation and made no Git mutation; Codex owns the
+  reviewed corrections and publication.
+- Verification run: Python discover/all **409 tests, 43 skips**; core **296/3**;
+  performance **54**; native-cpu **19**; ruff check/format, four-case golden
+  corpus, release metadata and C++ ABI all pass. Rust fmt/clippy/check and 14
+  Rust tests passed earlier in the same reviewed tree; no Rust file changed
+  afterward. Local CPU benchmark artifact
+  `artifacts/auto-dispatch/auto-dispatch-cpu-final.json` (gitignored), SHA-256
+  `67960356bf1cb11b75cc7b632a8ec9beb82054f2ffd0704fe9af56d19883b28b`.
+- Known risks or unresolved questions: this WSL host never selected native via
+  auto. It safely declined slower native results, but also declined a measured
+  ~1.14x native win for the one-million-row fit because it did not clear the
+  15% margin and was far outside the probe row range. Small streaming batches
+  do not accumulate toward calibration; both are documented conservative false
+  negatives and future tuning work, not wrong slower-engine selections.
+- Requested next action / owner: GitHub CLI authentication has been restored.
+  Codex stages the reviewed scope, commits, pushes and opens the draft PR;
+  merge remains the user's decision. PyPI remains out of scope.
+
+### 2026-08-09 — Claude Code — generalized CPU crossover and runtime auto-dispatch
+
+- Base SHA / branch: `a6e8a250bc103996a8d4c634261ea4540517a1e9`, worktree
+  `build/workspaces/claude-cpu-auto-dispatch` on `claude/cpu-auto-dispatch`.
+  The tree was clean at that SHA before editing and **nothing is committed or
+  pushed**; HEAD is unchanged, the index is clean, `git diff --check` is clean,
+  and no remote, release, tag or GPU workflow was touched. This closes the P3
+  follow-up "tune or dispatch around the 8192x32 native-CPU crossover".
+
+#### Scope and decisions
+
+`backend="auto"` on CPU may now select `native_cpu`. The accepted design is
+[`docs/cpu-auto-dispatch-rfc.md`](cpu-auto-dispatch-rfc.md).
+
+**1. The decision is a fitted ratio surface with a conservative uncertainty
+allowance, not a table.** `src/renewable_huber/backends/cpu_dispatch.py` fits
+`log(native/NumPy) = b0 + b1 log n + b2 log p` over five probe shapes, centred
+on the probe design, and dispatches on `predicted + 2 * se` where
+`se = s * sqrt(1 + leverage)`. Fitting the ratio rather than two cost curves
+makes everything common to both engines cancel and makes the coefficients
+dimensionless; judging on the upper estimate makes noisy probes, a
+mis-specified surface and a distant shape all push the same way, towards NumPy.
+The leverage term is the whole extrapolation policy: a uniform 0.70 ratio
+clears the 15% entry margin next to the probes and stops clearing it 1,000x
+further out, on the same host.
+
+`2 * se` is a **blunt conservative allowance and is not described as a
+confidence interval anywhere**. With three coefficients fitted from five
+probes there are two residual degrees of freedom, at which a normal quantile
+means nothing (the one-sided Student-t 95% point is 2.92, so the "95% upper
+bound" an earlier draft of this entry claimed was both unjustified and *less*
+conservative than the claim), and the residual-scale floor usually dominates
+`s` anyway. The policy field is `uncertainty_multiplier`.
+
+Probe timing is a **paired interleaved comparison**: each round runs both
+engines and the rounds alternate which goes first. A fixed order hands the
+first-touch and pool-spin-up cost to whichever engine leads, on every probe;
+NumPy-first — what the first draft did — therefore biased every ratio towards
+native.
+
+No CPU brand or model string is read, and nothing is written to disk.
+`PolicyInputTests` parses the module and fails on `platform.`, `uname`,
+`cpuinfo`, a brand string, an `open(`, an import of
+`json`/`pathlib`/`pickle`/`shelve`/`sqlite3`/`tempfile`/`sys`, or any use of
+`os` outside `{register_at_fork, sched_getaffinity, cpu_count, environ}`,
+reached by a dot or by `getattr`.
+
+**2. Bounded cost.** Probes never touch the caller's data: they are a fixed
+ladder of five small shapes (1,024-8,192 rows, 7-33 parameters) run at
+`max_iter=3`, one untimed warmup and two timed rounds each, minimum taken.
+
+The **hard bound is the ladder** — 2.01e8 work units, a product of policy
+constants fixed before anything is measured, which no host can exceed.
+`probe_start_deadline_seconds = 0.25` is a **soft** deadline and is now named
+as one: the clock is checked only *between* probes, so a probe that has started
+always runs to completion and a calibration can overrun. The first draft of
+this entry called it a hard deadline, which the code never implemented.
+
+Two work gates decide when the ladder is spent:
+
+- `minimum_work_units = 5.0e4` (the smallest probe) -- below it, NumPy without
+  probing or even importing the extension;
+- `calibration_work_units = 1.5e8` -- a *first* calibration is only started for
+  a batch at least this large, so the ladder costs at most **1.34
+  single-iteration equivalents of the batch that triggers it**.
+
+They are separate on purpose: acquiring evidence needs a batch big enough to
+amortise it, using evidence already cached does not, so a process that has
+calibrated dispatches batches 3,000x smaller than the one that paid.
+
+**2b. A measurement is valid only for its execution context.** The cache key
+carries a `RuntimeSignature`: the sorted CPU affinity mask itself where
+`sched_getaffinity` exists, the usable CPU count (`cpu_count` fallback, or a
+recorded `"unavailable"`), the seven `*_NUM_THREADS` variables, and effective
+BLAS/OpenMP pool sizes when optional `threadpoolctl` is available. The latter
+catches scikit-learn/joblib limits that do not modify the environment. The mask
+rather than its length, so re-pinning to a *different set of the same size* —
+another socket, with different cache sharing and memory locality — invalidates
+rather than silently reuses. A changed signature **deletes** the stale entry;
+`fork` empties the whole map in the child as well as rebuilding the locks,
+because a joblib worker is routinely pinned to a subset of the parent's cores.
+
+The extension's own `parallel_threads` is deliberately **not** in the
+signature. It is not independent — `n_threads` already carries the requested
+pool and the mask plus `RAYON_NUM_THREADS` carry what it gets — and it is
+unknown until something imports the extension, which is what calibration does:
+including it made the first calibration invalidate itself and be paid twice.
+
+**3. The dispatch point is the estimator, not `resolve_backend`.**
+`resolve_backend("auto")` has no workload and is unchanged; the estimator
+resolves NumPy, validates and prepares the batch, then may swap in the native
+engine. **That swap is only sound because both CPU engines see identical
+arrays**, so `BackendSwapSafetyTests` pins that `NativeCpuBackend` still
+inherits `asarray`/`copy`/`reshape`/`to_numpy`/`scalar`/`xp` from
+`NumPyBackend` and declares no `native_design_matrix`. It is a new entry in
+`AGENTS.md`'s silent-breakage list.
+
+**4. Once per stream, including after a restore.** The decision is made on the
+first batch, or the first batch after a checkpoint restore, and never
+mid-stream. `load()` itself never calibrates -- there is no shape yet -- and
+the checkpoint format is untouched: `backend="auto"` is what is stored, so a
+restored model re-decides on its own host rather than inheriting the saving
+host's answer.
+
+**5. A backend the policy chose may be withdrawn on any ordinary exception; one
+the caller named may not.** If the native engine cannot be constructed after
+calibration, or raises **anything under `Exception`** on its first update,
+`partial_fit` falls back to NumPy, names the exception type in
+`auto_dispatch_["reason"]` and produces the same coefficients a NumPy fit
+would. Catching only `BackendUnavailableError`, as the first draft did, let a
+Rust panic surfacing as `RuntimeError`, a `MemoryError`, an `OSError` from a
+missing `libgomp` or a PyO3 `TypeError` reach a caller who asked for `auto`.
+`KeyboardInterrupt` and `SystemExit` still propagate, and an explicit
+`backend="native_cpu"` failure still raises whatever it raised. Both halves are
+exercised over the same eight exception types.
+
+**5b. Decisions are independent.** `select_cpu_backend` is a pure function of
+shape, policy and cached measurement. The first draft kept a per-key
+`sticky_native` flag and judged later decisions against a looser hold band, so
+one estimator's answer depended on what an unrelated estimator had asked
+earlier in the process — invisible to callers and a real hazard under
+`GridSearchCV`. **The hysteresis band is gone**; every native selection clears
+`1 - enter_margin` on its own evidence, and permuting the order of questions
+across a shared cache provably changes nothing.
+
+**6. New fitted attribute `auto_dispatch_`** (JSON-compatible: chosen backend,
+reason in words, work units, whether a host model was used, predicted ratio and
+its upper bound, calibration seconds, probe count). Present only when the
+policy ran, the same convention `cuda_features_` already uses; cleared by
+`reset()` and `set_params()`. This is the one public-surface addition and is
+yours to accept or reject. `get_params()["backend"]` stays `"auto"`.
+
+**7. `scripts/benchmarks/dispatch_policy.py` is unchanged.** It answers a
+different question -- audit a *recorded* measurement against one exact workload
+-- and sharing an abstraction would have meant giving the runtime policy a
+schema-validated record format it has no use for. If a third consumer appears,
+the thing to extract is "compare two timings under a stated margin", not the
+record schema.
+
+#### Files changed
+
+Added (4): `docs/cpu-auto-dispatch-rfc.md`,
+`src/renewable_huber/backends/cpu_dispatch.py`,
+`tests/test_cpu_auto_dispatch.py`,
+`scripts/benchmarks/benchmark_auto_dispatch.py`.
+
+Modified (11): `AGENTS.md`, `CHANGELOG.md`, `README.md`, `docs/api.md`,
+`docs/architecture.md`, `docs/support-matrix.md`, `scripts/run_test_profile.py`,
+`src/renewable_huber/backends/__init__.py`, `src/renewable_huber/cli.py`,
+`src/renewable_huber/estimator.py`, `tests/test_benchmark_performance_policy.py`.
+
+No numerical algorithm, native kernel, Rust crate, GPU path, checkpoint format,
+benchmark schema-v2 record or public constructor parameter was changed. No GPU
+CI job was added or altered.
+
+#### Tests
+
+`tests/test_cpu_auto_dispatch.py`, **102 tests**, in the `core` profile and in
+`PORTABLE_NATIVE_MODULES` so `validate_profiles` fails if anyone moves it out of
+CPU CI. Everything is driven through an injected clock and probe runner, so it
+needs no Rust extension and is deterministic on any machine:
+
+- **simulated hosts** -- uniform 0.25/0.70/0.95/2.5 ratios; a slow-NumPy and a
+  fast-NumPy host 10,000x apart in absolute speed decide identically, because
+  only the ratio is used; a host whose crossover sits inside the probe range
+  answers `native` tall-and-narrow and `numpy` short-and-wide from one
+  calibration;
+- **generalisation** -- exact power-law hosts are reproduced to 6 decimal
+  places in log space at four shapes no probe visited; the cache is asserted to
+  contain the five probe shapes and *not* the queried shape;
+- **uncertainty** -- standard error grows monotonically with distance; far
+  extrapolation declines a win it accepts near the probes; a non-log-linear host
+  widens the band instead of predicting confidently;
+- **decision independence** -- every native choice clears the same entry
+  margin; repeated and permuted shape queries cannot change another estimator's
+  answer, and no selection state exists in the cache;
+- **budget** -- exhausted budget refuses to dispatch; a four-probe partial
+  ladder still fits; calibration seconds are reported;
+- **failure** -- unavailable extension, raising setup, raising probe, a clock
+  too coarse to resolve a probe, a degenerate ladder, and that a failure is
+  cached so it is paid for once;
+- **cache/context** -- 8 threads on one key calibrate exactly once; dtype,
+  penalty and native thread counts are separate; affinity, environment and
+  effective BLAS thread-pool changes invalidate; a fork clears measurements
+  and rebuilds locks;
+- **estimator** -- explicit backends and `device="cuda"` never consult the
+  policy; the policy is consulted once per stream; it sees the design width, not
+  the feature count; a native selection is applied; construction failure and
+  any ordinary first-update exception both fall back and match NumPy exactly
+  while an explicit native failure still raises;
+- **checkpoint** -- `load()` never calibrates, a restored stream dispatches on
+  its next batch, an explicit override on load is not governed, and the archive
+  still records `backend="auto"` with no dispatch data in it.
+
+A real `os.fork()` under a thread contending on the cache lock was also
+exercised by hand: the child completed a fit and exited 0.
+
+#### Benchmark evidence
+
+`scripts/benchmarks/benchmark_auto_dispatch.py` measures `numpy`,
+`native_cpu`, `auto_cold` and `auto_warm`. A `fit` consumes the full dataset;
+`stream` consumes the declared batches. Engine order alternates forward/reverse
+and repeat counts must be even. Regret is the median aligned per-round ratio to
+the best explicit engine, not a ratio of independent medians. Twelve portable
+contract tests pin the data volume, deciding work units, order and statistic.
+
+```bash
+.venv/bin/python scripts/benchmarks/benchmark_auto_dispatch.py \
+  --profile both --operation both --repeats 8 --warmup 1 \
+  --output artifacts/auto-dispatch/auto-dispatch-cpu-final.json
+```
+
+| SHA-256 | File |
+|---|---|
+| `67960356bf1cb11b75cc7b632a8ec9beb82054f2ffd0704fe9af56d19883b28b` | `artifacts/auto-dispatch/auto-dispatch-cpu-final.json` |
+
+`artifacts/` is gitignored; delete the directory after acceptance. Medians in
+ms, float64, `penalty="none"`, this WSL2 host:
+
+| case | numpy | native | auto (warm) | chose | regret | calibration |
+|---|---:|---:|---:|---|---:|---:|
+| latency-smoke 2,048x8 fit | 0.365 | **0.216** | 0.305 | numpy | 1.391 | -- |
+| latency-smoke 2,048x8 stream | 0.388 | **0.183** | 0.421 | numpy | 2.177 | -- |
+| reference-smoke 8,192x32 fit | **2.678** | 3.360 | 2.646 | numpy | 1.005 | -- |
+| reference-smoke 8,192x32 stream | **2.062** | 2.653 | 2.145 | numpy | 1.028 | -- |
+| latency 4,096x16 fit | 1.516 | **1.331** | 1.545 | numpy | 1.158 | -- |
+| latency 4,096x16 stream | 1.535 | **1.501** | 1.521 | numpy | 1.021 | -- |
+| reference 100,000x90 fit | **163.8** | 255.5 | 164.2 | numpy | 1.003 | 34.2 ms |
+| reference 100,000x90 stream | **103.6** | 232.9 | 97.2 | numpy | 0.929 | 38.9 ms |
+| wide 16,384x256 fit | **129.8** | 212.5 | 114.8 | numpy | 0.948 | 51.5 ms |
+| wide 16,384x256 stream | **100.4** | 256.9 | 93.5 | numpy | 1.036 | 43.4 ms |
+| streaming 1,000,000x32 fit | 557.7 | **489.7** | 541.3 | numpy | 1.122 | 32.9 ms |
+| streaming 1,000,000x32 stream | **285.5** | 475.8 | 265.5 | numpy | 0.928 | -- |
+
+No slower native engine was selected. The conservative policy intentionally
+missed the one-million-row native win (about 1.14x, below the 15% entry margin
+and far outside the probe row range) and the small wins below the calibration
+gate. Calibration was 32.9-51.5 ms. Cold calibration is measured in a separate
+phase; same-backend aligned ratios on standard cases are 0.928-1.036, inside
+the retained WSL noise band.
+
+#### Verification run
+
+WSL2 Ubuntu 24.04, Python 3.12.3, NumPy 2.5.1, shared venv
+`/home/untrollor/renewable-huber/.venv` used read-only with
+`PYTHONPATH=<worktree>/src` so the worktree source shadows the editable install.
+
+| Gate | Result |
+|---|---|
+| `python -m unittest discover -s tests` | **409 tests, 43 skips, OK** |
+| `run_test_profile.py --check` | 6 profiles cover 24 modules |
+| `core` | **296 tests, 3 skips, exit 0** |
+| `performance` | 54 tests, exit 0 |
+| `native-cpu` | 19 tests, exit 0 |
+| `all` | 409 tests, 43 skips, exit 0 |
+| `optional-cpu` | **exit 2** — pandas/SciPy/scikit-learn/PyTorch/TensorFlow are not in this venv |
+| `cuda` | **exit 2** — CuPy is not in this venv |
+| `ruff check src tests scripts` | pass |
+| `ruff format --check src tests scripts` | pass, 78 files |
+| `generate_native_golden.py --check` | 4 cases match |
+| `validate_release_artifacts.py --source-only` | consistent for 0.6.0 |
+| `g++ -fsyntax-only ... abi_contract.cpp` | pass |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 0 diagnostics |
+| `cargo check --locked --workspace --all-targets` | pass |
+| `cargo test --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets` | 14 tests (2 + 7 + 5) |
+| `python -m renewable_huber.cli info` | prints the new CPU policy line |
+
+#### Known risks and unresolved questions
+
+1. **`optional-cpu` and `cuda` could not be executed here.** The shared venv has
+   neither the optional CPU stack nor CuPy, so both required profiles correctly
+   exit 2. My changes touch no Torch, TensorFlow, CuPy or CUDA path — the CUDA
+   device branch is excluded by `auto_cpu_dispatch_applies` and pinned by a test
+   — but they have not been *run* against a device. Please run them on the fixed
+   GPU host.
+2. **No host in reach selects native through auto.** Every capture above chose NumPy, so the
+   native-selection path is proven only by simulated hosts and stubs, not by an
+   end-to-end run that actually reaches the Rust engine through `auto`. The
+   fixed Ryzen runner should exercise it; that is the acceptance evidence I
+   cannot produce.
+3. **The thresholds are judgement calls.** `calibration_work_units = 1.5e8`,
+   `enter_margin = 0.15`, and `uncertainty_multiplier = 2.0` are conservative
+   round numbers. The accepted host run exposes their intended trade-off: auto
+   never selected a slower native engine, but declined a measured 1.14x native
+   win on the one-million-row fit.
+4. **A stream of small batches never accumulates its way into a calibration.**
+   The decision is made on the first batch, so a workload that would amortise a
+   ladder easily over 10,000 batches of 2,048 rows never measures. Re-evaluating
+   on cumulative stream work is the obvious extension and was left out because
+   it means changing engines mid-stream — a larger contract change than this
+   work, and your call.
+5. **`auto_dispatch_` is a new fitted attribute** (item 6 above). If you would
+   rather keep the public surface identical to `a6e8a25`, it can become
+   `_auto_dispatch`; the tests reference it in one place each.
+6. **The probe ladder is fixed at 1,024-8,192 rows and 7-33 parameters.** A host
+   whose crossover lies far outside that box is answered by extrapolation with a
+   wide band. Widening the ladder costs calibration time; it is a tuning
+   decision, not a design one.
+
+#### Requested next action / owner
+
+Codex accepted `auto_dispatch_`, completed the architecture corrections and
+local CPU benchmark, and owns final verification, commit, push and PR. GPU code
+and CI are outside this CPU-only change; Claude Code performed no Git mutation.
+
 ### 2026-08-09 — Codex — P3 final acceptance and close-out
 
 - Base SHA / branch: `14f9e72aae0f75c4f84923d61952438861ab1777`,

@@ -11,6 +11,7 @@ from numpy.typing import ArrayLike
 
 from .backends import ArrayBackend, resolve_backend
 from .backends.capabilities import BackendCapabilities, capabilities_of
+from .backends.cpu_dispatch import auto_cpu_dispatch_applies, select_cpu_backend
 from .config import BackendName, DeviceName, DTypeName, EstimatorConfig, Penalty
 from .core import UpdateDiagnostics, renewable_update
 from .exceptions import BackendContractError, NotFittedError, ValidationError
@@ -108,6 +109,7 @@ class RenewableHuberRegressor:
         self._backend = None
         self._state = None
         self._diagnostics = None
+        self._auto_cpu_pending = False
         for attribute in (
             "coef_",
             "intercept_",
@@ -119,6 +121,7 @@ class RenewableHuberRegressor:
             "device_",
             "n_jobs_",
             "cuda_features_",
+            "auto_dispatch_",
         ):
             if hasattr(self, attribute):
                 delattr(self, attribute)
@@ -146,18 +149,26 @@ class RenewableHuberRegressor:
         config.validate()
         backend = getattr(self, "_backend", None)
         if backend is None:
-            backend = self._resolve_backend(config)
+            backend = self._initial_backend(config)
 
         prepared = self._prepare_batch(X, y, sample_weight, config, backend)
-        next_state, diagnostics = renewable_update(
-            prepared.design,
-            prepared.target,
-            prepared.state,
-            config,
-            backend,
-            sample_weight=prepared.weights,
-            batch_weight=prepared.batch_weight,
-        )
+        backend, dispatched = self._apply_auto_cpu_dispatch(config, backend, prepared)
+        try:
+            next_state, diagnostics = self._run_update(backend, config, prepared)
+        except Exception as error:
+            # Only a backend this call chose on the caller's behalf may be
+            # withdrawn, and then for any ordinary failure, not just a declared
+            # unavailability: an engine the caller never asked for must not be
+            # able to break their fit, whatever it raises. An explicitly
+            # requested engine failing is the caller's answer, and silently
+            # substituting another would hide it. Retrying on NumPy is safe
+            # because nothing above has been mutated -- if the input is what is
+            # wrong, NumPy raises its own error with the native one attached as
+            # context.
+            if not dispatched:
+                raise
+            backend = self._decline_auto_cpu_dispatch(config, error)
+            next_state, diagnostics = self._run_update(backend, config, prepared)
         self._commit(backend, next_state, diagnostics, prepared)
         return self
 
@@ -327,7 +338,11 @@ class RenewableHuberRegressor:
         config.validate()
         if state.fit_intercept != config.fit_intercept:
             raise ValidationError("checkpoint fit_intercept does not match configuration")
-        self._backend = self._resolve_backend(config)
+        # A restored stream is still an ``auto`` stream: the first batch it is
+        # given afterwards gets the same one-off dispatch decision a fresh one
+        # would, which is safe because the restored state is host NumPy either
+        # way. Restoring alone never calibrates -- there is no batch shape yet.
+        self._backend = self._initial_backend(config)
         self.backend_ = self._backend.name
         self.device_ = self._backend.device
         self._sync_backend_attributes(capabilities_of(self._backend))
@@ -447,15 +462,107 @@ class RenewableHuberRegressor:
         )
 
     @staticmethod
-    def _resolve_backend(config: EstimatorConfig) -> ArrayBackend:
-        native_threads = config.resolved_n_jobs() if config.backend == "native_cpu" else None
+    def _resolve_backend(
+        config: EstimatorConfig, *, name: BackendName | None = None
+    ) -> ArrayBackend:
+        """Build the backend ``config`` names, or ``name`` when one is imposed.
+
+        ``name`` is how the CPU auto-dispatch policy asks for a concrete engine
+        without rewriting the configuration the caller supplied: ``backend``
+        stays ``"auto"`` in ``get_params()`` and in every checkpoint.
+        """
+
+        resolved = config.backend if name is None else name
+        native_threads = config.resolved_n_jobs() if resolved == "native_cpu" else None
         return resolve_backend(
-            config.backend,
+            resolved,
             device=config.device,
             dtype=config.dtype,
             n_jobs=native_threads,
             cuda_graphs=config.cuda_graphs,
             cuda_fast_math=config.cuda_fast_math,
+        )
+
+    def _initial_backend(self, config: EstimatorConfig) -> ArrayBackend:
+        """Resolve the backend a batch starts on and note a deferred CPU choice.
+
+        ``backend="auto"`` on CPU cannot be decided here: the policy needs the
+        batch shape, which is only known after validation. NumPy is therefore
+        resolved first and may be replaced once the shape is in hand. That
+        substitution is free because both CPU engines take, produce and store
+        exactly the same host NumPy arrays.
+        """
+
+        backend = self._resolve_backend(config)
+        self._auto_cpu_pending = auto_cpu_dispatch_applies(config.backend, config.device)
+        return backend
+
+    def _apply_auto_cpu_dispatch(
+        self,
+        config: EstimatorConfig,
+        backend: ArrayBackend,
+        prepared: _PreparedBatch,
+    ) -> tuple[ArrayBackend, bool]:
+        """Let the host policy replace NumPy with the native CPU engine.
+
+        Runs at most once per stream -- on the first batch, or on the first
+        batch after a checkpoint restore -- so an engine is never swapped
+        mid-stream, and returns whether the backend in use was chosen by this
+        policy rather than by the caller.
+        """
+
+        if not getattr(self, "_auto_cpu_pending", False):
+            return backend, False
+        self._auto_cpu_pending = False
+        decision = select_cpu_backend(
+            samples=int(prepared.design.shape[0]),
+            parameters=int(prepared.design.shape[1]),
+            dtype=config.dtype,
+            penalty=config.penalty,
+            n_threads=config.resolved_n_jobs(),
+        )
+        self.auto_dispatch_ = decision.as_dict()
+        if decision.backend != "native_cpu":
+            return backend, False
+        try:
+            return self._resolve_backend(config, name="native_cpu"), True
+        except Exception as error:
+            # Same rule as the update path: an engine the caller did not ask
+            # for may not break their fit, whatever it raises on the way up.
+            return backend, self._record_auto_cpu_withdrawal(
+                f"the native CPU engine could not be constructed after calibration with "
+                f"{type(error).__name__} ({error}); NumPy was used instead"
+            )
+
+    def _decline_auto_cpu_dispatch(self, config: EstimatorConfig, error: Exception) -> ArrayBackend:
+        """Fall back to NumPy after a native engine this policy chose gave out."""
+
+        self._record_auto_cpu_withdrawal(
+            f"the native CPU engine failed on its first update with "
+            f"{type(error).__name__} ({error}); NumPy was used instead"
+        )
+        return self._resolve_backend(config, name="numpy")
+
+    def _record_auto_cpu_withdrawal(self, reason: str) -> bool:
+        """Rewrite ``auto_dispatch_`` to say NumPy actually ran.  Always ``False``."""
+
+        record = dict(getattr(self, "auto_dispatch_", {}))
+        record.update(backend="numpy", reason=reason)
+        self.auto_dispatch_ = record
+        return False
+
+    @staticmethod
+    def _run_update(
+        backend: ArrayBackend, config: EstimatorConfig, prepared: _PreparedBatch
+    ) -> tuple[RenewableHuberState, UpdateDiagnostics]:
+        return renewable_update(
+            prepared.design,
+            prepared.target,
+            prepared.state,
+            config,
+            backend,
+            sample_weight=prepared.weights,
+            batch_weight=prepared.batch_weight,
         )
 
     def _validate_batch(self, X: ArrayLike, y: ArrayLike, backend: ArrayBackend) -> tuple[Any, Any]:

@@ -23,11 +23,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"renewable-huber {__version__}")
     print("available backends:")
     print("  numpy: CPU (base install)")
+    print("  native_cpu: opt-in Rust CPU whole-batch engine (install renewable-huber-native-cpu)")
     print("  cupy: CUDA (install the gpu-cupy extra)")
     print("  native_cuda: opt-in Rust/CUDA whole-batch engine (source build)")
     print("  torch: CPU/CUDA (install the gpu-torch extra)")
     print("  tensorflow: CPU/CUDA, eager execution only (install the gpu-tensorflow extra)")
-    print("device policy: backend='auto' uses NumPy unless device='cuda' selects CuPy")
+    print("device policy: backend='auto' stays on CPU unless device='cuda' selects CuPy")
+    print(
+        "cpu policy: backend='auto' may select native_cpu for a large batch when a bounded "
+        "runtime measurement on this host shows it faster by a conservative margin. It never "
+        "reads the CPU model and never writes a cache file; measurements are kept in memory "
+        "and discarded when CPU affinity, thread environment, or an observable BLAS/OpenMP "
+        "pool changes, and after fork. Any failure falls back to NumPy. "
+        "See auto_dispatch_ on a fitted estimator."
+    )
     return 0
 
 
