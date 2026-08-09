@@ -146,7 +146,7 @@ def _check_native_wheel(
     *,
     kind: str,
     expected_version: str,
-    expected_requires_python: str,
+    expected_requires_python: str = SUPPORTED_PYTHON,
 ) -> list[str]:
     expected_name, module_name = NATIVE_PROJECTS[kind]
     errors: list[str] = []

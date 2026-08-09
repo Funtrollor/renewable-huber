@@ -106,7 +106,6 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                 read_wheel_metadata(wheel),
                 kind="cpu",
                 expected_version="0.6.0",
-                expected_requires_python=SUPPORTED_PYTHON,
             )
             self.assertEqual(errors, [])
 

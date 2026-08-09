@@ -54,6 +54,9 @@ concurrently; a message in this file is not a lock.
   pass. Actual Hatchling base wheel/sdist and Maturin CPU/CUDA wheels pass
   Twine and the complete local artifact validator; it accepts the equivalent
   Hatchling `<3.13,>=3.10` and Maturin `>=3.10, <3.13` serializations.
+  Initial PR CI exposed a missed legacy `_check_native_wheel()` call contract;
+  Codex restored the supported-range default, and the real CPU and CUDA wheel
+  clean-install smoke scripts then passed end to end.
 - Known risks or unresolved questions: Python 3.13+ can be enabled in a future
   release only after expanding CI, native wheel matrices and compatibility
   documentation together.
