@@ -29,7 +29,10 @@ class NativeReleaseMetadataTests(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("cargo test --locked --workspace --all-targets", workflow)
-        self.assertIn("runs-on: windows-latest", workflow)
+        self.assertIn("runs-on: windows-2022", workflow)
+        self.assertNotIn("runs-on: windows-latest\n    timeout-minutes: 60", workflow)
+        self.assertIn("macos-15-intel", workflow)
+        self.assertNotIn("macos-13", workflow)
         self.assertIn(
             "Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76",
             workflow,

@@ -118,7 +118,10 @@ retained as an immutable historical record rather than moved or reused.
   package dependencies, measured schema-v2 performance ranges, WSL2-first
   development and local-only GPU validation.
 - Moved CUDA wheel compilation to a pinned CUDA 12.9 toolkit on GitHub-hosted
-  Windows runners; GPU runtime correctness and performance remain local-only.
+  Windows 2022/Visual Studio 2022 runners; GPU runtime correctness and
+  performance remain local-only.
+- Replaced the retired macOS 13 x86-64 release runner with macOS 15 Intel and
+  moved the Apple Silicon release wheel to macOS 15.
 
 ### Security
 
