@@ -117,6 +117,8 @@ retained as an immutable historical record rather than moved or reused.
 - Synchronized the public documentation with CPU auto-dispatch, exact native
   package dependencies, measured schema-v2 performance ranges, WSL2-first
   development and local-only GPU validation.
+- Moved CUDA wheel compilation to a pinned CUDA 12.9 toolkit on GitHub-hosted
+  Windows runners; GPU runtime correctness and performance remain local-only.
 
 ### Security
 

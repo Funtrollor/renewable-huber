@@ -29,6 +29,12 @@ class NativeReleaseMetadataTests(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("cargo test --locked --workspace --all-targets", workflow)
+        self.assertIn("runs-on: windows-latest", workflow)
+        self.assertIn(
+            "Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76",
+            workflow,
+        )
+        self.assertNotIn("runs-on: [self-hosted, windows, x64, gpu, cuda12]", workflow)
 
     def test_source_projects_match_base_release_exactly(self) -> None:
         self.assertEqual(check_source_metadata(), base_version())
