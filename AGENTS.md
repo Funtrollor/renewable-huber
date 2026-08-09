@@ -21,9 +21,10 @@ Always check which scheme a document is using.
 
 ## State
 
-Branch `codex/maintainability-p0` carries a structural refactor: P0, P1 and P2
-of the maintainability audit are done and verified; **P3 is not started**
-(`CheckpointPayload`, test profiles, benchmark sweep split).
+P0 through P3 of the maintainability audit are implemented and verified. P3
+added the `CheckpointPayload` boundary, executable unittest profiles and the
+shape-sweep module split. See `docs/agent-handoff.md` for the acceptance
+evidence and remaining follow-up work.
 
 ## Agent roles and hand-off
 
@@ -78,6 +79,51 @@ report; these are the ones worth memorising.
 - **`allocate<T>` in the CUDA sources is instantiated with `int` as well as
   `float`/`double`** (for `d_pivots` and `d_solver_info`). Do not "tidy" it into
   an explicit instantiation list.
+- **`src/renewable_huber/serialization.py` must not import the estimator, build
+  one, or call `_restore_state`.** Reintroducing any of them still round-trips
+  every checkpoint; only `tests/test_checkpoint_payload.py::SerializationBoundaryTests`
+  notices, and it parses the module's AST rather than its text so a docstring
+  may still name them.
+- **No released checkpoint format stores diagnostics.** `CheckpointPayload`
+  carries the field, `write_checkpoint` never emits it, and decoding v1 or v2
+  always yields `None`. Filling it in from the last batch would fabricate a
+  record the file does not contain; persisting it needs a new format version.
+- **A required test profile must fail when its dependency or device is absent.**
+  `scripts/run_test_profile.py` probes first and exits 2. Downgrading a profile
+  to `required=False`, or dropping the all-skipped check, restores exactly the
+  silent-success failure mode P3 was written to remove.
+- **`optional-cpu` forces `CUDA_VISIBLE_DEVICES=""`; no other profile forces
+  anything.** PyTorch and TensorFlow cannot both initialise CUDA in one process
+  on this host, so without the mask the profile's result depends on import
+  order. Adding an `environment` entry to `cuda` would disable the device tests
+  it exists to run.
+- **A backend that refuses input must raise `BackendContractError` or
+  `ValidationError`, never a bare `TypeError`/`ValueError`.** The estimator's
+  input validation rewrites unrecognised ones into scikit-learn's coercion and
+  shape messages, so a bare raise reaches the caller naming the wrong problem
+  with the real message buried in `__cause__`. Guarded on CPU by
+  `tests/test_dlpack_adapters.py::DeviceInputContractErrorTests` and
+  `tests/test_estimator.py::BackendErrorPropagationTests`.
+- **The native capability assertions live in `tests/test_native_cpu_backend.py`
+  and `tests/test_native_cuda_backend.py`**, not in the portable capability
+  module, so the required `native-cpu` and `cuda` profiles actually execute them
+  instead of skipping.
+- **`scripts/benchmarks/benchmark_shape_sweep.py` re-exports 11 names its two
+  consumers import**, with their original underscored spelling. Removing one
+  breaks `benchmark_native_cpu_scaling.py` or
+  `tests/test_benchmark_performance_policy.py` at import time — a broken
+  benchmark run, not a failing suite. Guarded by
+  `tests/test_benchmark_performance_policy.py::ShapeSweepReExportTests`, which
+  reads the required names out of the consumers' own import statements and
+  checks them against `__all__` and the module attributes. Extra exports are
+  fine; a missing one is not.
+- **Native tests that need no device belong in `core`.** The nine
+  `NativeCudaSelectionTests` drive fakes, but lived in a module the `cuda`
+  profile owned, so they silently stopped running in CPU CI while every suite
+  still passed. They now live in `tests/test_native_cuda_selection.py`, listed
+  in `PORTABLE_NATIVE_MODULES`; `validate_profiles` fails if one of those
+  modules leaves `core`, and a self-test rejects unittest skip controls and
+  executes the nine-test contract with the GPU hidden to prove it has no skips.
 
 ## Verification
 
@@ -85,6 +131,15 @@ report; these are the ones worth memorising.
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python -m ruff check src tests scripts
 .venv/bin/python -m ruff format --check src tests scripts
+
+# Named profiles. `discover` above is tolerant: a missing dependency or device
+# turns into skips and still reports success. A *required* profile probes its
+# dependency first and exits 2 when it is absent.
+.venv/bin/python scripts/run_test_profile.py --check     # membership table
+.venv/bin/python scripts/run_test_profile.py core        # required, no extras
+.venv/bin/python scripts/run_test_profile.py native-cpu  # required, Rust CPU
+.venv/bin/python scripts/run_test_profile.py cuda        # required, local GPU
+.venv/bin/python scripts/run_test_profile.py all         # optional skips kept
 
 # rh_cuda.h needs only <stdint.h>, so this needs no GPU and no CUDA toolkit
 g++ -std=c++17 -fsyntax-only -I native/cuda/include native/cuda/src/abi_contract.cpp
@@ -119,9 +174,10 @@ and gates aligned paired ratios. **Do not draw conclusions below about ±10%.**
 ## Corrections to the audit report
 
 - Its P3 proposes pytest markers. No test here imports pytest and CI runs
-  `python -m unittest` exclusively, so markers alone would change nothing. A root
-  `conftest.py` using `pytest_collection_modifyitems` would work without touching
-  the 18 test modules or breaking unittest.
+  `python -m unittest` exclusively, so markers alone would change nothing.
+  P3.2 instead added `scripts/run_test_profile.py`: explicit module membership,
+  a consistency check, and required profiles that fail rather than skip. Plain
+  `python -m unittest discover -s tests` is untouched.
 - Its suggested `engine.cu` decomposition had no home for `Blas<T>`/`Solver<T>`
   or for the batch layer, and over-fragmented the memory pool and prediction.
   See section 2.3 of the report for what was done instead and why.

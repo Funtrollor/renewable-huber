@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
+import importlib
 import unittest
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -641,6 +644,84 @@ class NativeCpuScalingPolicyTests(unittest.TestCase):
             _effective_threads(Model(), requested=-1),
             (4, "Model.n_jobs_"),
         )
+
+
+class ShapeSweepReExportTests(unittest.TestCase):
+    """``benchmark_shape_sweep`` is a stable entry point, so prove it stays one.
+
+    The sweep implementation moved into ``scripts/benchmarks/shape_sweep/`` and
+    the entry point now only re-exports. Nothing in an ordinary refactor fails
+    if one of those re-exports disappears: the two consumers below break at
+    import time, which shows up as a broken benchmark run rather than as a test
+    failure. The required names are therefore read back out of the consumers'
+    own import statements and checked against the entry point.
+    """
+
+    #: The names the split had to preserve. Kept literal as an anti-vacuity
+    #: check on the parser below; the parser is what keeps this honest.
+    DOCUMENTED = frozenset(
+        {
+            "PROFILES",
+            "_calibration_run",
+            "_dataset_checksum",
+            "_fit_batch",
+            "_lifecycle_metadata",
+            "_measure",
+            "_restore_empty_state",
+            "_run_operation",
+            "_sample_repetitions",
+            "environment_metadata",
+            "make_batches",
+        }
+    )
+    CONSUMERS = (
+        "scripts/benchmarks/benchmark_native_cpu_scaling.py",
+        "tests/test_benchmark_performance_policy.py",
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = importlib.import_module("scripts.benchmarks.benchmark_shape_sweep")
+        cls.root = Path(cls.module.__file__).resolve().parents[2]
+
+    def _imported_names(self) -> set[str]:
+        names: set[str] = set()
+        for relative in self.CONSUMERS:
+            tree = ast.parse((self.root / relative).read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module == "scripts.benchmarks.benchmark_shape_sweep"
+                ):
+                    names.update(alias.name for alias in node.names)
+        return names
+
+    def test_the_consumers_still_import_the_documented_names(self) -> None:
+        imported = self._imported_names()
+        # A consumer dropping one is the signal to revisit the list above,
+        # rather than to let it quietly go stale.
+        self.assertEqual(self.DOCUMENTED - imported, set())
+
+    def test_every_consumed_name_is_exported_and_reachable(self) -> None:
+        imported = self._imported_names()
+        self.assertGreaterEqual(len(imported), len(self.DOCUMENTED))
+        exported = set(self.module.__all__)
+        for name in sorted(imported):
+            with self.subTest(name=name):
+                # Extra exports are fine; a missing one is not.
+                self.assertIn(name, exported)
+                self.assertTrue(hasattr(self.module, name))
+
+    def test_every_exported_name_resolves(self) -> None:
+        # ``__all__`` must not promise something the module does not define.
+        self.assertTrue(self.module.__all__)
+        for name in self.module.__all__:
+            with self.subTest(name=name):
+                self.assertTrue(hasattr(self.module, name))
+
+    def test_the_entry_point_still_exposes_the_cli(self) -> None:
+        self.assertTrue(callable(self.module.main))
+        self.assertIn("main", self.module.__all__)
 
 
 if __name__ == "__main__":

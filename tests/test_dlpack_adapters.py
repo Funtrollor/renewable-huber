@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ast
 import sys
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -14,7 +16,7 @@ from renewable_huber.backends._dlpack import (
     _tensorflow_device_id,
     adapt_cuda_dlpack,
 )
-from renewable_huber.exceptions import ValidationError
+from renewable_huber.exceptions import BackendContractError, ValidationError
 
 
 def _native_cuda_ready() -> bool:
@@ -124,6 +126,52 @@ def _fake_tensorflow(*, eager: bool = True, async_wait: object = True) -> types.
         _waits=waits,
     )
     return tf
+
+
+class DeviceInputContractErrorTests(unittest.TestCase):
+    """Device-input refusals must use a type the estimator lets through.
+
+    ``RenewableHuberRegressor._validate_features`` rewrites an unrecognised
+    ``TypeError`` from ``backend.asarray`` into scikit-learn's coercion message.
+    A bare ``TypeError`` raised here therefore reaches the caller as "float()
+    argument must be a string or a number" instead of naming the dtype or
+    protocol violation, with the real message surviving only as ``__cause__``.
+    The modules are parsed rather than imported, so this runs on CPU CI where
+    the native CUDA extension is absent.
+    """
+
+    SOURCES = (
+        "backends/_dlpack.py",
+        "backends/native_cuda_backend.py",
+    )
+
+    def _raised_types(self, relative: str) -> list[str]:
+        path = Path(renewable_huber.__file__).parent / relative
+        raised = []
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                function = node.exc.func
+                if isinstance(function, ast.Name):
+                    raised.append(function.id)
+                elif isinstance(function, ast.Attribute):
+                    raised.append(function.attr)
+        return raised
+
+    def test_no_device_input_module_raises_a_bare_type_error(self) -> None:
+        for relative in self.SOURCES:
+            with self.subTest(module=relative):
+                raised = self._raised_types(relative)
+                # Anti-vacuity: a path typo would otherwise pass silently.
+                self.assertTrue(raised, f"no raise statements parsed from {relative}")
+                self.assertNotIn("TypeError", raised)
+
+    def test_the_contract_type_is_actually_used(self) -> None:
+        used = {name for relative in self.SOURCES for name in self._raised_types(relative)}
+        self.assertIn("BackendContractError", used)
+
+    def test_the_contract_type_survives_the_estimator_translation(self) -> None:
+        # The rule the two modules above depend on, asserted directly.
+        self.assertTrue(issubclass(BackendContractError, TypeError))
 
 
 class TensorFlowDlpackAdapterTests(unittest.TestCase):

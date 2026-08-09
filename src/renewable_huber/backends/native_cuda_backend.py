@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..exceptions import BackendUnavailableError, ValidationError
+from ..exceptions import BackendContractError, BackendUnavailableError, ValidationError
 from ._dlpack import adapt_cuda_dlpack
 from .native_base import NativeEngineBackend
 
@@ -141,11 +141,19 @@ class NativeCudaBackend(NativeEngineBackend):
                 f"native CUDA input is on device {device[1]}, expected device {self._device_id}"
             )
         if not callable(getattr(value, "__dlpack__", None)):
-            raise TypeError("native CUDA device input must implement the DLPack protocol")
+            raise BackendContractError(
+                "native CUDA device input must implement the DLPack protocol"
+            )
         dtype_text = str(getattr(value, "dtype", "")).lower()
         dtype_names = tuple(name for name in ("float32", "float64") if name in dtype_text)
         if dtype_names and dtype_names[0] != self.dtype.name:
-            raise TypeError(f"native CUDA DLPack dtype must exactly match {self.dtype.name}")
+            # BackendContractError, not a bare TypeError: the estimator
+            # translates an unrecognised TypeError from asarray into the
+            # scikit-learn coercion message, which would hide exactly the
+            # mismatch this line exists to report.
+            raise BackendContractError(
+                f"native CUDA DLPack dtype must exactly match {self.dtype.name}"
+            )
         flags = getattr(value, "flags", None)
         is_contiguous = getattr(value, "is_contiguous", None)
         if flags is not None and not bool(getattr(flags, "c_contiguous", True)):
@@ -177,7 +185,7 @@ class NativeCudaBackend(NativeEngineBackend):
         namespace = getattr(value, "__array_namespace__", None)
         if callable(namespace):
             return namespace()
-        raise TypeError("CUDA DLPack input must expose finite/reduction operations")
+        raise BackendContractError("CUDA DLPack input must expose finite/reduction operations")
 
     def is_finite(self, value: Any) -> bool:
         if self._cuda_dlpack_device(value) is None:

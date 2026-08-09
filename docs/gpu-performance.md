@@ -61,9 +61,15 @@ repository for Codex review:
 
 ```bash
 bash scripts/setup-wsl-venv.sh --profile cuda-full
-.venv/bin/python -m unittest tests.test_cuda_kernels tests.test_cupy_backend \
-  tests.test_native_cuda_backend tests.test_dlpack_adapters -v
+.venv/bin/python scripts/run_test_profile.py cuda --verbose
 ```
+
+The `cuda` profile is *required*: it probes CuPy and the native CUDA extension
+for a real device before loading anything and exits with status 2 when either
+is absent. That is the point. The equivalent explicit module list skips itself
+on a machine without a GPU and reports success, which is exactly the evidence a
+local-only validation policy must not accept. Run
+`python scripts/run_test_profile.py --list` to see what each profile covers.
 
 The native-engine migration has a broader shape sweep and an NVTX-instrumented
 profiling workload:

@@ -82,10 +82,11 @@ jobs:
           assert len(wheels)==1, wheels;
           subprocess.check_call([sys.executable, '-m', 'pip', 'install', wheels[0]])"
       - name: Run native CPU differential tests
-        run: >-
-          python -m unittest
-          tests.test_native_cpu_backend
-          tests.test_native_golden -v
+        # The required profile fails outright when the extension is missing or
+        # reports the wrong ABI, instead of passing as a suite of skips.
+        # tests.test_native_golden forces backend="numpy", so it belongs to the
+        # core profile and still runs on every baseline matrix entry.
+        run: python scripts/run_test_profile.py native-cpu --verbose
 
   baseline:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -102,8 +103,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install package and development tools
         run: python -m pip install ".[dev]"
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+      - name: Validate test profile membership
+        # Catches a test module added without a profile, a typo, or an
+        # accidental duplicate before any of it can silently stop running.
+        run: python scripts/run_test_profile.py --check
+      - name: Run required core profile
+        run: python scripts/run_test_profile.py core --verbose
+      - name: Run required performance profile
+        run: python scripts/run_test_profile.py performance --verbose
 
   quality:
     name: Lint and formatting
@@ -159,6 +166,25 @@ jobs:
         env:
           TF_CPP_MIN_LOG_LEVEL: "2"
         run: python -m unittest ${{ matrix.test-module }} -v
+
+  optional-cpu-profile:
+    # The matrix above proves each optional framework works in isolation. This
+    # job is what makes the `optional-cpu` required profile mean something:
+    # with every optional CPU dependency installed, a missing one becomes a
+    # failure rather than a skip.
+    name: Optional CPU integrations (required profile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package and every optional CPU framework
+        run: python -m pip install ".[dev,sklearn,pandas,gpu-torch,gpu-tensorflow]"
+      - name: Run required optional CPU profile
+        env:
+          TF_CPP_MIN_LOG_LEVEL: "2"
+        run: python scripts/run_test_profile.py optional-cpu --verbose
 
   package-smoke:
     name: Wheel and sdist smoke tests
