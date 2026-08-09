@@ -1,5 +1,8 @@
 # 可維護性重構 P0–P3 完成報告
 
+> 這是重構完成時的歷史稽核快照；branch、test count、工作機路徑與行數不代表
+> 0.6.1 現況。當前不變條件與命令以根目錄 `AGENTS.md` 為準。
+
 - 基底：P0–P2 已合併；P3 基於 `14f9e72`
 - 依據：`renewable-huber 代碼結構與可維護性稽核報告`（稽核版本 df17d08）
 - 狀態：P0、P1、P2、P3 全部完成並驗證；完整驗收證據見
@@ -29,7 +32,7 @@
 
 三條，違反其中任何一條的修改都應該被退回：
 
-1. **不改演算法、kernel 順序、stream 行為、公開 API。** 這是純結構重構。所有效能與正確性成果（CPU 1.45×–15.65×、CUDA 1.12×–2.04×、golden corpus）必須逐位元保持。
+1. **不改演算法、kernel 順序、stream 行為、公開 API。** 這是純結構重構。當前正式範圍為 CPU 1.17×–15.65×、CUDA host 1.04×–1.96×、CUDA DLPack 1.06×–2.04×；golden corpus 必須逐位元保持。
 2. **隱性契約要變成會失敗的測試。** 稽核指出的問題不是「程式碼很醜」，而是「契約漂移時沒有任何東西會壞」。每一項修正都附帶一個會抓到回歸的測試。
 3. **每一步都要能獨立驗證。** 特別是 `engine.cu` 的拆檔，分成八個可各自 build + 測試的步驟。
 
@@ -282,7 +285,7 @@ CUDA benchmark harness 在這台機器上，**同一份 binary 連跑三次 medi
 
 ```bash
 bash scripts/setup-wsl-toolchain.sh --cuda   # NVIDIA wsl-ubuntu repo，只裝 toolkit
-bash scripts/setup-wsl-venv.sh --cuda
+bash scripts/setup-wsl-venv.sh --profile cuda-full
 ```
 
 > **絕對不要在 WSL 裡安裝 Linux 顯示驅動。** WSL 的 GPU 是透過 Windows 驅動

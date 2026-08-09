@@ -2,12 +2,14 @@
 
 This policy prevents an attractive native number from being compared with a
 different lifecycle, input transport, or solver operation. It applies to the
-Rust CPU engine, the Rust/CUDA P2 solver, and its P3 DLPack transport extension
-while both native engines remain opt-in.
+Rust CPU engine, the Rust/CUDA P2 solver, and its P3 DLPack transport extension.
+Native CUDA remains explicit opt-in. CPU `backend="auto"` may select native CPU
+through the separate bounded runtime policy accepted in PR #29.
 
-`RenewableHuberRegressor(backend="auto")` is intentionally unchanged. The
-tools below are an offline, auditable promotion mechanism; they do not silently
-route users to an experimental extension.
+The tools below remain an offline, exact-record advisor for performance audits;
+they are not the runtime dispatcher. Runtime CPU selection uses a small paired
+probe ladder, an execution-context signature and a conservative ratio model;
+see [the CPU auto-dispatch RFC](cpu-auto-dispatch-rfc.md).
 
 ## Measurement contract
 
@@ -220,8 +222,7 @@ inputs to the advisor: a future runtime integration must first verify that the
 requested extension can be loaded. Missing calibration always prefers the
 portable path.
 
-Before integrating this advisor into a public `native_auto` selector, expand
-the calibration grid beyond the four named shapes, persist the approved policy
-with its hardware fingerprint, and add telemetry-free unit tests for every
-fallback. `backend="auto"` must remain stable until that migration is accepted
-as a separate API decision.
+Do not turn this exact-shape advisor into a persisted runtime crossover map.
+It is intentionally hardware-fingerprinted evidence for a recorded workload;
+the public CPU dispatcher instead recalibrates within a fixed cost bound and
+never writes host-specific state to disk. Native CUDA remains explicit.

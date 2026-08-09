@@ -29,8 +29,11 @@ body:
     attributes:
       label: Backend
       options:
+        - Auto
         - NumPy
+        - Native CPU
         - CuPy
+        - Native CUDA
         - PyTorch
         - TensorFlow
         - scikit-learn adapter
@@ -48,12 +51,15 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS, Python, dtype, device, dependency versions, and GPU/driver details if relevant.
+      description: OS, Python, dtype, device, native package/API version, n_jobs, dependency versions, CUDA transport, and GPU/driver details if relevant.
       placeholder: |
         OS:
         Python:
         renewable-huber:
+        native distribution / API:
+        n_jobs:
         NumPy/CuPy/PyTorch/TensorFlow:
+        CUDA input transport (host/CuPy/PyTorch/TensorFlow):
         Device and driver:
     validations:
       required: true

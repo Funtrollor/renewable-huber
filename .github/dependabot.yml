@@ -22,3 +22,36 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+
+  - package-ecosystem: "cargo"
+    directory: "/native"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Taipei"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(native)"
+
+  - package-ecosystem: "pip"
+    directory: "/native/python-cpu"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Taipei"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(native-cpu)"
+
+  - package-ecosystem: "pip"
+    directory: "/native/python-cuda"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Taipei"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(native-cuda)"

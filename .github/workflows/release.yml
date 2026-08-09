@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -24,22 +25,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Require a release commit from main
+      - name: Require the current main release commit
         shell: bash
         run: |
           git fetch origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
       - name: Require tag, base, and native package versions to match
         shell: bash
         run: |
           package_version="$(python -c "import runpy; print(runpy.run_path('src/renewable_huber/_version.py')['__version__'])")"
-          tag_version="${GITHUB_REF_NAME#v}"
-          test "$tag_version" = "$package_version"
+          if test "$GITHUB_REF_TYPE" = "tag"; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            test "$tag_version" = "$package_version"
+          fi
           python scripts/native/validate_release_artifacts.py --source-only
       - name: Install validation tools
         run: python -m pip install ".[dev]" twine
       - name: Run Python tests and quality gates
         run: |
+          python scripts/run_test_profile.py --check
+          python scripts/run_test_profile.py core --verbose
+          python scripts/run_test_profile.py performance --verbose
           python -m unittest discover -s tests -v
           ruff check src tests scripts
           ruff format --check src tests scripts
@@ -62,6 +68,13 @@ jobs:
           "$RUNNER_TEMP/base-release-smoke/bin/python" -m pip install dist-base/*.whl
           "$RUNNER_TEMP/base-release-smoke/bin/python" -m pip check
           "$RUNNER_TEMP/base-release-smoke/bin/renewable-huber" --version
+      - name: Clean-install base sdist
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/base-sdist-smoke"
+          "$RUNNER_TEMP/base-sdist-smoke/bin/python" -m pip install dist-base/*.tar.gz
+          "$RUNNER_TEMP/base-sdist-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/base-sdist-smoke/bin/renewable-huber" --version
       - uses: actions/upload-artifact@v4
         with:
           name: base-distributions
@@ -129,6 +142,12 @@ jobs:
         run: >-
           python scripts/native/smoke_test_cpu_wheels.py
           --base-dir dist-base --native-dir dist-native-cpu
+      - name: Run required native CPU profile against the release wheel
+        shell: bash
+        run: |
+          python -m pip install ".[dev]"
+          python -m pip install dist-native-cpu/*.whl
+          python scripts/run_test_profile.py native-cpu --verbose
       - uses: actions/upload-artifact@v4
         with:
           name: native-cpu-${{ matrix.architecture }}-py${{ matrix.python-version }}
@@ -159,7 +178,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Show CUDA release toolchain
         shell: pwsh
-        run: nvcc --version
+        run: |
+          $output = nvcc --version | Out-String
+          Write-Host $output
+          if ($output -notmatch 'release\s+(\d+)\.(\d+)') {
+            throw "Unable to parse the CUDA Toolkit version from nvcc."
+          }
+          $major = [int]$Matches[1]
+          $minor = [int]$Matches[2]
+          if ($major -lt 12 -or ($major -eq 12 -and $minor -lt 8)) {
+            throw "CUDA Toolkit 12.8 or newer is required for SM 120 release wheels."
+          }
       - name: Install release build tools
         run: python -m pip install ".[native-build]" twine
       - name: Build CUDA 12 plugin wheel
@@ -221,6 +250,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     needs: validate-release-set
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -243,12 +273,14 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "${artifacts[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${artifacts[@]}" \
-              --verify-tag --generate-notes --title "renewable-huber $GITHUB_REF_NAME"
+              --verify-tag --generate-notes --notes-start-tag v0.5.1 \
+              --title "renewable-huber $GITHUB_REF_NAME"
           fi
 
   publish-base:
     name: Publish base package to PyPI
     needs: github-release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -270,6 +302,7 @@ jobs:
     # that project first so installers never observe a plugin whose required
     # base version is still absent from the index.
     needs: [github-release, publish-base]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
       name: pypi-native-cpu
@@ -289,6 +322,7 @@ jobs:
   publish-native-cuda:
     name: Publish native CUDA wheels to PyPI
     needs: [github-release, publish-base]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
       name: pypi-native-cuda

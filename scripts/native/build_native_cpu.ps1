@@ -21,7 +21,7 @@ if ((Test-Path -LiteralPath $cargoBin) -and ($env:Path -notlike "*$cargoBin*")) 
 }
 
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    throw "Rust Cargo is unavailable. Install Rust 1.82 or newer with rustup."
+    throw "Rust Cargo is unavailable. Install Rust 1.83 or newer with rustup."
 }
 
 $pythonEnvironment = (& $Python -c "import sys; print(sys.prefix)").Trim()

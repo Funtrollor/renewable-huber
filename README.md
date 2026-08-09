@@ -8,7 +8,7 @@
 
 `renewable-huber` 是一個針對串流資料的 Renewable Huber Regression 套件。它實作以 Huber loss 為基礎的穩健線性迴歸，處理批次資料時只保留係數與累積資訊矩陣，而非保留所有歷史觀測值。
 
-目前最新版本為 **0.5.1**，已發布至 [PyPI](https://pypi.org/project/renewable-huber/)，但仍處於 **pre-alpha** 開發階段。套件提供 NumPy/CPU、CuPy/CUDA、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 pandas 與 scikit-learn Pipeline／模型選擇工具。可用 `renewable-huber --version` 查詢已安裝版本。
+目前最新版本為 **0.6.1**，發布於 [PyPI](https://pypi.org/project/renewable-huber/)，但仍處於 **pre-alpha** 開發階段。套件提供 NumPy/CPU、Rust/Rayon native CPU、CuPy/CUDA、Rust/CUDA native、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 pandas 與 scikit-learn Pipeline／模型選擇工具。可用 `renewable-huber --version` 查詢已安裝版本。
 
 `backend="auto"` 採用可預期的裝置規則：只有明確指定 `device="cuda"` 才選擇 CuPy，其餘一律留在 CPU。在 CPU 上，`auto` 預設仍是 NumPy；只有當批次夠大、且本機執行期量測顯示 Rust native CPU engine 明確較快時，才會改用 `native_cpu`。這個判斷完全依據**當前主機與當前執行環境**的即時量測，不讀取 CPU 型號字串，也不寫入任何快取檔案。量測結果只存活於記憶體，而且只在量測當下的執行環境內有效：CPU affinity mask（不只是核心數量）、`*_NUM_THREADS` 設定，或 optional `threadpoolctl` 可觀測到的實際 BLAS/OpenMP thread-pool 大小一改變就會被丟棄，`fork` 之後的子行程也會清空重測。在同一組執行環境內，相同形狀永遠得到相同答案，不受其他 estimator 先問過什麼影響。任何一步失敗（extension 缺失、engine 無法建立、量測不足，或由 `auto` 選中的 native engine 拋出任何一般例外）都會安靜回到 NumPy。細節與成本上限請見 [CPU auto-dispatch RFC](docs/cpu-auto-dispatch-rfc.md)。
 
@@ -25,16 +25,16 @@ renewable-huber --version
 
 ### 選用的 Rust CPU 核心
 
-P1 native CPU 核心採明確 opt-in，並與純 Python 基礎套件分開發行。安裝或在本機
-建置 `renewable-huber-native-cpu` 後，可用以下方式選取：
+Native CPU 核心與純 Python 基礎套件分開發行。安裝或在本機建置
+`renewable-huber-native-cpu` 後，可明確選取，也可讓 CPU `auto` 在保守量測通過時選取：
 
-0.6.0 發布後可直接安裝 matching native wheel：
+直接安裝 matching native wheel；它會精確依賴同版 base package：
 
 ```powershell
-python -m pip install renewable-huber-native-cpu==0.6.0
+python -m pip install renewable-huber-native-cpu==0.6.1
 ```
 
-0.6 release wheels 涵蓋 CPython 3.10–3.12、Windows x86-64、Linux
+0.6.1 release wheels 涵蓋 CPython 3.10–3.12、Windows x86-64、Linux
 x86-64／aarch64 與 macOS x86-64／Apple Silicon；一般使用者不需要安裝 Rust
 或在本機編譯 extension。
 
@@ -76,7 +76,7 @@ GPU extra 只安裝對應框架，不會替你安裝 NVIDIA driver 或 CUDA runt
 
 從原始碼進行開發時：
 
-```powershell
+```bash
 python -m pip install -e ".[dev]"
 ```
 
@@ -109,11 +109,10 @@ gpu_model.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
 gpu_prediction = gpu_model.predict(cp.asarray(X_test))  # cupy.ndarray，未回傳 CPU
 ```
 
-0.6.0 發布後，Windows x86-64 使用者可直接安裝 CPython 3.10–3.12 的
-CUDA 12 plugin wheel：
+Windows x86-64 使用者可直接安裝 CPython 3.10–3.12 的 CUDA 12 plugin wheel：
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.6.0
+python -m pip install renewable-huber-native-cuda==0.6.1
 ```
 
 Wheel 已包含針對支援 GPU 架構編譯的 native extension，因此不需要 Rust、CMake、
@@ -214,12 +213,28 @@ PyTorch 輸入會先 `detach`，本套件不是 autograd layer；TensorFlow back
 
 ```text
 src/renewable_huber/     # 可發布套件原始碼
+native/                  # Rust workspace、PyO3 bindings 與 CUDA C ABI/C++ engine
 tests/                   # 不依賴外部資料的單元測試
 docs/                    # API 合約、架構與發布檢查表
 scripts/renewable_huber/ # 可重現的資料集實驗腳本
+scripts/benchmarks/      # shape sweep、交錯 A/B 與 dispatch benchmark
+benchmarks/baselines/    # 已審核、schema-versioned 的小型效能基線
 legacy/                  # 重構前原型，僅供結果比對，不會發佈
 data/                    # 本地研究資料，不打包、不上傳 PyPI
 ```
+
+## Native 效能基線
+
+固定 Ryzen 9 9900X／24-thread Rayon 的 schema-v2 cold baseline 中，Rust CPU
+在 32 組 shape／dtype／penalty／operation 配對上相對 NumPy 為
+**1.17×–15.65×**（中位數 1.68×）。固定 RTX 5070 Ti 的 matched cold baseline
+中，native CUDA 相對同 transport CuPy：host input 為 **1.04×–1.96×**
+（中位數 1.35×），DLPack device input 為 **1.06×–2.04×**（中位數 1.53×）。
+
+這些是特定硬體、BLAS、driver、shape、lifecycle 與 transport 下的核准結果，
+不是所有電腦的保證。GPU 在本機同 binary 可有約 2%–19% 漂移，小於約 10% 的
+差距不應解讀為確定加速；正式比較必須使用配對交錯 runner。原始 JSON 與測量
+契約見 [native performance policy](docs/native-performance-policy.md)。
 
 ## 文件與研究來源
 
@@ -243,12 +258,17 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 
 ## 開發與驗證
 
-```powershell
-python -m unittest discover -s tests -v
-ruff check src tests scripts
-ruff format --check src tests scripts
+```bash
+python scripts/run_test_profile.py --check
+python scripts/run_test_profile.py core --verbose
+python scripts/run_test_profile.py native-cpu --verbose
+python -m ruff check src tests scripts
+python -m ruff format --check src tests scripts
 python -m build
-python scripts/benchmarks/benchmark_numpy_cupy.py --output benchmark.json
 ```
+
+GPU correctness 與 performance 只在固定本機 GPU 主機執行，不放入一般 GitHub
+Actions；缺少真實裝置時 required `cuda` profile 會 exit 2，而不是以全 skip 假裝
+成功。完整 WSL2/Linux setup 與驗收命令見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 GitHub repository 已設定為 `Funtrollor/renewable-huber`。問題回報、功能提案與 Pull Request 請使用 repository 內的模板；安全漏洞請依 [SECURITY.md](SECURITY.md) 私下回報。版本由 Git tag 驅動 GitHub Release，並透過 PyPI Trusted Publishing（OIDC）發布，不在 repository 保存長效 PyPI token。

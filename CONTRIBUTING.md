@@ -51,11 +51,22 @@ python -m pip install -e ".[dev,gpu-cupy]"
 
 Run the checks relevant to the change before opening a pull request:
 
-```powershell
-python -m unittest discover -s tests -v
-ruff check src tests scripts
-ruff format --check src tests scripts
-python -m build
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m ruff check src tests scripts
+.venv/bin/python -m ruff format --check src tests scripts
+.venv/bin/python scripts/native/validate_release_artifacts.py --source-only
+.venv/bin/python scripts/generate_native_golden.py --check
+.venv/bin/python -m build
+
+g++ -std=c++17 -fsyntax-only -I native/cuda/include native/cuda/src/abi_contract.cpp
+(
+  cd native
+  cargo fmt --all -- --check
+  cargo clippy --locked --workspace --all-targets -- -D warnings
+  cargo check --locked --workspace --all-targets
+  cargo test --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets
+)
 ```
 
 `discover` remains supported and is the quickest local pass. It is tolerant by
@@ -63,10 +74,11 @@ design: a suite whose dependency or device is missing reports success as a set
 of skips. For anything that has to *prove* it ran, use a named profile:
 
 ```bash
-python scripts/run_test_profile.py --list     # membership and requirements
-python scripts/run_test_profile.py --check    # membership consistency only
-python scripts/run_test_profile.py core       # portable NumPy behaviour
-python scripts/run_test_profile.py all        # everything, optional skips kept
+.venv/bin/python scripts/run_test_profile.py --list
+.venv/bin/python scripts/run_test_profile.py --check
+.venv/bin/python scripts/run_test_profile.py core --verbose
+.venv/bin/python scripts/run_test_profile.py performance --verbose
+.venv/bin/python scripts/run_test_profile.py all --verbose
 ```
 
 `core`, `optional-cpu`, `native-cpu`, `cuda` and `performance` are *required*
@@ -98,7 +110,9 @@ if it changes the documented numerical contract.
   local benchmark output.
 - Let CI pass on all required CPU platforms. Run GPU correctness, CUDA smoke,
   profiling, and performance gates locally on the fixed GPU host; GPU
-  validation must not run in GitHub Actions for pull requests.
+  validation must not run in GitHub Actions for pull requests. Record the exact
+  commit, environment fingerprint, machine-readable gate output and artifact
+  SHA-256 so reviewers can tie evidence to the code under review.
 - Use Conventional Commit-style imperative subjects when practical, for example
   `perf: fuse CUDA renewal kernels`.
 

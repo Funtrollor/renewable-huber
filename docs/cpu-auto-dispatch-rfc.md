@@ -1,6 +1,6 @@
 # RFC: runtime CPU backend dispatch for `backend="auto"`
 
-Status: implemented, awaiting Codex acceptance.
+Status: accepted and implemented in PR #29 (`b29b394`).
 Scope: `src/renewable_huber/backends/cpu_dispatch.py` and the estimator hook
 that calls it. No numerical algorithm, native kernel, GPU path, checkpoint
 format or public constructor parameter changes.
@@ -445,7 +445,8 @@ Reading it:
   in a separate phase. Where auto and explicit NumPy execute the same backend,
   aligned ratios are 0.928-1.036 on the standard cases, inside the host's
   documented noise band. The accepted JSON is retained under
-  `artifacts/auto-dispatch/` (gitignored), SHA-256
+  a local acceptance artifact under `artifacts/auto-dispatch/` (gitignored and
+  intentionally not part of the repository), SHA-256
   `67960356bf1cb11b75cc7b632a8ec9beb82054f2ffd0704fe9af56d19883b28b`.
 
 ## 9. Follow-up

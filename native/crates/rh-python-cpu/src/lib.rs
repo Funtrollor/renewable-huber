@@ -359,7 +359,7 @@ fn version<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     Ok(result)
 }
 
-#[pymodule]
+#[pymodule(gil_used = true)]
 fn _renewable_huber_native_cpu(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeCpuEngine>()?;
     module.add_function(wrap_pyfunction!(version, module)?)?;
@@ -453,7 +453,7 @@ fn update_typed<'py, T: CpuScalar + numpy::Element>(
         batch_weight,
     };
     let transition = match py
-        .allow_threads(|| execution_pool.install(|| engine.engine.update(batch, &state, config)))
+        .detach(|| execution_pool.install(|| engine.engine.update(batch, &state, config)))
     {
         Ok(transition) => transition,
         Err(error) => {
@@ -477,7 +477,7 @@ fn predict_typed<'py, T: CpuScalar + numpy::Element>(
     let x_design = readonly_matrix::<T>(x_design, "X_design")?;
     let x_values = contiguous_matrix(&x_design.0, "X_design")?;
     let values = py
-        .allow_threads(|| {
+        .detach(|| {
             execution_pool
                 .install(|| predict(x_values, x_design.1, x_design.2, &engine.coefficients))
         })

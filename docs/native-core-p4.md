@@ -36,10 +36,12 @@ payload API is version 3 and reports `supports_cuda_graphs` and
 and enabled flags plus capture/replay/fallback counters. Both constructor
 values participate in `get_params`, scikit-learn cloning, and checkpoints.
 
-## RTX 5070 Ti evidence
+## RTX 5070 Ti historical development observation
 
-The committed tuning record uses a 32,768 x 256 float32 batch, three warmups,
-nine samples, and at least 0.5 seconds of fixed work per statistical sample:
+The following local tuning run used a 32,768 x 256 float32 batch, three warmups,
+nine samples, and at least 0.5 seconds of fixed work per statistical sample.
+Its raw JSON was not committed, so these figures are historical engineering
+context, not retained 0.6.1 release evidence or a current performance claim:
 
 ```powershell
 python scripts/benchmarks/benchmark_cuda_tuning.py `
@@ -48,9 +50,10 @@ python scripts/benchmarks/benchmark_cuda_tuning.py `
   --output artifacts/p4-windows-rtx5070ti-cuda-tuning.json
 ```
 
-On the development RTX 5070 Ti, strict execution measured 19.416 ms, CUDA
+On that development run, strict execution measured 19.416 ms, CUDA
 Graph execution 17.021 ms (1.14x), and Graph+TF32 18.162 ms (1.07x versus
-strict). Relative MAD was 0.79%, 3.85%, and 2.49%, respectively. Graph capture
+strict). The 1.07x TF32 difference is inside this host's approximately 10%
+noise band and is not evidence of a speedup. Relative MAD was 0.79%, 3.85%, and 2.49%, respectively. Graph capture
 recorded 4,522 replays with zero fallback. TF32 did not beat strict-precision
 Graph for this shape, so it remains an experimental opt-in rather than an
 automatic dispatch choice. Coefficient error versus strict was also recorded
@@ -77,8 +80,8 @@ Nsight evidence is valid only when the JSON metadata, `.nsys-rep`, GPU,
 driver, Toolkit, shape, transport, and tuning flags are retained together.
 CUDA API/kernel/memcpy totals overlap and must not be added as wall time.
 
-The 2026-08-01 Nsight Systems capture for the same 32,768 x 256 workload is in
-`artifacts/nsight-p4`. All three profiled updates converged in seven iterations;
+The uncommitted 2026-08-01 Nsight Systems capture for the same workload was
+stored locally under `artifacts/nsight-p4`. All three profiled updates converged in seven iterations;
 their median was 18.358 ms and the NVTX repeat window was 56.159 ms. Nsight
 observed 3 graph instantiations and 84 graph launches. The report also makes
 the remaining bottleneck explicit: 98 `cudaStreamSynchronize` calls consumed

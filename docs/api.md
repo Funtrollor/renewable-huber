@@ -20,10 +20,12 @@ RenewableHuberRegressor(
     device="auto",
     dtype="float64",  # CPU precision；GPU 可使用 float32 加速
     n_jobs=None,
+    cuda_graphs=False,
+    cuda_fast_math=False,
 )
 ```
 
-`n_jobs` 只控制 `backend="native_cpu"`。允許 `None`（使用 extension
+`n_jobs` 控制明確指定或由 CPU `auto` 選中的 `native_cpu`。允許 `None`（使用 extension
 預設值）、`-1`（使用 `os.cpu_count()` 回報的全部邏輯 CPU，且至少為 1），
 或正整數。布林值、0、小於 `-1` 與非整數都會被拒絕。`get_params`、
 scikit-learn clone 與 checkpoint 會保留原始設定；完成 fit 後，`n_jobs_`
@@ -96,7 +98,7 @@ model = RenewableHuberRegressor.load(
 
 ## Backend 與資料順序語意
 
-`backend="auto"` 不檢查輸入型別：`device="auto"` 或 `"cpu"` 使用 NumPy，只有 `device="cuda"` 使用 CuPy。Rust CPU P1 必須明確設定 `backend="native_cpu"` 並安裝 `renewable-huber-native-cpu`；Rust/CUDA 必須明確設定 `backend="native_cuda"` 並安裝與基礎套件版本相容的 `renewable-huber-native-cuda`。`native_cuda` 可接收相容的 NumPy host array，或直接接收位於相同 CUDA device、dtype 完全一致且 C-contiguous 的 DLPack tensor；不會暗中做跨裝置、dtype 或 device-to-host 轉換。兩個 native engine 都不會由 `auto` 選取。Torch／TensorFlow tensor 工作流也必須明確指定對應 backend。PyTorch 輸入會 detach，因此輸出不屬於呼叫端的 autograd graph；TensorFlow backend 要求 eager execution。
+`backend="auto"` 不檢查輸入型別：`device="auto"` 或 `"cpu"` 先以 NumPy 驗證首批資料，再依本機、具界限的執行期量測決定是否切換到 `native_cpu`；`device="cuda"` 使用 CuPy。明確使用 Rust CPU 可設定 `backend="native_cpu"` 並安裝 `renewable-huber-native-cpu`；Rust/CUDA 必須明確設定 `backend="native_cuda"` 並安裝同版 `renewable-huber-native-cuda`。`native_cuda` 可接收相容的 NumPy host array，或直接接收位於相同 CUDA device、dtype 完全一致且 C-contiguous 的 DLPack tensor；不會暗中做跨裝置、dtype 或 device-to-host 轉換。`auto` 永遠不會選擇 native CUDA。Torch／TensorFlow tensor 工作流也必須明確指定對應 backend。PyTorch 輸入會 detach，因此輸出不屬於呼叫端的 autograd graph；TensorFlow backend 要求 eager execution。
 
 `cuda_graphs=True` 僅調校 `native_cuda`，並在不支援 capture 時安全回退；
 `cuda_fast_math=True` 另要求 `dtype="float32"`，允許 TF32 誤差契約。兩者預設
@@ -128,4 +130,4 @@ SciPy sparse matrix 會以清楚的 `TypeError` 拒絕，不會隱式轉 dense�
 
 ## 版本界線
 
-v0.5 正式支援 NumPy CPU、CuPy CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。完整安裝方式、回傳型別、作業系統與限制請見[支援矩陣](support-matrix.md)。安裝 `sklearn` extra 後，可使用 `renewable_huber.integrations.sklearn.SklearnRenewableHuberRegressor` 進入 Pipeline、clone、GridSearchCV 與 cross-validation 工作流；完整 estimator contract 由 CI 執行 `check_estimator`。
+v0.6.1 正式支援 NumPy CPU、Rust native CPU、CuPy CUDA、Rust native CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。完整安裝方式、回傳型別、作業系統與限制請見[支援矩陣](support-matrix.md)。安裝 `sklearn` extra 後，可使用 `renewable_huber.integrations.sklearn.SklearnRenewableHuberRegressor` 進入 Pipeline、clone、GridSearchCV 與 cross-validation 工作流；完整 estimator contract 由 CI 執行 `check_estimator`。

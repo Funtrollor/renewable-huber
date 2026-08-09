@@ -1,6 +1,6 @@
 # 架構
 
-v0.5 將「公開估計器」、「可共用演算法核心」與「陣列後端」分離。四個正式 backend 共用同一份 RHE Newton／RPSHE LAMM 更新邏輯；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
+v0.6.1 將「公開估計器」、「portable 陣列核心」與「native whole-batch engine」分離。NumPy、CuPy、PyTorch、TensorFlow 四個 portable backend 共用 Python 的 RHE Newton／RPSHE LAMM 更新邏輯；Rust CPU 與 Rust/CUDA engine 則透過明確 capability contract 接管整批更新。連同 `auto` 選擇器共有七個公開 backend 名稱；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
 
 後續 native engine 的正式邊界、相容性契約與遷移門檻已定義於
 [native-core RFC](native-core-rfc.md)；重構前的 golden corpus、shape sweep
@@ -24,7 +24,7 @@ RenewableHuberRegressor
 
 ## Backend 邊界
 
-`core` 不直接 import pandas、scikit-learn、CuPy、PyTorch 或 TensorFlow，而是使用 backend 提供的陣列運算、線性方程解法與 scalar conversion。CuPy 可額外提供融合的 CUDA C++ Huber／score／curvature kernel；若 NVRTC 不可用，會回退至共用 CuPy 表達式而不改變 API。
+`core` 不直接 import pandas、scikit-learn、CuPy、PyTorch 或 TensorFlow，而是使用 portable backend 提供的陣列運算、線性方程解法與 scalar conversion。CuPy 可額外提供融合的 CUDA C++ Huber／score／curvature kernel；若 NVRTC 不可用，會回退至共用 CuPy 表達式而不改變 API。Native backends 不假裝成逐項陣列 API；它們以 `capabilities_of()` 宣告 whole-batch update、threading 或 CUDA features，由 estimator 在單一委派邊界呼叫 resident engine。
 
 Backend 只在第一次 `fit`／`partial_fit` 時解析：
 

@@ -43,12 +43,24 @@ def _project_metadata(path: Path) -> dict[str, object]:
         return tomllib.load(handle)["project"]
 
 
+def native_workspace_version(root: Path = PROJECT_ROOT) -> str:
+    with (root / "native" / "Cargo.toml").open("rb") as handle:
+        manifest = tomllib.load(handle)
+    return str(manifest["workspace"]["package"]["version"])
+
+
 def check_source_metadata(root: Path = PROJECT_ROOT) -> str:
     """Require all separately published projects to use one exact release version."""
 
     version = base_version(root)
     expected_dependency = f"{BASE_NAME}=={version}"
     errors: list[str] = []
+    engine_version = native_workspace_version(root)
+    if engine_version != version:
+        errors.append(
+            f"native/Cargo.toml: workspace engine version {engine_version!r} "
+            f"must equal base version {version!r}"
+        )
     for kind, (expected_name, _) in NATIVE_PROJECTS.items():
         path = root / "native" / f"python-{kind}" / "pyproject.toml"
         project = _project_metadata(path)
