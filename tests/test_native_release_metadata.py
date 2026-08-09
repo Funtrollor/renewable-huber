@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest import mock
 
+from scripts.native.smoke_test_cuda_wheels import _smoke_program
 from scripts.native.validate_release_artifacts import (
     PROJECT_ROOT,
     SUPPORTED_PYTHON,
@@ -40,7 +41,50 @@ class NativeReleaseMetadataTests(unittest.TestCase):
             "Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76",
             workflow,
         )
+        self.assertIn(
+            "sub-packages: "
+            '\'["nvcc", "cuobjdump", "cudart", "cublas", "cublas_dev", '
+            '"cusolver", "cusolver_dev", "cusparse", "cusparse_dev", "nvjitlink", '
+            '"visual_studio_integration"]\'',
+            workflow,
+        )
+        self.assertIn(
+            'RH_CUDA_ARCHITECTURES: "75-real;80-real;86-real;89-real;90-real;120"', workflow
+        )
+        self.assertIn("cuobjdump --list-elf", workflow)
+        self.assertIn("cuobjdump --list-ptx", workflow)
+        self.assertIn("--native-dir dist-native-cuda --import-only", workflow)
+        for required_file in (
+            r"include\cuda_runtime.h",
+            r"include\cublas_v2.h",
+            r"include\cublasLt.h",
+            r"include\cusolverDn.h",
+            r"include\cusparse.h",
+            r"lib\x64\cudart.lib",
+            r"lib\x64\cublas.lib",
+            r"lib\x64\cublaslt.lib",
+            r"lib\x64\cusolver.lib",
+            r"lib\x64\cusparse.lib",
+            r"bin\cudart64_12.dll",
+            r"bin\cublas64_12.dll",
+            r"bin\cublasLt64_12.dll",
+            r"bin\cusolver64_11.dll",
+            r"bin\cusparse64_12.dll",
+            r"bin\nvJitLink_120_0.dll",
+            r"bin\cuobjdump.exe",
+        ):
+            with self.subTest(required_file=required_file):
+                self.assertIn(required_file, workflow)
         self.assertNotIn("runs-on: [self-hosted, windows, x64, gpu, cuda12]", workflow)
+
+    def test_cuda_import_only_smoke_preserves_the_full_device_gate(self) -> None:
+        import_only = _smoke_program("0.6.1", import_only=True)
+        full = _smoke_program("0.6.1", import_only=False)
+        self.assertIn("_native_cuda.version()", import_only)
+        self.assertIn("isinstance(_native_cuda.is_available(), bool)", import_only)
+        self.assertNotIn("backend='native_cuda'", import_only)
+        self.assertIn("assert _native_cuda.is_available()", full)
+        self.assertIn("backend='native_cuda'", full)
 
     def test_source_projects_match_base_release_exactly(self) -> None:
         self.assertEqual(check_source_metadata(), base_version())

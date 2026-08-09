@@ -8,9 +8,11 @@ Optional Rust/CUDA 12 engine for
 python -m pip install renewable-huber-native-cuda==0.6.1
 ```
 
-Published wheels currently support CPython 3.10–3.12 on Windows x86-64. They
-require a compatible NVIDIA driver and CUDA 12 runtime DLLs, but not Rust,
-CMake, Visual Studio or `nvcc`.
+Published wheels currently support CPython 3.10–3.12 on Windows x86-64. The
+wheel does not bundle NVIDIA libraries. It requires a compatible NVIDIA driver
+and a CUDA 12 runtime discoverable through `CUDA_PATH`, including cudart,
+cuBLAS/cuBLASLt, cuSOLVER, cuSPARSE and nvJitLink DLLs. Rust, CMake, Visual
+Studio and `nvcc` are not required to install the wheel.
 
 ```python
 from renewable_huber import RenewableHuberRegressor

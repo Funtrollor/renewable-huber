@@ -26,9 +26,11 @@ CPU release matrix：
 - macOS x86-64 與 Apple Silicon arm64。
 
 CUDA 12 release matrix 目前為 CPython 3.10–3.12、Windows x86-64。Release fat binary
-包含 SM 75、80、86、89、90 與 120，因此建置 runner 必須使用 CUDA Toolkit 12.8
-以上。使用者安裝已發布 wheel 時不需要 Rust、CMake、Visual Studio 或 `nvcc`，但仍需
-相容的 NVIDIA driver，以及 CUDA 12 的 `cudart`、cuBLAS、cuSOLVER runtime DLL。
+包含 SM 75、80、86、89、90、120 SASS，並只為最高的 SM 120 保留 PTX，因此建置
+runner 固定使用 CUDA Toolkit 12.9.1（最低需 12.8 才能編譯 SM 120）。使用者安裝已
+發布 wheel 時不需要 Rust、CMake、Visual Studio 或 `nvcc`，但 wheel 不封裝 NVIDIA
+DLL；執行時仍需相容 driver 與 CUDA 12 的 cudart、cuBLAS／cuBLASLt、cuSOLVER、
+cuSPARSE、nvJitLink runtime closure，且 toolkit `bin` 必須可由 `CUDA_PATH` 找到。
 
 CUDA wheels 在固定的 GitHub-hosted `windows-2022` runner（Visual Studio 2022）
 安裝 CUDA 12.9 build-only toolchain 後編譯；不用 `windows-latest`，因為它已移至
@@ -60,10 +62,12 @@ macOS CPU wheels 使用 `macos-15-intel`（x86-64）與 `macos-15`（Apple Silic
 5. 在 GitHub 對 `main` 手動執行 `release.yml`。這是 build-only rehearsal：建置並
    驗證完整 20 個 artifacts，但不建立 GitHub Release，也不發布到 PyPI/TestPyPI。
 6. 從已通過一般 CI 與 build-only rehearsal 的**精確 `main` tip** 建立 `vX.Y.Z`
-   signed tag。Release workflow 會拒絕版本不一致或不是目前 `main` tip 的 tag。
+   annotated tag；若維護環境已有可信任簽章金鑰，則改用 signed tag。Release
+   workflow 會拒絕版本不一致或不是目前 `main` tip 的 tag。
 7. Workflow 建置 base wheel/sdist、15 個 CPU wheels、3 個 CUDA wheels，並執行
-   Twine、metadata、ABI capability 與 artifact-set 檢查；GPU runtime 測試不在
-   GitHub Actions 執行，採用第 3 步的本機證據。
+   Twine、metadata、artifact-set、CUDA SASS/PTX 實體檢查，以及無 GPU 的 clean
+   install/import ABI capability smoke；GPU correctness 與效能不在 GitHub Actions
+   執行，採用第 3 步的本機證據。
 8. 完整 artifact set 通過後才建立 GitHub Release。人工核准 PyPI 前，下載實際
    CUDA artifacts 至固定 GPU 主機，對 artifact hash 執行最後 smoke。
 9. 三個 PyPI publish jobs 分別等待對應 GitHub Environment 的人工核准，再透過
@@ -74,9 +78,11 @@ Release tag 範例：
 ```bash
 git switch main
 git pull --ff-only
-git tag -s vX.Y.Z -m "renewable-huber vX.Y.Z"
+git tag -a vX.Y.Z -m "renewable-huber vX.Y.Z"
 git push origin vX.Y.Z
 ```
+
+若已設定可信任的 Git signing key，可將 `-a` 改為 `-s`。
 
 ## PyPI Trusted Publishing
 

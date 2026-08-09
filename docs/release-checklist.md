@@ -24,8 +24,10 @@
 - [ ] Base wheel 與 sdist 通過 `twine check` 與 clean-install smoke test。
 - [ ] 15 個 CPU wheels 全數產生：Python 3.10–3.12 × 5 個 OS/architecture targets。
 - [ ] 3 個 Windows x86-64 CUDA 12 wheels 全數產生。
-- [ ] CUDA wheel 具備公開 API version、native ABI 與 capability metadata。
-- [ ] CUDA fat binary architecture 清單符合 release policy，使用者不需本機 `nvcc`。
+- [ ] CUDA wheel 在無 GPU hosted runner 可乾淨安裝、載入，並回報正確公開 API
+      version、native ABI 與 capability metadata。
+- [ ] `cuobjdump` 證明 CUDA wheel 含 SM 75/80/86/89/90/120 SASS，且只有 SM 120
+      PTX；使用者不需本機 `nvcc`。
 - [ ] 完整 artifact set 沒有重複檔名，且版本與 dependency contract 全部相符。
 - [ ] CPU wheels 與 matching base wheel 在 CI 乾淨環境可一起安裝並通過
       `pip check`；本機建置的 CUDA candidate wheel 已在固定 GPU 主機通過
