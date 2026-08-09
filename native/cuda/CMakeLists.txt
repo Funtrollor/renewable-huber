@@ -59,11 +59,21 @@ if(NOT RH_CUDA_BUILD_SHARED)
     target_compile_definitions(rh_cuda PUBLIC RH_CUDA_STATIC=1)
 endif()
 
+# Whole-program device compilation is a release requirement, not a preference.
+# Separable compilation routes every architecture through nvlink, and nvlink
+# emits SASS only: the device-linked image that the runtime registers has no
+# PTX, so `CMAKE_CUDA_ARCHITECTURES` entries without a `-real` suffix silently
+# lose their virtual half.  The individual translation units still carry PTX,
+# which makes the loss invisible in object-level inspection.  Asking the device
+# linker for it directly does not help either -- `nvcc -dlink` with
+# `code=compute_120` succeeds and produces an object holding neither SASS nor
+# PTX.  No translation unit here calls a `__device__` function defined in
+# another one, so whole-program compilation costs nothing and keeps the
+# forward-compatible PTX the release fat-binary policy promises.
 set_target_properties(rh_cuda PROPERTIES
     OUTPUT_NAME renewable_huber_cuda
     POSITION_INDEPENDENT_CODE ON
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_SEPARABLE_COMPILATION OFF
     CXX_VISIBILITY_PRESET hidden
     CUDA_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES

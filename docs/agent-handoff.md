@@ -36,6 +36,68 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-10 — Claude Code — CUDA release wheels shipped without forward-compatible PTX
+
+- Base SHA / branch: `c9449439aabaf0d22b56d0b96236ae096ce398da` (`main`) on
+  `claude/cuda-ptx-forward-compat`, worktree
+  `build/workspaces/claude-cuda-ptx`.
+- Ownership exception: Codex reached its usage limit mid-release, and the
+  maintainer directed Claude Code to finish the release instead. Claude Code
+  therefore commits, pushes and opens the pull request for this entry. The
+  normal division of responsibility above resumes once Codex is available.
+- Scope and decisions: the first build-only rehearsal that got far enough to
+  inspect a wheel (`31325795125`, all 15 CPU wheels green) failed all three
+  CUDA jobs on `Expected PTX only for architecture 120; found: .`. The check is
+  right and the artifact was wrong. `CUDA_SEPARABLE_COMPILATION ON` routes every
+  architecture through nvlink, and nvlink emits SASS only, so the registered
+  device image dropped the virtual half of the suffix-free `120` entry. No
+  translation unit calls a `__device__` function defined in another one, so the
+  target now compiles whole-program and `CUDA_RESOLVE_DEVICE_SYMBOLS`, which is
+  inert without separable compilation, is removed. The fat-binary policy, the
+  architecture list, the release check, kernels, streams, the C ABI and every
+  public API are unchanged.
+- Reproduction (local RTX 5070 Ti, CUDA 12.9, identical sources and
+  architecture list, only the one property differing): separable compilation
+  gives SASS 75/80/86/89/90/120 and **no** PTX; whole-program gives the same
+  SASS plus `sm_120.ptx`. Both pass `ctest`. The per-TU objects keep their PTX
+  in both cases, which is why object-level inspection hides the loss; only
+  `cmake_device_link.o` and the final binary show it. Asking the device linker
+  for PTX directly is not an option: `nvcc -dlink -gencode
+  arch=compute_120,code=compute_120` exits 0 and writes an object containing
+  neither SASS nor PTX. The two real wheels built from `main` and from this
+  branch reproduce the same split.
+- Files changed: `native/cuda/CMakeLists.txt`, `AGENTS.md`,
+  `tests/test_native_release_metadata.py`, this hand-off.
+- Verification run: `cuda` profile **35 / 2 skips**, golden corpus **4 cases
+  match**, CUDA C ABI `ctest` **1/1**, `core` **302 / 2**, `performance` **54**,
+  `native-cpu` **19**, `all`/discover **415 / 21**, `--check` 6 profiles over 24
+  modules, Ruff check and format, C++ ABI syntax, `cargo fmt`/`clippy`/`check`
+  and **14** Rust tests all pass. `optional-cpu` exits 2 in this venv because
+  PyTorch and TensorFlow are absent from it; that is the required-profile
+  contract working, and CI's `optional-cpu-profile` job covers it.
+- Performance: interleaved A/B over 5 rounds of the `standard` profile,
+  `native_cuda`, capped at 2 sample repetitions, baseline and candidate in
+  separate venvs holding the two compiled extensions. Paired median **1.036x**
+  across 16 cases, spread 0.707–1.260, relative MAD median 15.1%. The gate
+  reports 16 failures, so a self-paired control ran the baseline against
+  **itself** under the same settings: it also fails all 16, with a *wider*
+  spread (0.728–1.441) and a higher MAD median (18.5%). The failures are this
+  host's measurement noise, which `AGENTS.md` already documents, and the change
+  has no effect detectable above it. The `--backend native_cuda` restriction is
+  also why both sides report a missing cupy competitor case.
+- Known risks or unresolved questions: whole-program compilation changes device
+  codegen, and the ±10% noise floor on this host cannot resolve a difference
+  smaller than that, so the published CUDA 1.12x–2.04x band was not
+  re-measured from scratch — only shown unchanged relative to the released
+  baseline. The wheel payload check still runs only on the Windows release
+  runner; the new CPU-side test guards the setting that decides it, not the
+  artifact. Linux wheels were the local reproduction vehicle; the release
+  artifact remains Windows x86-64.
+- Requested next action / owner: merge, re-run the build-only rehearsal on the
+  exact new `main`, confirm 20 artifacts including the CUDA PTX check, then tag
+  `v0.6.1`. The three PyPI pending publishers are still unconfigured on the
+  account side and must exist before the publish jobs are approved.
+
 ### 2026-08-10 — Claude Code / Codex — CUDA release artifact closure
 
 - Base SHA / branch: `061db2b` on `claude/release-cuda-dev-libs`; no commit,
