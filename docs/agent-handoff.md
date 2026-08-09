@@ -36,6 +36,27 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-09 — Codex — hosted release runner compatibility
+
+- Base SHA / branch: `06edd37cb5fc51b497b883006ea8a0011c98a5d0` on
+  `agent/release-cuda-vs2022`.
+- Scope and decisions: the first hosted CUDA build-only rehearsal proved that
+  CUDA 12.9 installed correctly, then failed all three wheels because
+  `windows-latest` had migrated to Visual Studio 2026. Pin CUDA compilation to
+  `windows-2022`/Visual Studio 2022 instead of overriding nvcc's supported-host
+  guard. Replace retired `macos-13` with `macos-15-intel`, and use `macos-15`
+  for Apple Silicon; the 15-wheel CPU matrix is unchanged.
+- Files changed: `.github/workflows/release.yml`, `CHANGELOG.md`,
+  `docs/release-process.md`, this hand-off, and release workflow contract tests.
+- Verification run: release metadata tests **6/6**, required core profile
+  **297 / 3 skips**, Ruff check/format and `git diff --check` pass. A complete
+  GitHub build-only rehearsal from merged `main` remains required.
+- Known risks or unresolved questions: hosted CUDA jobs compile and inspect
+  wheels without a GPU; local RTX correctness/performance evidence remains the
+  runtime release gate.
+- Requested next action / owner: Codex validates, publishes the small runner-fix
+  PR, reruns all 20 release artifacts, and only then creates `v0.6.1`.
+
 ### 2026-08-09 — Codex — 0.6.1 release candidate and native dependency hardening
 
 - Base SHA / branch: `b29b394d46de2c6f4b4382e898978ddddc6a12f0` on
