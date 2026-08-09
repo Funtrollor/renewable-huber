@@ -158,9 +158,9 @@ jobs:
   native-cuda-wheels:
     name: CUDA 12 wheel / Windows x86-64 / py${{ matrix.python-version }}
     needs: source-gate
-    # Release tags contain trusted repository code. Pull requests never reach
-    # this self-hosted runner; development GPU validation is local-only.
-    runs-on: [self-hosted, windows, x64, gpu, cuda12]
+    # This job compiles and inspects wheels without requiring a GPU. Runtime
+    # correctness and performance remain local-only on the fixed GPU host.
+    runs-on: windows-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -175,6 +175,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install CUDA 12.9 release toolkit
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76 # v0.2.35
+        with:
+          cuda: "12.9.1"
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cusolver", "visual_studio_integration"]'
+          log-file-suffix: py${{ matrix.python-version }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Show CUDA release toolchain
         shell: pwsh

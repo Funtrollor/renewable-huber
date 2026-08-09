@@ -30,9 +30,10 @@ CUDA 12 release matrix 目前為 CPython 3.10–3.12、Windows x86-64。Release 
 以上。使用者安裝已發布 wheel 時不需要 Rust、CMake、Visual Studio 或 `nvcc`，但仍需
 相容的 NVIDIA driver，以及 CUDA 12 的 `cudart`、cuBLAS、cuSOLVER runtime DLL。
 
-CUDA wheels 由標記為 `self-hosted, windows, x64, gpu, cuda12` 的受控 runner 在
-release tag 後建置。Pull request 與一般開發不使用 GitHub Actions GPU runner；
-correctness、profiling 與 performance 驗證都在維護者的固定本機 GPU 主機執行。
+CUDA wheels 在 GitHub-hosted Windows runner 安裝固定 CUDA 12.9 build-only
+toolchain 後編譯；該 runner 沒有 GPU，也不執行 CUDA runtime 測試。Pull request
+與一般開發不使用 GitHub Actions GPU runner；correctness、profiling、乾淨安裝與
+performance 驗證都在維護者的固定本機 GPU 主機執行。
 
 ## Release gate
 
