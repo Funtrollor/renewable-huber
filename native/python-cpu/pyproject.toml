@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "renewable-huber-native-cpu"
 version = "0.6.1"
 description = "Optional Rust CPU engine for renewable-huber."
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"

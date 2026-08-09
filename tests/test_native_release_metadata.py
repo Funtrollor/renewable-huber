@@ -6,8 +6,11 @@ import unittest
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from unittest import mock
 
 from scripts.native.validate_release_artifacts import (
+    PROJECT_ROOT,
+    SUPPORTED_PYTHON,
     _check_native_wheel,
     base_version,
     check_source_metadata,
@@ -43,6 +46,35 @@ class NativeReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(check_source_metadata(), base_version())
         self.assertEqual(native_workspace_version(), base_version())
 
+    def test_source_projects_reject_python_range_drift(self) -> None:
+        version = base_version()
+        expected_dependency = f"renewable-huber=={version}"
+        projects = {
+            PROJECT_ROOT / "pyproject.toml": {"requires-python": SUPPORTED_PYTHON},
+            PROJECT_ROOT / "native" / "python-cpu" / "pyproject.toml": {
+                "name": "renewable-huber-native-cpu",
+                "version": version,
+                "dependencies": [expected_dependency],
+                "requires-python": SUPPORTED_PYTHON,
+            },
+            PROJECT_ROOT / "native" / "python-cuda" / "pyproject.toml": {
+                "name": "renewable-huber-native-cuda",
+                "version": version,
+                "dependencies": [expected_dependency],
+                "requires-python": SUPPORTED_PYTHON,
+            },
+        }
+        for changed_path in projects:
+            with self.subTest(path=changed_path):
+                drifted = {path: dict(project) for path, project in projects.items()}
+                drifted[changed_path]["requires-python"] = ">=3.10"
+                with mock.patch(
+                    "scripts.native.validate_release_artifacts._project_metadata",
+                    side_effect=lambda path: drifted[path],
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "requires-python must be"):
+                        check_source_metadata()
+
     def test_release_workflow_supports_non_publishing_full_build(self) -> None:
         workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"
@@ -58,6 +90,7 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                 "Metadata-Version: 2.4\n"
                 "Name: renewable-huber-native-cpu\n"
                 "Version: 0.6.0\n"
+                "Requires-Python: >=3.10, <3.13\n"
                 "Requires-Dist: renewable-huber==0.6.0\n\n"
             )
             with zipfile.ZipFile(wheel, "w") as archive:
@@ -70,7 +103,9 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                     "renewable_huber_native_cpu-0.6.0.dist-info/licenses/NOTICE", "notice"
                 )
             errors = _check_native_wheel(
-                read_wheel_metadata(wheel), kind="cpu", expected_version="0.6.0"
+                read_wheel_metadata(wheel),
+                kind="cpu",
+                expected_version="0.6.0",
             )
             self.assertEqual(errors, [])
 
@@ -81,14 +116,19 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                 "Metadata-Version: 2.4\n"
                 "Name: renewable-huber-native-cuda\n"
                 "Version: 0.5.0\n"
+                "Requires-Python: >=3.9\n"
                 "Requires-Dist: renewable-huber>=0.5\n\n"
             )
             with zipfile.ZipFile(wheel, "w") as archive:
                 archive.writestr("renewable_huber_native_cuda-0.5.0.dist-info/METADATA", metadata)
             errors = _check_native_wheel(
-                read_wheel_metadata(wheel), kind="cuda", expected_version="0.6.0"
+                read_wheel_metadata(wheel),
+                kind="cuda",
+                expected_version="0.6.0",
+                expected_requires_python=SUPPORTED_PYTHON,
             )
             self.assertTrue(any("Version" in error for error in errors))
+            self.assertTrue(any("Requires-Python" in error for error in errors))
             self.assertTrue(any("exact base dependency" in error for error in errors))
             self.assertTrue(any("compiled extension" in error for error in errors))
 
@@ -106,7 +146,8 @@ class NativeReleaseMetadataTests(unittest.TestCase):
             with zipfile.ZipFile(wheel, "w") as archive:
                 archive.writestr(
                     f"renewable_huber-{version}.dist-info/METADATA",
-                    f"Metadata-Version: 2.4\nName: renewable-huber\nVersion: {version}\n\n",
+                    f"Metadata-Version: 2.4\nName: renewable-huber\nVersion: {version}\n"
+                    f"Requires-Python: {SUPPORTED_PYTHON}\n\n",
                 )
 
             with self.assertRaisesRegex(RuntimeError, "expected one base sdist"):
@@ -122,7 +163,8 @@ class NativeReleaseMetadataTests(unittest.TestCase):
             with tarfile.open(sdist, "w:gz") as archive:
                 files = {
                     f"renewable_huber-{version}/PKG-INFO": (
-                        f"Metadata-Version: 2.4\nName: renewable-huber\nVersion: {version}\n\n"
+                        f"Metadata-Version: 2.4\nName: renewable-huber\nVersion: {version}\n"
+                        f"Requires-Python: {SUPPORTED_PYTHON}\n\n"
                     ).encode(),
                     f"renewable_huber-{version}/LICENSE": b"license",
                     f"renewable_huber-{version}/NOTICE": b"notice",
@@ -140,6 +182,80 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                 expected_cuda=0,
             )
             self.assertEqual(result["base_sdists"], 1)
+
+    def test_base_artifacts_reject_python_range_drift(self) -> None:
+        version = check_source_metadata()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base_dir = root / "base"
+            cpu_dir = root / "cpu"
+            cuda_dir = root / "cuda"
+            base_dir.mkdir()
+            cpu_dir.mkdir()
+            cuda_dir.mkdir()
+
+            wheel = base_dir / f"renewable_huber-{version}-py3-none-any.whl"
+            metadata = (
+                f"Metadata-Version: 2.4\n"
+                f"Name: renewable-huber\n"
+                f"Version: {version}\n"
+                "Requires-Python: >=3.10\n\n"
+            )
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(f"renewable_huber-{version}.dist-info/METADATA", metadata)
+
+            sdist = base_dir / f"renewable_huber-{version}.tar.gz"
+            with tarfile.open(sdist, "w:gz") as archive:
+                files = {
+                    f"renewable_huber-{version}/PKG-INFO": (
+                        f"Metadata-Version: 2.4\n"
+                        f"Name: renewable-huber\n"
+                        f"Version: {version}\n"
+                        "Requires-Python: >=3.10\n\n"
+                    ).encode(),
+                    f"renewable_huber-{version}/LICENSE": b"license",
+                    f"renewable_huber-{version}/NOTICE": b"notice",
+                }
+                for name, contents in files.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(contents)
+                    archive.addfile(info, BytesIO(contents))
+
+            with self.assertRaisesRegex(RuntimeError, "Requires-Python"):
+                check_wheel_set(
+                    base_dir=base_dir,
+                    cpu_dir=cpu_dir,
+                    cuda_dir=cuda_dir,
+                    expected_cpu=0,
+                    expected_cuda=0,
+                )
+
+    def test_native_wheels_requires_python_must_match_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "renewable_huber_native_cpu-0.6.0-cp312-cp312-win_amd64.whl"
+            metadata = (
+                "Metadata-Version: 2.4\n"
+                "Name: renewable-huber-native-cpu\n"
+                "Version: 0.6.0\n"
+                "Requires-Python: >=3.9\n"
+                "Requires-Dist: renewable-huber==0.6.0\n\n"
+            )
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr("renewable_huber_native_cpu-0.6.0.dist-info/METADATA", metadata)
+                archive.writestr("_renewable_huber_native_cpu.pyd", b"extension")
+                archive.writestr(
+                    "renewable_huber_native_cpu-0.6.0.dist-info/licenses/LICENSE", "license"
+                )
+                archive.writestr(
+                    "renewable_huber_native_cpu-0.6.0.dist-info/licenses/NOTICE", "notice"
+                )
+            errors = _check_native_wheel(
+                read_wheel_metadata(wheel),
+                kind="cpu",
+                expected_version="0.6.0",
+                expected_requires_python=SUPPORTED_PYTHON,
+            )
+            self.assertTrue(any("Requires-Python" in error for error in errors))
 
 
 if __name__ == "__main__":
