@@ -122,6 +122,9 @@ retained as an immutable historical record rather than moved or reused.
   performance remain local-only.
 - Replaced the retired macOS 13 x86-64 release runner with macOS 15 Intel and
   moved the Apple Silicon release wheel to macOS 15.
+- Restricted `Requires-Python` to the tested CPython 3.10–3.12 range across
+  the base, native CPU and native CUDA distributions, with fail-closed source
+  and artifact metadata validation.
 
 ### Security
 

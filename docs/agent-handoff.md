@@ -36,6 +36,30 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-10 — Claude Code / Codex — Python release metadata boundary
+
+- Base SHA / branch: `dedf5160e2ac00605b18a2fc0f08181bcac053e9` on
+  `agent/release-python-range`, implemented by Claude Code and corrected and
+  accepted by Codex.
+- Scope and decisions: all three distributions now declare
+  `Requires-Python: >=3.10,<3.13`, matching the documented and tested CPython
+  3.10–3.12 range. The release validator rejects source, wheel or base sdist
+  metadata that omits or changes that exact contract while preserving the
+  existing `check_source_metadata()` return type.
+- Files changed: three `pyproject.toml` files, release artifact validator and
+  tests, `CHANGELOG.md`, and this hand-off.
+- Verification run: Python discover **413 / 43 skips**, required core
+  **300 / 3 skips**, and local CUDA **35 / 2 skips** pass. Metadata tests
+  **9/9**, Ruff check/format, source-only validation and `git diff --check`
+  pass. Actual Hatchling base wheel/sdist and Maturin CPU/CUDA wheels pass
+  Twine and the complete local artifact validator; it accepts the equivalent
+  Hatchling `<3.13,>=3.10` and Maturin `>=3.10, <3.13` serializations.
+- Known risks or unresolved questions: Python 3.13+ can be enabled in a future
+  release only after expanding CI, native wheel matrices and compatibility
+  documentation together.
+- Requested next action / owner: Codex completes validation, publishes the fix
+  PR, reruns all 20 artifacts, then tags and publishes 0.6.1.
+
 ### 2026-08-09 — Codex — hosted release runner compatibility
 
 - Base SHA / branch: `06edd37cb5fc51b497b883006ea8a0011c98a5d0` on

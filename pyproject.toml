@@ -7,7 +7,7 @@ name = "renewable-huber"
 dynamic = ["version"]
 description = "Renewable Huber regression for robust streaming-data estimation."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Renewable Huber contributors" }]

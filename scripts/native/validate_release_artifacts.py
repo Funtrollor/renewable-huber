@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by the Python 3.10 C
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BASE_NAME = "renewable-huber"
+SUPPORTED_PYTHON = ">=3.10,<3.13"
 NATIVE_PROJECTS = {
     "cpu": ("renewable-huber-native-cpu", "_renewable_huber_native_cpu"),
     "cuda": ("renewable-huber-native-cuda", "_renewable_huber_native_cuda"),
@@ -30,6 +31,7 @@ class WheelMetadata:
     name: str
     version: str
     requires_dist: tuple[str, ...]
+    requires_python: str | None
     members: tuple[str, ...]
 
 
@@ -50,7 +52,7 @@ def native_workspace_version(root: Path = PROJECT_ROOT) -> str:
 
 
 def check_source_metadata(root: Path = PROJECT_ROOT) -> str:
-    """Require all separately published projects to use one exact release version."""
+    """Require one exact version, dependency, and supported Python range."""
 
     version = base_version(root)
     expected_dependency = f"{BASE_NAME}=={version}"
@@ -61,6 +63,15 @@ def check_source_metadata(root: Path = PROJECT_ROOT) -> str:
             f"native/Cargo.toml: workspace engine version {engine_version!r} "
             f"must equal base version {version!r}"
         )
+
+    base_project = _project_metadata(root / "pyproject.toml")
+    base_requires_python = base_project.get("requires-python")
+    if base_requires_python != SUPPORTED_PYTHON:
+        errors.append(
+            f"{root / 'pyproject.toml'}: requires-python must be {SUPPORTED_PYTHON!r}, "
+            f"got {base_requires_python!r}"
+        )
+
     for kind, (expected_name, _) in NATIVE_PROJECTS.items():
         path = root / "native" / f"python-{kind}" / "pyproject.toml"
         project = _project_metadata(path)
@@ -71,6 +82,12 @@ def check_source_metadata(root: Path = PROJECT_ROOT) -> str:
         dependencies = tuple(str(item) for item in project.get("dependencies", []))
         if dependencies != (expected_dependency,):
             errors.append(f"{path}: dependencies must be [{expected_dependency!r}]")
+        native_requires_python = project.get("requires-python")
+        if native_requires_python != SUPPORTED_PYTHON:
+            errors.append(
+                f"{path}: requires-python must be {SUPPORTED_PYTHON!r}, "
+                f"got {native_requires_python!r}"
+            )
     if errors:
         raise RuntimeError(
             "Native release source metadata is inconsistent:\n- " + "\n- ".join(errors)
@@ -92,11 +109,12 @@ def read_wheel_metadata(path: Path) -> WheelMetadata:
         name=str(message["Name"]),
         version=str(message["Version"]),
         requires_dist=tuple(message.get_all("Requires-Dist", [])),
+        requires_python=message.get("Requires-Python"),
         members=members,
     )
 
 
-def read_sdist_metadata(path: Path) -> tuple[str, str, tuple[str, ...]]:
+def read_sdist_metadata(path: Path) -> tuple[str, str, str | None, tuple[str, ...]]:
     """Return the core metadata and members from one gzipped source distribution."""
 
     with tarfile.open(path, "r:gz") as archive:
@@ -108,11 +126,19 @@ def read_sdist_metadata(path: Path) -> tuple[str, str, tuple[str, ...]]:
         if extracted is None:
             raise RuntimeError(f"{path}: unable to read {metadata_members[0]}")
         message = email.message_from_bytes(extracted.read())
-    return str(message["Name"]), str(message["Version"]), members
+    return str(message["Name"]), str(message["Version"]), message.get("Requires-Python"), members
 
 
 def _normalized_requirement(requirement: str) -> str:
     return "".join(requirement.lower().split())
+
+
+def _matches_python_requirement(requirement: str | None, expected: str) -> bool:
+    if requirement is None:
+        return False
+    actual = tuple(sorted(part.strip() for part in requirement.split(",")))
+    expected_parts = tuple(sorted(part.strip() for part in expected.split(",")))
+    return actual == expected_parts
 
 
 def _check_native_wheel(
@@ -120,6 +146,7 @@ def _check_native_wheel(
     *,
     kind: str,
     expected_version: str,
+    expected_requires_python: str,
 ) -> list[str]:
     expected_name, module_name = NATIVE_PROJECTS[kind]
     errors: list[str] = []
@@ -128,6 +155,11 @@ def _check_native_wheel(
     if wheel.version != expected_version:
         errors.append(
             f"{wheel.path.name}: Version is {wheel.version!r}, expected {expected_version!r}"
+        )
+    if not _matches_python_requirement(wheel.requires_python, expected_requires_python):
+        errors.append(
+            f"{wheel.path.name}: Requires-Python is {wheel.requires_python!r}, "
+            f"expected {expected_requires_python!r}"
         )
     exact_requirement = _normalized_requirement(f"{BASE_NAME}=={expected_version}")
     requirements = {_normalized_requirement(value) for value in wheel.requires_dist}
@@ -179,23 +211,45 @@ def check_wheel_set(
             errors.append(
                 f"{base.path.name}: expected {BASE_NAME} {version}, got {base.name} {base.version}"
             )
+        if not _matches_python_requirement(base.requires_python, SUPPORTED_PYTHON):
+            errors.append(
+                f"{base.path.name}: Requires-Python is {base.requires_python!r}, "
+                f"expected {SUPPORTED_PYTHON!r}"
+            )
     if len(base_sdists) == 1:
-        sdist_name, sdist_version, sdist_members = read_sdist_metadata(base_sdists[0])
+        sdist_name, sdist_version, sdist_requires_python, sdist_members = read_sdist_metadata(
+            base_sdists[0]
+        )
         if sdist_name != BASE_NAME or sdist_version != version:
             errors.append(
                 f"{base_sdists[0].name}: expected {BASE_NAME} {version}, "
                 f"got {sdist_name} {sdist_version}"
+            )
+        if not _matches_python_requirement(sdist_requires_python, SUPPORTED_PYTHON):
+            errors.append(
+                f"{base_sdists[0].name}: Requires-Python is {sdist_requires_python!r}, "
+                f"expected {SUPPORTED_PYTHON!r}"
             )
         for legal_name in ("LICENSE", "NOTICE"):
             if not any(member.endswith(f"/{legal_name}") for member in sdist_members):
                 errors.append(f"{base_sdists[0].name}: missing top-level {legal_name}")
     for path in cpu_wheels:
         errors.extend(
-            _check_native_wheel(read_wheel_metadata(path), kind="cpu", expected_version=version)
+            _check_native_wheel(
+                read_wheel_metadata(path),
+                kind="cpu",
+                expected_version=version,
+                expected_requires_python=SUPPORTED_PYTHON,
+            )
         )
     for path in cuda_wheels:
         errors.extend(
-            _check_native_wheel(read_wheel_metadata(path), kind="cuda", expected_version=version)
+            _check_native_wheel(
+                read_wheel_metadata(path),
+                kind="cuda",
+                expected_version=version,
+                expected_requires_python=SUPPORTED_PYTHON,
+            )
         )
 
     all_names = [path.name for path in [*base_wheels, *base_sdists, *cpu_wheels, *cuda_wheels]]
@@ -206,6 +260,7 @@ def check_wheel_set(
         raise RuntimeError("Native release artifacts failed validation:\n- " + "\n- ".join(errors))
     return {
         "version": version,
+        "requires_python": SUPPORTED_PYTHON,
         "base_wheels": len(base_wheels),
         "base_sdists": len(base_sdists),
         "cpu_wheels": len(cpu_wheels),
@@ -223,7 +278,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-cuda", type=int)
     args = parser.parse_args(argv)
     if args.source_only:
-        print(f"Native source metadata is consistent for {check_source_metadata()}.")
+        version = check_source_metadata()
+        print(
+            f"Native source metadata is consistent for {version} "
+            f"(requires-python: {SUPPORTED_PYTHON})."
+        )
         return 0
     missing = [name for name in ("base_dir", "cpu_dir", "cuda_dir") if getattr(args, name) is None]
     if missing:
@@ -237,8 +296,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(
         (
-            "Validated release {version}: base wheel={base_wheels}, "
-            "sdist={base_sdists}, CPU={cpu_wheels}, CUDA={cuda_wheels}"
+            "Validated release {version} (requires-python: {requires_python}): "
+            "base wheel={base_wheels}, sdist={base_sdists}, CPU={cpu_wheels}, CUDA={cuda_wheels}"
         ).format(**result)
     )
     return 0
