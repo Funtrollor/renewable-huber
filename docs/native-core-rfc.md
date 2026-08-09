@@ -1,8 +1,8 @@
 # RFC 0001: Native Rust and CUDA core
 
-- Status: Accepted for implementation
+- Status: Delivered and accepted
 - Scope: P0 contracts and measurement baseline
-- Target milestone: post-0.5 native engine
+- Delivered milestone: 0.6.1 native engine distributions
 - Public API owner: `renewable_huber.estimator`
 
 ## Decision
@@ -57,8 +57,8 @@ device, and reduce synchronization without changing the statistical method.
 5. Keep coefficients, information matrix, handles, and workspaces resident on
    the selected CUDA device across batches.
 6. Support strict `float32` and `float64` execution.
-7. Publish installable CPU wheels and an independently versioned CUDA 12
-   runtime package.
+7. Publish installable CPU and CUDA 12 wheels whose distributions share the
+   base release version and depend on that exact version.
 8. Measure speed with reproducible records rather than single headline
    timings.
 
@@ -135,8 +135,9 @@ the CUDA C ABI.
 P1 is delivered as an independently installable
 `renewable-huber-native-cpu` distribution. Its extension module is
 `_renewable_huber_native_cpu`, and users opt in with
-`backend="native_cpu"`. The automatic CPU selector remains NumPy until
-published benchmark records justify promotion.
+`backend="native_cpu"`. Since PR #29, the automatic CPU selector may choose
+this engine from bounded, process-local runtime evidence; it falls back to
+NumPy conservatively and never persists a machine-specific map.
 
 The P1 dense-solver boundary uses a portable partial-pivot LU implementation
 with a minimum-norm SVD fallback. The provider is replaceable without changing

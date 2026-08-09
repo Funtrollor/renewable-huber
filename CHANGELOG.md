@@ -8,8 +8,11 @@ stabilised.
 
 ## [Unreleased]
 
-The next minor release is `0.6.0`; the published stable package remains
-`0.5.1` until this native-core work is released.
+## [0.6.1] - 2026-08-09
+
+This is the first published native-core release. The earlier `v0.6.0` tag did
+not complete its artifact workflow and was never published to PyPI; its tag is
+retained as an immutable historical record rather than moved or reused.
 
 ### Added
 
@@ -102,6 +105,23 @@ The next minor release is `0.6.0`; the published stable package remains
 - Native performance gates now reject non-finite or unconverged measurements,
   fingerprint native providers and CUDA drivers, and refuse to mix different
   dataset or solver contracts in one dispatch decision.
+- The Rust workspace now requires Rust 1.83 and uses PyO3 0.29 plus rust-numpy
+  0.29, closing the three PyO3 advisories reported against the previous lockfile.
+- Release and TestPyPI source validation use required unittest profiles rather
+  than allowing missing dependencies to appear as successful all-skip suites.
+
+### Fixed
+
+- Corrected the manylinux release matrix so x86-64 and aarch64 CPU wheels pass
+  the intended Rust target to Maturin.
+- Synchronized the public documentation with CPU auto-dispatch, exact native
+  package dependencies, measured schema-v2 performance ranges, WSL2-first
+  development and local-only GPU validation.
+
+### Security
+
+- Upgraded PyO3 from 0.23 to the patched 0.29 series, addressing
+  GHSA-36hh-v3qg-5jq4, GHSA-chgr-c6px-7xpp and GHSA-pph8-gcv7-4qj5.
 
 ## [0.5.1] - 2026-07-28
 
@@ -130,6 +150,7 @@ The next minor release is `0.6.0`; the published stable package remains
 
 - Documented private vulnerability reporting and supported-version policy.
 
-[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.1...v0.6.1
 [0.5.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Funtrollor/renewable-huber/releases/tag/v0.5.0

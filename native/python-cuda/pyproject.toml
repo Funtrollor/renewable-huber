@@ -4,14 +4,14 @@ build-backend = "maturin"
 
 [project]
 name = "renewable-huber-native-cuda"
-version = "0.6.0"
+version = "0.6.1"
 description = "Optional Rust/CUDA 12 native engine for renewable-huber."
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 authors = [{ name = "Renewable Huber contributors" }]
-dependencies = ["renewable-huber==0.6.0"]
+dependencies = ["renewable-huber==0.6.1"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Programming Language :: Python :: 3",

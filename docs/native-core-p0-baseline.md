@@ -1,5 +1,8 @@
 # Native-core P0 baseline
 
+> Historical pre-native capture only. These measurements do not describe the
+> 0.6.1 release and must not be used as current performance headlines.
+
 This document records the pre-native correctness and performance baseline. It
 is a comparison point for the Rust CPU and CUDA engines, not a general
 throughput promise.

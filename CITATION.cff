@@ -3,10 +3,16 @@ message: "If you use this software, please cite both the software and the prefer
 title: "renewable-huber"
 type: software
 license: "Apache-2.0"
+version: "0.6.1"
+date-released: "2026-08-09"
 authors:
   - name: "Funtrollor"
 repository-code: "https://github.com/Funtrollor/renewable-huber"
 url: "https://github.com/Funtrollor/renewable-huber"
+identifiers:
+  - type: url
+    value: "https://pypi.org/project/renewable-huber/0.6.1/"
+    description: "PyPI release"
 abstract: >-
   A CPU- and GPU-capable implementation of renewable Huber regression for
   robust estimation over streaming datasets.

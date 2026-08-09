@@ -1,4 +1,4 @@
-# v0.5 支援矩陣
+# v0.6.1 支援矩陣
 
 本頁描述目前程式碼的公開契約，不代表所有框架或硬體組合都經過同等程度的 CI 驗證。所有 backend 僅接受 `float32` 或 `float64`；套件不會暗中啟用 float16、bfloat16 或 Tensor Core reduced precision。
 
@@ -7,9 +7,9 @@
 | Backend | CPU | GPU | dtype | 作業系統範圍 | 安裝 extra | `predict` 回傳型別 | 主要限制 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `numpy` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；三者均進行基線 CI | 無（基礎安裝） | `numpy.ndarray` | `device="cuda"` 會直接報錯；效能取決於 NumPy 連結的 BLAS/LAPACK。 |
-| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.12；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.0` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。可由 `auto` 在 CPU 上選取，但僅在批次夠大且本機執行期量測支持時；要固定使用請明確指定。安裝 wheel 不需本機 Rust toolchain。 |
+| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.12；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.1` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。可由 `auto` 在 CPU 上選取，但僅在批次夠大且本機執行期量測支持時；要固定使用請明確指定。安裝 wheel 不需本機 Rust toolchain。 |
 | `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；GPU correctness 與效能在固定本機主機驗證 | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
-| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.12、Windows x86-64 CUDA 12 wheel；本機固定 GPU 驗證 | `renewable-huber-native-cuda==0.6.0` | `numpy.ndarray`; CuPy、PyTorch CUDA、TensorFlow eager GPU tensor | Python API v3。Opt-in whole-batch engine；device update 使用同裝置、完全相同 dtype、C-contiguous DLPack，絕不經 host staging；`penalty="none"` only；device-resident `predict` 尚未支援。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不需本機 nvcc，但需要 NVIDIA driver 與 CUDA 12 runtime DLL。 |
+| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.12、Windows x86-64 CUDA 12 wheel；本機固定 GPU 驗證 | `renewable-huber-native-cuda==0.6.1` | `numpy.ndarray` | Python API v3。Opt-in whole-batch engine；更新可接收 host NumPy，或同裝置、完全相同 dtype、C-contiguous 的 CuPy／PyTorch／TensorFlow eager DLPack input，絕不經 host staging；`predict` 目前只接受 host input 並回傳 NumPy；`penalty="none"` only。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不需本機 nvcc，但需要 NVIDIA driver 與 CUDA 12 runtime DLL。 |
 | `torch` | 是 | NVIDIA CUDA | `float32`, `float64` | CPU：Linux／Windows／macOS；CUDA：依 PyTorch wheel 支援的 Linux／Windows | `gpu-torch` | `torch.Tensor` | `device="auto"` 使用 CPU；輸入會 detach、移至指定裝置並轉 dtype，不提供 autograd layer，也不支援 MPS device。 |
 | `tensorflow` | 是 | TensorFlow 可見的 CUDA GPU | `float32`, `float64` | 依 TensorFlow wheel；CPU backend CI 在 Linux，CUDA 通常為 Linux／WSL2 環境 | `gpu-tensorflow` | `tensorflow.Tensor` | 僅 eager execution，不可直接在 `tf.function` 內使用；`device="auto"` 使用 CPU；不支援 Metal/MPS device。 |
 
@@ -78,7 +78,8 @@ checkpoint 還原後的第一個批次）決定使用 NumPy 或 `native_cpu`，�
   拋出。fitted estimator 以 `auto_dispatch_` 回報實際決策與理由。
 
 明確指定 `backend="numpy"` 或 `backend="native_cpu"` 完全不觸發這套機制，
-明確要求的 `native_cpu` 失敗時仍會拋出 `BackendUnavailableError`。
+明確要求的 `native_cpu` 不會靜默降級；依失敗位置可能拋出
+`BackendUnavailableError`、`BackendContractError`、`ValidationError` 或底層執行例外。
 checkpoint 只保存 `backend="auto"`，不保存任何量測結果，因此還原後會在新主機
 上重新判斷。完整設計與成本推導見
 [CPU auto-dispatch RFC](cpu-auto-dispatch-rfc.md)。
@@ -87,7 +88,7 @@ checkpoint 只保存 `backend="auto"`，不保存任何量測結果，因此還�
 
 ## 輸入整合
 
-| 輸入／整合 | v0.5 狀態 | 限制 |
+| 輸入／整合 | v0.6.1 狀態 | 限制 |
 | --- | --- | --- |
 | NumPy array／一般 array-like | 支援 | `X` 必須為非空二維有限數值，`y` 會 reshape 成一維且長度必須相同。 |
 | pandas DataFrame／Series | 支援 `.to_numpy()` 轉換；可安裝 `pandas` extra | 若 DataFrame 欄名全為字串，第一次訓練會記錄欄名，後續 DataFrame 批次與預測會驗證名稱及順序。未命名 array 仍按位置處理。GPU backend 會先經 NumPy，再複製到裝置。 |

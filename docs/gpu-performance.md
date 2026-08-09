@@ -64,6 +64,15 @@ bash scripts/setup-wsl-venv.sh --profile cuda-full
 .venv/bin/python scripts/run_test_profile.py cuda --verbose
 ```
 
+For a release candidate, the required `cuda` profile is only the first gate.
+On the exact release SHA, also run CUDA C ABI CTest, clean-install/smoke all
+three CPython candidate CUDA wheels, capture the schema-v2 standard shape
+sweep, and run the interleaved A/B performance gate. Retain the commit SHA,
+environment fingerprint, JSON output and SHA-256 outside Git. After the release
+workflow builds the final wheels, repeat the smoke against those downloaded
+artifacts before approving PyPI. PR and general CI workflows do not run GPU
+runtime tests.
+
 The `cuda` profile is *required*: it probes CuPy and the native CUDA extension
 for a real device before loading anything and exits with status 2 when either
 is absent. That is the point. The equivalent explicit module list skips itself

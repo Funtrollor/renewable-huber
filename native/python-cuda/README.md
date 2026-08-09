@@ -1,20 +1,46 @@
 # renewable-huber-native-cuda
 
-Optional Rust/CUDA engine for `renewable-huber` 0.6.x.
+Optional Rust/CUDA 12 engine for
+[`renewable-huber`](https://github.com/Funtrollor/renewable-huber). Version
+0.6.1 requires exactly `renewable-huber==0.6.1`.
 
-The engine accepts contiguous host NumPy arrays plus C-contiguous CuPy,
-PyTorch-CUDA, and TensorFlow-eager GPU tensors through DLPack in strict
-`float32` or `float64`. DLPack inputs must already be on the selected engine
-device; dtype casts, contiguous copies, cross-device copies, and host staging
-are never implicit. CuPy/PyTorch negotiate the consumer stream directly;
-TensorFlow's legacy exporter uses an explicit producer synchronization boundary
-before zero-copy export. Device-resident prediction is not part of the current
-ABI and is rejected instead of copied to host. The engine supports
-`penalty="none"`, is selected explicitly with `backend="native_cuda"`, and is
-never selected by `backend="auto"`.
+```powershell
+python -m pip install renewable-huber-native-cuda==0.6.1
+```
 
-Building from source requires a compatible NVIDIA driver, CUDA Toolkit 12.x,
-Visual Studio 2022 C++ Build Tools on Windows, CMake, Ninja, Rust, and Maturin.
-Developer builds target the active GPU by default and are not portable release
-wheels. Published wheels require an explicit CUDA runtime and SM architecture
-policy.
+Published wheels currently support CPython 3.10–3.12 on Windows x86-64. They
+require a compatible NVIDIA driver and CUDA 12 runtime DLLs, but not Rust,
+CMake, Visual Studio or `nvcc`.
+
+```python
+from renewable_huber import RenewableHuberRegressor
+
+model = RenewableHuberRegressor(
+    backend="native_cuda",
+    device="cuda",
+    dtype="float32",
+    penalty="none",
+)
+model.fit(X, y)
+```
+
+The whole-batch engine accepts contiguous host NumPy arrays. Its update path
+also accepts C-contiguous CuPy, PyTorch-CUDA and TensorFlow-eager GPU tensors
+through DLPack in exact float32 or float64. All inputs must already be on the
+selected engine device; dtype casts, contiguous copies, cross-device copies
+and host staging are never implicit. CuPy/PyTorch negotiate the consumer stream
+directly; TensorFlow uses an explicit producer synchronization boundary before
+zero-copy export.
+
+Device-resident prediction is not part of the current ABI: `predict` accepts
+host input and returns a NumPy array. The engine currently supports
+`penalty="none"` and is always selected explicitly; `backend="auto"` never
+chooses native CUDA. See the project
+[support matrix](https://github.com/Funtrollor/renewable-huber/blob/main/docs/support-matrix.md)
+for CUDA Graph and fast-math
+limits.
+
+Source builds require CUDA Toolkit 12.x (12.8+ for the release architecture
+set), Visual Studio 2022 C++ Build Tools on Windows, CMake, Ninja, Rust and
+Maturin. Developer builds target the active GPU by default and are not portable
+release wheels.

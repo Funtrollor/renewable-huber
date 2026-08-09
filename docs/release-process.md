@@ -13,6 +13,9 @@
 不相容的組合被 pip 解析在一起。`scripts/native/validate_release_artifacts.py` 會在 CI
 同時驗證來源 metadata 與最終 wheels。
 
+`v0.6.0` tag 曾用於未完成的發布流程，沒有成為正式 PyPI release。Tag 保持不可變；
+本次完整 native release 使用 `v0.6.1`，release notes 以 `v0.5.1` 為使用者升級基線。
+
 ## Wheel 支援範圍
 
 CPU release matrix：
@@ -39,24 +42,30 @@ correctness、profiling 與 performance 驗證都在維護者的固定本機 GPU
 3. 在固定本機 GPU 主機完成 correctness、C ABI smoke 與 performance gates，保存
    commit、環境指紋和 JSON 證據；合併至 `main` 後等待一般 CI 與 CPU wheel
    clean-install 通過。
-4. 在本機先執行 metadata dry-run：
+4. 在 WSL2/Linux 本機先執行 metadata 與 required-profile dry-run：
 
-   ```powershell
-   python scripts/native/validate_release_artifacts.py --source-only
+   ```bash
+   .venv/bin/python scripts/native/validate_release_artifacts.py --source-only
+   .venv/bin/python scripts/run_test_profile.py --check
+   .venv/bin/python scripts/run_test_profile.py core --verbose
+   .venv/bin/python scripts/run_test_profile.py performance --verbose
    ```
 
-5. 從 `main` commit 建立 `vX.Y.Z` tag。Release workflow 會拒絕版本不一致或不在
-   `main` 歷史上的 tag。
-6. Workflow 建置 base wheel/sdist、15 個 CPU wheels、3 個 CUDA wheels，並執行
+5. 在 GitHub 對 `main` 手動執行 `release.yml`。這是 build-only rehearsal：建置並
+   驗證完整 20 個 artifacts，但不建立 GitHub Release，也不發布到 PyPI/TestPyPI。
+6. 從已通過一般 CI 與 build-only rehearsal 的**精確 `main` tip** 建立 `vX.Y.Z`
+   signed tag。Release workflow 會拒絕版本不一致或不是目前 `main` tip 的 tag。
+7. Workflow 建置 base wheel/sdist、15 個 CPU wheels、3 個 CUDA wheels，並執行
    Twine、metadata、ABI capability 與 artifact-set 檢查；GPU runtime 測試不在
    GitHub Actions 執行，採用第 3 步的本機證據。
-7. 完整 artifact set 通過後才建立 GitHub Release。
-8. 三個 PyPI publish jobs 分別等待對應 GitHub Environment 的人工核准，再透過
+8. 完整 artifact set 通過後才建立 GitHub Release。人工核准 PyPI 前，下載實際
+   CUDA artifacts 至固定 GPU 主機，對 artifact hash 執行最後 smoke。
+9. 三個 PyPI publish jobs 分別等待對應 GitHub Environment 的人工核准，再透過
    Trusted Publishing/OIDC 發布；不儲存長效 API token。
 
 Release tag 範例：
 
-```powershell
+```bash
 git switch main
 git pull --ff-only
 git tag -s vX.Y.Z -m "renewable-huber vX.Y.Z"
@@ -77,19 +86,24 @@ git push origin vX.Y.Z
 三個 environment 均應啟用 required reviewer。即使有人誤推 tag，artifact 仍不會在未經
 核准時上傳 PyPI。GitHub Release 可先建立供維護者下載與人工驗證。
 
+TestPyPI workflow只 rehearsal base distribution；完整三套 distribution 的建置驗證
+以 `release.yml` 的手動 build-only run 為準。正式 tag 前必須確認三個 PyPI pending
+publisher（或既有 project publisher）的 owner、repository、workflow 與 environment
+完全匹配，且 Environment tag rules 允許目標 tag。
+
 ## 安裝後驗證
 
 CPU 使用者：
 
-```powershell
-python -m pip install renewable-huber-native-cpu==X.Y.Z
+```bash
+python -m pip install renewable-huber-native-cpu==0.6.1
 python -c "from renewable_huber import RenewableHuberRegressor; print(RenewableHuberRegressor(backend='native_cpu', n_jobs=-1))"
 ```
 
 CUDA 12 使用者：
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==X.Y.Z
+python -m pip install renewable-huber-native-cuda==0.6.1
 python -c "from renewable_huber import _native_cuda; print(_native_cuda.version()); print(_native_cuda.is_available())"
 ```
 

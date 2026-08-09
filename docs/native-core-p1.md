@@ -21,13 +21,15 @@ RenewableHuberRegressor
 ```
 
 The native distribution is optional. The base `renewable-huber` wheel remains
-pure Python and `backend="auto"` continues to select NumPy on CPU. An explicit
+pure Python. When this wheel is installed, CPU `backend="auto"` may select it
+from bounded host-local runtime evidence; without decisive evidence it remains
+on NumPy. An explicit
 `backend="native_cpu"` request raises `BackendUnavailableError` if the native
 wheel is absent or its ABI/API versions do not match.
 
-The first compatible base release is `renewable-huber` 0.6.0. The native wheel
-declares `renewable-huber>=0.6.0,<0.7` so it cannot be paired silently with the
-published 0.5.1 API, which predates the `native_cpu` selector.
+The first published compatible base release is `renewable-huber` 0.6.1. The
+native wheel declares exactly `renewable-huber==0.6.1`, so plugin and public
+API/checkpoint contracts cannot drift independently.
 
 ## P1 numerical scope
 

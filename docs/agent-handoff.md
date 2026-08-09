@@ -36,6 +36,47 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-09 — Codex — 0.6.1 release candidate and native dependency hardening
+
+- Base SHA / branch: `b29b394d46de2c6f4b4382e898978ddddc6a12f0` on
+  `agent/release-0.6.1`; release worktree is
+  `build/workspaces/codex-release-0.6.1`.
+- Scope and decisions: release as `0.6.1` because the immutable `v0.6.0` tag
+  belongs to an incomplete historical run. Base, Rust workspace, CPU plugin
+  and CUDA plugin now share 0.6.1. PyO3/rust-numpy move to 0.29, MSRV to Rust
+  1.83, deprecated GIL release calls to `Python::detach`, and both modules
+  explicitly declare `gil_used=true`; CUDA C ABI 1, Python APIs 2/3,
+  algorithms, streams and checkpoint v2 are unchanged. Release workflow gains
+  required profiles, base sdist smoke, exact-main enforcement and a manual
+  full-matrix build-only mode; publishing remains tag-only. Native CPU/CUDA
+  GitHub environments were created with the Funtrollor reviewer and `v*` tag
+  policy. Public documentation, security/citation metadata, community templates
+  and dependency monitoring were synchronized for 0.6.1.
+- Files changed: version and native dependency metadata; two PyO3 bindings;
+  release/TestPyPI/CI workflows; release artifact validator and tests; all
+  current public API, architecture, support, performance, release, governance
+  and native distribution documentation. Historical hand-off entries and raw
+  benchmark data were not rewritten.
+- Verification run: Python discover **410 tests / 43 skips**, required core
+  **297 / 3**, performance **54**, native-cpu **19**, and local RTX 5070 Ti
+  CUDA **35 / 2** all pass. Ruff check/format, profile membership, four-case
+  golden corpus, source metadata, C++ ABI syntax, Rust fmt/clippy/check and 14
+  scoped Rust tests pass. CUDA 12.9 CTest is **1/1**. Base wheel/sdist and local
+  CPython 3.12 CPU/CUDA candidate wheels pass Twine, clean install, `pip check`
+  and runtime smoke; engine versions report 0.6.1. Local environment: Python
+  3.12.3, NumPy 2.5.1, RTX 5070 Ti, driver 596.49, CUDA 12.9. Candidate hashes:
+  base wheel `57d9d219...efdd430`, sdist `98d5a74d...374446`, CPU wheel
+  `3ce0cf0e...8b163`, CUDA wheel `70cfdd99...ac2cf6`.
+- Known risks or unresolved questions: local native wheels are WSL development
+  artifacts, not the manylinux/Windows release set. The manual `release.yml`
+  build-only run must produce and validate 1 base wheel, 1 sdist, 15 CPU wheels
+  and 3 Windows CUDA wheels from merged `main`. PyPI pending-publisher settings
+  are account-side and become observable only when OIDC publish runs; do not
+  move the old `v0.6.0` tag or retry already-uploaded distributions.
+- Requested next action / owner: Codex commits, pushes and opens the release PR;
+  after CI/merge, Codex runs the full build-only workflow on exact `main`, tags
+  `v0.6.1`, validates release artifacts, and completes staged PyPI approvals.
+
 ### 2026-08-09 — Codex — CPU auto-dispatch acceptance
 
 - Base SHA / branch: `a6e8a250bc103996a8d4c634261ea4540517a1e9`, reviewed in

@@ -12,6 +12,7 @@ from scripts.native.validate_release_artifacts import (
     base_version,
     check_source_metadata,
     check_wheel_set,
+    native_workspace_version,
     read_wheel_metadata,
 )
 
@@ -31,6 +32,15 @@ class NativeReleaseMetadataTests(unittest.TestCase):
 
     def test_source_projects_match_base_release_exactly(self) -> None:
         self.assertEqual(check_source_metadata(), base_version())
+        self.assertEqual(native_workspace_version(), base_version())
+
+    def test_release_workflow_supports_non_publishing_full_build(self) -> None:
+        workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("github.event_name == 'push' && github.ref_type == 'tag'", workflow)
+        self.assertIn('test "$GITHUB_SHA" = "$(git rev-parse origin/main)"', workflow)
 
     def test_valid_native_wheel_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -76,17 +86,18 @@ class NativeReleaseMetadataTests(unittest.TestCase):
     def test_complete_set_requires_base_sdist(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            version = base_version()
             base_dir = root / "base"
             cpu_dir = root / "cpu"
             cuda_dir = root / "cuda"
             base_dir.mkdir()
             cpu_dir.mkdir()
             cuda_dir.mkdir()
-            wheel = base_dir / "renewable_huber-0.6.0-py3-none-any.whl"
+            wheel = base_dir / f"renewable_huber-{version}-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
                 archive.writestr(
-                    "renewable_huber-0.6.0.dist-info/METADATA",
-                    "Metadata-Version: 2.4\nName: renewable-huber\nVersion: 0.6.0\n\n",
+                    f"renewable_huber-{version}.dist-info/METADATA",
+                    f"Metadata-Version: 2.4\nName: renewable-huber\nVersion: {version}\n\n",
                 )
 
             with self.assertRaisesRegex(RuntimeError, "expected one base sdist"):
@@ -98,14 +109,14 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                     expected_cuda=0,
                 )
 
-            sdist = base_dir / "renewable_huber-0.6.0.tar.gz"
+            sdist = base_dir / f"renewable_huber-{version}.tar.gz"
             with tarfile.open(sdist, "w:gz") as archive:
                 files = {
-                    "renewable_huber-0.6.0/PKG-INFO": (
-                        b"Metadata-Version: 2.4\nName: renewable-huber\nVersion: 0.6.0\n\n"
-                    ),
-                    "renewable_huber-0.6.0/LICENSE": b"license",
-                    "renewable_huber-0.6.0/NOTICE": b"notice",
+                    f"renewable_huber-{version}/PKG-INFO": (
+                        f"Metadata-Version: 2.4\nName: renewable-huber\nVersion: {version}\n\n"
+                    ).encode(),
+                    f"renewable_huber-{version}/LICENSE": b"license",
+                    f"renewable_huber-{version}/NOTICE": b"notice",
                 }
                 for name, contents in files.items():
                     info = tarfile.TarInfo(name)

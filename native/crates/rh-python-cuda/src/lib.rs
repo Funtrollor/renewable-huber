@@ -287,8 +287,7 @@ impl NativeCudaEngine {
     }
 
     fn synchronize(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| self.engine.synchronize())
-            .map_err(to_py_error)
+        py.detach(|| self.engine.synchronize()).map_err(to_py_error)
     }
 }
 
@@ -336,7 +335,7 @@ fn version<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     Ok(result)
 }
 
-#[pymodule]
+#[pymodule(gil_used = true)]
 fn _renewable_huber_native_cuda(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeCudaEngine>()?;
     module.add_function(wrap_pyfunction!(is_available, module)?)?;
@@ -373,8 +372,7 @@ fn restore_typed<T: CudaScalar + numpy::Element + Send + Sync>(
         previous_lambda,
         weight_sum,
     };
-    py.allow_threads(|| engine.restore(state))
-        .map_err(to_py_error)
+    py.detach(|| engine.restore(state)).map_err(to_py_error)
 }
 
 fn update_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
@@ -414,7 +412,7 @@ fn update_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
     let mut coefficients = vec![T::default(); n_parameters];
     let mut information = vec![T::default(); information_len];
     let (diagnostics, metadata) = py
-        .allow_threads(|| {
+        .detach(|| {
             engine.update_with_state(
                 HostBatch {
                     x_design: x_matrix,
@@ -490,7 +488,7 @@ fn update_device_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sy
     // producer deleters run only after the CUDA ABI has completed its D2D
     // copies and committed the state.
     let (diagnostics, metadata) = py
-        .allow_threads(|| {
+        .detach(|| {
             engine.update_device_with_state::<T>(batch, config, &mut coefficients, &mut information)
         })
         .map_err(to_py_error)?;
@@ -513,7 +511,7 @@ fn predict_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
     let x_values = contiguous_matrix(&x_design.0, "X_design")?;
     let matrix = HostMatrix::new(x_values, x_design.1, x_design.2).map_err(to_py_error)?;
     let mut prediction = vec![T::default(); matrix.rows()];
-    py.allow_threads(|| engine.predict(matrix, &mut prediction))
+    py.detach(|| engine.predict(matrix, &mut prediction))
         .map_err(to_py_error)?;
     Ok(prediction.into_pyarray(py))
 }
@@ -529,7 +527,7 @@ fn state_dict_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>
     let mut coefficients = vec![T::default(); n_parameters];
     let mut information = vec![T::default(); information_len];
     let metadata = py
-        .allow_threads(|| engine.copy_state(&mut coefficients, &mut information))
+        .detach(|| engine.copy_state(&mut coefficients, &mut information))
         .map_err(to_py_error)?;
     state_dict_from_parts(py, n_parameters, coefficients, information, metadata)
 }

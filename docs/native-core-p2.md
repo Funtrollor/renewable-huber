@@ -1,5 +1,9 @@
 # Native core P2: CUDA whole-batch engine
 
+> This document preserves the P2 delivery history. The current 0.6.1 Python
+> payload API is version 3 after P4 added capability metadata; the C ABI remains
+> version 1.
+
 P2 moves the complete unpenalized Renewable Huber Newton update behind one
 PyO3 call. The existing Python estimator still owns input validation, pandas
 feature names, scikit-learn compatibility, public attributes, and portable
@@ -54,8 +58,9 @@ target vector is safely aliased for the duration of the native call; capsule
 ownership and the final stream completion guarantee its lifetime. Host input
 continues to use owned engine workspace.
 
-The separately built extension reports C ABI version 1 and Python payload API
-version 2. The base package checks both before creating an engine, so an
+The original P2 extension reported C ABI version 1 and Python payload API
+version 2. The current extension reports C ABI version 1 and payload API 3.
+The base package checks both before creating an engine, so an
 older or unrelated native module fails explicitly instead of reaching a
 native method or result-dictionary mismatch later. Compatible builds
 additionally advertise `device_input="dlpack"`.
@@ -117,8 +122,8 @@ model.partial_fit(X_batch, y_batch, sample_weight=batch_weights)
 prediction = model.predict(X_test)  # NumPy array in the host-input P2 adapter
 ```
 
-`backend="auto"` retains its published behavior. It does not opt users into
-an experimental native extension.
+`backend="auto"` never opts users into native CUDA. CPU auto-dispatch may
+independently choose native CPU when its host-local performance gate passes.
 
 One engine supports sequential calls from different Python threads; concurrent
 mutation of one estimator is not supported. While `partial_fit` or `predict`
@@ -131,8 +136,7 @@ transfer and solve.
 Run the CUDA differential tests after building:
 
 ```powershell
-python -m unittest tests.test_native_cuda_backend -v
-python -m unittest discover -s tests -v
+python scripts/run_test_profile.py cuda --verbose
 ```
 
 The native test replays every unpenalized case in

@@ -40,11 +40,11 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   rust-msrv:
-    name: Rust CPU core MSRV 1.82
+    name: Rust CPU core MSRV 1.83
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.82
+      - uses: dtolnay/rust-toolchain@1.83
       - name: Check locked workspace at the declared MSRV
         working-directory: native
         run: cargo check --locked --workspace --all-targets

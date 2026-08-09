@@ -19,8 +19,14 @@ jobs:
           python-version: "3.12"
       - name: Install release tools and project
         run: python -m pip install ".[dev]" twine
+      - name: Validate synchronized source metadata
+        run: python scripts/native/validate_release_artifacts.py --source-only
       - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+        run: |
+          python scripts/run_test_profile.py --check
+          python scripts/run_test_profile.py core --verbose
+          python scripts/run_test_profile.py performance --verbose
+          python -m unittest discover -s tests -v
       - name: Lint
         run: ruff check src tests scripts
       - name: Check formatting
@@ -29,6 +35,16 @@ jobs:
         run: python -m build
       - name: Validate distribution metadata
         run: python -m twine check dist/*
+      - name: Clean-install wheel and sdist
+        shell: bash
+        run: |
+          for artifact in dist/*.whl dist/*.tar.gz; do
+            smoke="$RUNNER_TEMP/testpypi-$(basename "$artifact")"
+            python -m venv "$smoke"
+            "$smoke/bin/python" -m pip install "$artifact"
+            "$smoke/bin/python" -m pip check
+            "$smoke/bin/renewable-huber" --version
+          done
       - name: Preserve release artifacts
         uses: actions/upload-artifact@v4
         with:

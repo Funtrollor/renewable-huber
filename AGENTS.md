@@ -48,8 +48,10 @@ invariants it introduces are in the list below.
   uncommitted patches into the publishing branch.
 
 Nothing in it changes an algorithm, a kernel order, stream behaviour, or a
-public API. Keep it that way: the CPU 1.45x–15.65x and CUDA 1.12x–2.04x results
-and the golden corpus must stay bit-identical.
+public API. Keep it that way: the committed schema-v2 baselines are CPU
+1.17x–15.65x (median 1.68x), CUDA host 1.04x–1.96x (median 1.35x), and CUDA
+DLPack 1.06x–2.04x (median 1.53x). Differences within about 10% on this GPU are
+noise, not a performance claim. The golden corpus must stay bit-identical.
 
 ## Things that break silently
 
@@ -236,7 +238,7 @@ cmake -S native/cuda -B build/static -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build/static && ctest --test-dir build/static --output-on-failure
 ```
 
-Rebuild the extensions with `bash scripts/setup-wsl-venv.sh --cuda`.
+Rebuild both extensions with `bash scripts/setup-wsl-venv.sh --profile cuda-full`.
 
 ## Measurement
 
