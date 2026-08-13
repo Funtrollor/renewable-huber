@@ -23,27 +23,34 @@ from scripts.native.validate_release_artifacts import (
 
 
 class NativeReleaseMetadataTests(unittest.TestCase):
-    def test_python_bootstrap_actions_are_immutable_node24_pins(self) -> None:
+    def test_workflow_actions_are_immutable_pins(self) -> None:
         workflows = Path(__file__).parents[1] / ".github" / "workflows"
         found = 0
         for path in sorted(workflows.glob("*.yml")):
             workflow = path.read_text(encoding="utf-8")
             uses = re.findall(
-                r"uses:\s+(actions/(?:checkout|setup-python))@([^\s#]+)"
-                r"(?:\s+#\s+(v\d+))?",
+                r"uses:\s+([^@\s]+)@([^\s#]+)(?:\s+#\s+([^\n]+))?",
                 workflow,
             )
+            raw_uses = re.findall(r"^\s*-?\s*uses:\s+(\S+)", workflow, flags=re.MULTILINE)
+            self.assertEqual(
+                len(uses),
+                len(raw_uses),
+                f"every action use in {path.name} must match the immutable-pin contract",
+            )
             found += len(uses)
-            for action, revision, version in uses:
+            for action, revision, declared_ref in uses:
                 with self.subTest(workflow=path.name, action=action):
                     self.assertRegex(revision, r"\A[0-9a-f]{40}\Z")
-                    self.assertRegex(version, r"\Av\d+\Z")
-                    self.assertGreaterEqual(
-                        int(version[1:]),
-                        6 if action == "actions/setup-python" else 5,
-                        "the action must use its Node.js 24 generation",
-                    )
-        self.assertGreater(found, 0, "no checkout/setup-python actions were inspected")
+                    self.assertTrue(declared_ref.strip(), "the human-readable ref is required")
+                    if action in {"actions/checkout", "actions/setup-python"}:
+                        self.assertRegex(declared_ref, r"\Av\d+\Z")
+                        self.assertGreaterEqual(
+                            int(declared_ref[1:]),
+                            6 if action == "actions/setup-python" else 5,
+                            "the action must use its Node.js 24 generation",
+                        )
+        self.assertGreater(found, 0, "no workflow actions were inspected")
 
     def test_release_workflow_has_single_manylinux_policy_source(self) -> None:
         workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "release.yml").read_text(
