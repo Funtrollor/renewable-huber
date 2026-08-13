@@ -36,6 +36,46 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-14 01:30 CST — Codex — 0.6.1 post-release audit and penalty plan
+
+- Base SHA / branch: `10fe73cdd5b84086d61cfd086fe1fd7777e16eb2`
+  (`origin/main`), `codex/post-release-audit`; release tag `v0.6.1` remains
+  untouched at `a779793135fd5c9fd4c5d495bd0a1510250ddbe2`.
+- Scope and decisions: independently audited all published files and the
+  release controls. GitHub Release and PyPI contain the same 20 filenames and
+  SHA-256 digests; all 19 wheel RECORD hash sets, Twine metadata, source/native
+  version contracts, and PyPI Integrity API provenance passed. Every file has
+  one Trusted Publishing attestation from this repository's `release.yml` and
+  the expected environment. Fresh PyPI installs passed for the base wheel and
+  Linux native CPU wheel, including `none`/`l1` and float32/64. The local
+  required CUDA profile passed outside the device-isolated sandbox on the RTX
+  5070 Ti (35 tests, 2 framework skips).
+- Corrective changes: replaced the release metadata test's duplicated exact
+  `Jimver/cuda-toolkit` SHA with a structural requirement for exactly one
+  40-hex commit pin plus semantic-version comment. The previous assertion made
+  every legitimate Dependabot action update fail nine portable jobs; PR #38
+  exposed it. Added the formal existing-penalty completion plan. Separately,
+  expanded main branch protection from 14 to all 26 CPU/portable CI contexts,
+  adding Rust quality/MSRV, nine native CPU jobs, and the required optional-CPU
+  profile. No GPU CI requirement was added.
+- Files changed: `tests/test_native_release_metadata.py`,
+  `docs/native-penalty-completion-plan.md`, and this hand-off.
+- Verification run: Python discover 415/415 with 43 documented skips; `core`
+  302 with 3 skips; `performance` 54; `native-cpu` 19; local `cuda` 35 with 2
+  optional framework skips; Ruff check and format pass; `git diff --check`
+  pass. Release validator reports base wheel 1, sdist 1, CPU 15, CUDA 3;
+  Twine passes all 20; all 20 GitHub/PyPI hashes and all 19 wheel RECORDs match.
+- Known risks or unresolved questions: the published annotated tag is unsigned,
+  but all PyPI files have keyless Trusted Publishing attestations; moving or
+  replacing the released tag would be worse and was not done. CUDA wheels remain
+  Windows x86-64 only. PR #38 stays red until this test fix reaches main and the
+  Dependabot branch is rebased/rerun. Existing v0.6.1 artifacts are immutable
+  and were not changed.
+- Requested next action / owner: Codex publishes this audit fix and plan. After
+  merge, Claude Code implements `docs/native-penalty-completion-plan.md` in a
+  dedicated worktree below `build/workspaces/`, without Git or release
+  mutations; Codex reviews and accepts each stage.
+
 ### 2026-08-10 — Claude Code — 0.6.1 published to GitHub and PyPI
 
 - Base SHA / branch: released from `a779793135fd5c9fd4c5d495bd0a1510250ddbe2`
