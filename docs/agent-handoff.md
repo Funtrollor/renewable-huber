@@ -36,6 +36,31 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-14 01:43 CST — Codex — Node 24 workflow action migration
+
+- Base SHA / branch: `30e73f3df4d782a680d7a06754595eda648eadbd`
+  (`origin/main`), `codex/actions-node24`.
+- Scope and decisions: replaced every `actions/checkout@v4` and
+  `actions/setup-python@v5` use in CI, release and TestPyPI workflows with the
+  official v7 commit pins (`3d3c42e5...` and `5fda3b95...`). This removes the
+  hosted-runner Node.js 20 deprecation path while keeping workflow dependencies
+  immutable. Added a structural guard that accepts future versions without
+  duplicating a particular SHA, but requires every occurrence to have a 40-hex
+  revision, a major-version comment and a Node.js 24-capable generation.
+- Files changed: `.github/workflows/ci.yml`, `.github/workflows/release.yml`,
+  `.github/workflows/test-pypi.yml`, `tests/test_native_release_metadata.py`,
+  and this hand-off.
+- Verification run: Python discover 416/416 with 43 optional skips; all six
+  profile memberships valid; Ruff check and format pass; release metadata 12/12;
+  Cargo fmt/clippy/check pass and the scoped Rust suite passes 14/14;
+  `git diff --check` passes. Hosted CI remains the acceptance gate for the
+  workflow-runtime change.
+- Known risks or unresolved questions: none in package code or release
+  artifacts; the workflow majors require a full hosted matrix before merge.
+- Requested next action / owner: Codex commits, opens a draft PR, waits for all
+  26 CPU/portable checks, and merges only when they are green. No release rerun
+  or version bump is required.
+
 ### 2026-08-14 01:30 CST — Codex — 0.6.1 post-release audit and penalty plan
 
 - Base SHA / branch: `10fe73cdd5b84086d61cfd086fe1fd7777e16eb2`
