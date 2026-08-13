@@ -36,6 +36,32 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-14 01:53 CST — Codex — immutable workflow action closure
+
+- Base SHA / branch: `4e036e7a3229746999c47cc905ae10c5f594faf1`
+  (`origin/main`), `codex/immutable-actions`.
+- Scope and decisions: pinned every remaining external workflow action to its
+  resolved 40-hex official commit while retaining the former ref as a comment:
+  Rust stable/MSRV, upload/download artifact, maturin and PyPI Trusted
+  Publishing. Generalised the release metadata guard from two bootstrap actions
+  to every `uses:` entry, with a count check so an unparsed line cannot silently
+  escape validation. The Node.js 24 generation check remains for checkout and
+  setup-python.
+- Files changed: `.github/workflows/ci.yml`, `.github/workflows/release.yml`,
+  `.github/workflows/test-pypi.yml`, `tests/test_native_release_metadata.py`,
+  and this hand-off.
+- Verification run: Python discover 416/416 with 43 optional skips; all six
+  profile memberships valid; release metadata 12/12; Ruff check and format;
+  `git diff --check`. Each pin was resolved from the upstream repository through
+  GitHub's Git ref API; maturin's signed annotated tag was dereferenced to its
+  commit.
+- Known risks or unresolved questions: CI exercises the Rust pins directly,
+  but release-only artifact/maturin/publish actions require a non-publishing
+  branch rehearsal before merge.
+- Requested next action / owner: Codex opens a draft PR, requires the 26-job CI
+  matrix plus a successful build-only release rehearsal, then merges. No package
+  version or published artifact changes.
+
 ### 2026-08-14 01:43 CST — Codex — Node 24 workflow action migration
 
 - Base SHA / branch: `30e73f3df4d782a680d7a06754595eda648eadbd`
