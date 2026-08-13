@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tarfile
 import tempfile
 import unittest
@@ -37,9 +38,14 @@ class NativeReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("runs-on: windows-latest\n    timeout-minutes: 60", workflow)
         self.assertIn("macos-15-intel", workflow)
         self.assertNotIn("macos-13", workflow)
-        self.assertIn(
-            "Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76",
+        cuda_toolkit_pins = re.findall(
+            r"uses:\s+Jimver/cuda-toolkit@([0-9a-f]{40})\s+#\s+v(\d+\.\d+\.\d+)",
             workflow,
+        )
+        self.assertEqual(
+            len(cuda_toolkit_pins),
+            1,
+            "the CUDA toolkit action must appear once, pinned to a commit with a version comment",
         )
         self.assertIn(
             "sub-packages: "
