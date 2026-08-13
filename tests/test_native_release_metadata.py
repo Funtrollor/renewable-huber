@@ -50,6 +50,17 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                             6 if action == "actions/setup-python" else 5,
                             "the action must use its Node.js 24 generation",
                         )
+                    artifact_minimums = {
+                        "actions/upload-artifact": 7,
+                        "actions/download-artifact": 8,
+                    }
+                    if action in artifact_minimums:
+                        self.assertRegex(declared_ref, r"\Av\d+(?:\.\d+){0,2}\Z")
+                        self.assertGreaterEqual(
+                            int(declared_ref.split(".", 1)[0][1:]),
+                            artifact_minimums[action],
+                            "the artifact action must use its Node.js 24 generation",
+                        )
         self.assertGreater(found, 0, "no workflow actions were inspected")
 
     def test_release_workflow_has_single_manylinux_policy_source(self) -> None:

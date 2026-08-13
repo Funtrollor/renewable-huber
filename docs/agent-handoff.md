@@ -36,6 +36,28 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-08-14 02:06 CST — Codex — artifact actions Node 24 correction
+
+- Base SHA / branch: `e03404882a161a8e206b00f6190da42ef9fbd762`
+  (`origin/main`), `codex/artifact-node24`.
+- Scope and decisions: the first exact-main build-only rehearsal after the
+  immutable-action change reported that artifact v4 still targets deprecated
+  Node.js 20. Cancelled that non-publishing run after source validation and
+  replaced upload v4 with v7.0.1 and download v4 with v8.0.1, both pinned to
+  their release commits. Extended the structural guard with those minimum
+  Node.js 24 generations so an immutable but obsolete pin is no longer accepted.
+- Files changed: `.github/workflows/release.yml`,
+  `.github/workflows/test-pypi.yml`, `tests/test_native_release_metadata.py`,
+  and this hand-off.
+- Verification run: release metadata, full Python discover, profile membership,
+  Ruff and hosted checks are required before merge; a second exact-main
+  build-only rehearsal is the release-workflow acceptance gate.
+- Known risks or unresolved questions: none beyond hosted validation; the
+  cancelled rehearsal never entered publishing jobs because it was a manual
+  branchless workflow dispatch, not a tag push.
+- Requested next action / owner: Codex merges only after CI, then repeats the
+  full non-publishing rehearsal and verifies no Node.js deprecation annotations.
+
 ### 2026-08-14 01:53 CST — Codex — immutable workflow action closure
 
 - Base SHA / branch: `4e036e7a3229746999c47cc905ae10c5f594faf1`
