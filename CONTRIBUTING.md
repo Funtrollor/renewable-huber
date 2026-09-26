@@ -31,7 +31,7 @@ mistaken for a fully passing suite.
 
 The PowerShell setup below remains supported for Windows-only work.
 
-Create an isolated environment with Python 3.10–3.12:
+Create an isolated environment with Python 3.10–3.13:
 
 ```powershell
 python -m venv .venv

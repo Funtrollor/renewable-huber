@@ -22,8 +22,11 @@
 ## Artifact gate
 
 - [ ] Base wheel 與 sdist 通過 `twine check` 與 clean-install smoke test。
-- [ ] 15 個 CPU wheels 全數產生：Python 3.10–3.12 × 5 個 OS/architecture targets。
-- [ ] 3 個 Windows x86-64 CUDA 12 wheels 全數產生。
+- [ ] 20 個 CPU wheels 全數產生：Python 3.10–3.13 × 5 個 OS/architecture targets。
+- [ ] 8 個 CUDA 12 wheels 全數產生：Python 3.10–3.13 × Windows x86-64 與
+      Linux x86-64（`manylinux_2_28`）。
+- [ ] CUDA wheels 的 `Requires-Dist` 含完整 `nvidia-*-cu12` runtime closure，且不
+      vendor 任何 NVIDIA 函式庫。
 - [ ] CUDA wheel 在無 GPU hosted runner 可乾淨安裝、載入，並回報正確公開 API
       version、native ABI 與 capability metadata。
 - [ ] `cuobjdump` 證明 CUDA wheel 含 SM 75/80/86/89/90/120 SASS，且只有 SM 120

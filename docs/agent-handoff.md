@@ -36,6 +36,68 @@ concurrently; a message in this file is not a lock.
 
 ## Log
 
+### 2026-09-26 — Claude Code — native CUDA L1, device predict, Linux CUDA wheels, pip CUDA runtime, Python 3.13
+
+- Base SHA / branch: `fca7b83` (`origin/main`), `claude/nifty-goldberg-0lm77u`.
+- Ownership exception: the maintainer directed Claude Code to implement the
+  whole "A" improvement set, commit, push and open the pull request, and will
+  merge manually. Codex's review/acceptance role is unchanged.
+- Scope and decisions:
+  - A1 — `docs/native-penalty-completion-plan.md` N0–N4 (status section added
+    there). C ABI 2 / Python API 4; `RhCudaUpdateConfig` carries `penalty`,
+    `reserved0`, `lambda_scale`; unknown values fail closed at the C, Rust and
+    Python layers; `native_update_penalties` capability; CUDA `solve_l1`
+    mirrors the Rust CPU loop; v2 golden corpus (4 converged L1 streams).
+  - A2 — the ABI break also carries `RhCudaPrediction` (`n_features_in`,
+    `input_location`) and renames `rh_cuda_engine_predict_host` to
+    `rh_cuda_engine_predict`; still exactly 17 exports. CUDA DLPack X is read
+    in place and raw features are widened on device for host and device
+    predict; the estimator's `predict` now hands `native_design_matrix`
+    backends (native CUDA only) the unexpanded features.
+  - A3 — `scripts/native/build_linux_cuda_wheel.sh` builds `manylinux_2_28`
+    x86-64 CUDA wheels inside the manylinux container with `--auditwheel skip`
+    and checks SASS/PTX and the `NEEDED` closure. PR CI job
+    `native-cuda-linux-wheel` runs it (SM 75/120) and import-smokes the wheel;
+    `release.yml` runs it for 3.10–3.13 with the full architecture list.
+  - A4 — the CUDA package depends on `nvidia-{cuda-runtime,cublas,cusolver,
+    cusparse,nvjitlink}-cu12`; `renewable_huber._cuda_runtime` preloads (Linux)
+    or registers (Windows) that set only when complete, else falls back to the
+    system toolkit.
+  - A5 — `requires-python >=3.10,<3.14` for all three packages; CI and release
+    matrices gain 3.13 (release: 20 CPU wheels, 8 CUDA wheels).
+- Files changed: see the pull request; new files are
+  `scripts/native/build_linux_cuda_wheel.sh`, `src/renewable_huber/_cuda_runtime.py`,
+  `tests/golden/native_core_v2.json`, `tests/test_native_cuda_runtime.py`.
+- Verification run (this container: no GPU, CUDA 12.9 `nvcc` from conda-forge):
+  discover 445 / 39 skips; `core` 326 / 3; `native-cpu` 20; `performance` 54;
+  `--check` 6 profiles over 25 modules; `cuda` exits 2 (no device, as
+  designed); on CPython 3.13: `core`, `native-cpu`, `performance` pass and the
+  CPU wheel clean-install smoke passes. Ruff check/format, `git diff --check`,
+  both golden `--check`s, source metadata, C++ ABI syntax, cargo fmt/clippy/
+  check, MSRV 1.83 check, 16 scoped Rust tests. `native/cuda` static and
+  shared builds for SM 120 compile warning-free; the shared library exports
+  exactly the 17 manifest symbols. `cargo clippy --features cuda` reports only
+  the 14 pre-existing `needless_return` hits that `main` also has. A locally
+  built Linux CUDA wheel installed into a clean venv pulled the NVIDIA wheels
+  from PyPI, passed `pip check`, loaded all six CUDA libraries from
+  `site-packages/nvidia`, reported ABI 2 / API 4, and passed
+  `smoke_test_cuda_wheels.py --import-only`. Golden hashes: v1
+  `9e519d55…428fc9` (unchanged), v2 `87423a73…ec6fbddf`.
+- Known risks or unresolved questions: **no GPU executed any of the new CUDA
+  code.** The `cuda` profile (v1+v2 replay, three-engine L1 resume, device
+  predict) and `ctest` (five new smoke cases with NumPy-reference values)
+  must pass on the fixed GPU host before a release. N5 performance records
+  (L1 vs CuPy; `none` regression A/B) do not exist yet. The manylinux image in
+  the workflows is referenced by tag, not digest. The release Linux job has
+  not run (release runs only from `main`/tags); PR CI exercises the same
+  script. `.github/branch-protection.json` lists the 3.13 baseline contexts,
+  but the live branch protection was not changed.
+- Requested next action / owner: maintainer/Codex run
+  `scripts/run_test_profile.py cuda` and `ctest` on the RTX 5070 Ti, review,
+  then merge; a build-only release rehearsal from `main` should confirm the
+  8-wheel CUDA set before the next tag, which must be a minor version because
+  the CUDA ABI changed.
+
 ### 2026-08-14 02:06 CST — Codex — artifact actions Node 24 correction
 
 - Base SHA / branch: `e03404882a161a8e206b00f6190da42ef9fbd762`
