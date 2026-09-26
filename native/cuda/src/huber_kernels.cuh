@@ -138,6 +138,47 @@ cudaError_t launch_transpose(
 template <typename T>
 cudaError_t launch_mirror_lower_triangle(T* matrix, int64_t side, cudaStream_t stream);
 
+/*
+ * L1 building blocks.  `penalized_count` is the number of leading coordinates
+ * the penalty applies to: n_parameters, or n_parameters - 1 when the trailing
+ * coordinate is the unpenalized intercept.
+ */
+
+/// output[i] = sign(coefficients[i]) for penalized coordinates, else 0.
+template <typename T>
+cudaError_t launch_penalty_sign(
+    const T* coefficients,
+    T* output,
+    int64_t count,
+    int64_t penalized_count,
+    cudaStream_t stream
+);
+
+/// score[i] = clamp(residual[i], -tau, tau) * weights[i] (weights may be null).
+template <typename T>
+cudaError_t launch_weighted_huber_score(
+    const T* residual,
+    const T* weights,
+    T* score,
+    int64_t count,
+    T tau,
+    cudaStream_t stream
+);
+
+/// candidate[i] = soft_threshold(beta[i] - gradient[i] * inverse_phi, t_i),
+/// with t_i = threshold for penalized coordinates and 0 otherwise.
+template <typename T>
+cudaError_t launch_soft_threshold_candidate(
+    const T* beta,
+    const T* gradient,
+    T inverse_phi,
+    T threshold,
+    T* candidate,
+    int64_t count,
+    int64_t penalized_count,
+    cudaStream_t stream
+);
+
 }  // namespace rh_cuda
 
 #endif  // RENEWABLE_HUBER_HUBER_KERNELS_CUH

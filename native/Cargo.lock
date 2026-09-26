@@ -381,6 +381,7 @@ name = "rh-cuda-ffi"
 version = "0.6.1"
 dependencies = [
  "cmake",
+ "rh-core",
  "thiserror",
 ]
 

@@ -251,6 +251,68 @@ __global__ void mirror_lower_triangle_kernel(T* matrix, int64_t side) {
 }
 
 template <typename T>
+__device__ T sign_of(T value) {
+    return value > static_cast<T>(0)
+        ? static_cast<T>(1)
+        : (value < static_cast<T>(0) ? static_cast<T>(-1) : static_cast<T>(0));
+}
+
+template <typename T>
+__global__ void penalty_sign_kernel(
+    const T* coefficients,
+    T* output,
+    int64_t count,
+    int64_t penalized_count
+) {
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < count) {
+        output[index] = index < penalized_count ? sign_of(coefficients[index]) : static_cast<T>(0);
+    }
+}
+
+template <typename T>
+__global__ void weighted_huber_score_kernel(
+    const T* residual,
+    const T* weights,
+    T* score,
+    int64_t count,
+    T tau
+) {
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= count) {
+        return;
+    }
+    const T value = residual[index];
+    T result = value < -tau ? -tau : (value > tau ? tau : value);
+    if (weights != nullptr) {
+        result *= weights[index];
+    }
+    score[index] = result;
+}
+
+template <typename T>
+__global__ void soft_threshold_candidate_kernel(
+    const T* beta,
+    const T* gradient,
+    T inverse_phi,
+    T threshold,
+    T* candidate,
+    int64_t count,
+    int64_t penalized_count
+) {
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= count) {
+        return;
+    }
+    // Same operation order as the Rust CPU engine: step, then shrink.
+    const T value = beta[index] - gradient[index] * inverse_phi;
+    const T limit = index < penalized_count ? threshold : static_cast<T>(0);
+    const T absolute = value < static_cast<T>(0) ? -value : value;
+    const T remainder = absolute - limit;
+    candidate[index] = sign_of(value) * (remainder > static_cast<T>(0) ? remainder : static_cast<T>(0));
+}
+
+template <typename T>
 cudaError_t last_launch_error() {
     return cudaGetLastError();
 }
@@ -460,6 +522,52 @@ cudaError_t launch_mirror_lower_triangle(T* matrix, int64_t side, cudaStream_t s
     return last_launch_error<T>();
 }
 
+template <typename T>
+cudaError_t launch_penalty_sign(
+    const T* coefficients,
+    T* output,
+    int64_t count,
+    int64_t penalized_count,
+    cudaStream_t stream
+) {
+    penalty_sign_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
+        coefficients, output, count, penalized_count
+    );
+    return last_launch_error<T>();
+}
+
+template <typename T>
+cudaError_t launch_weighted_huber_score(
+    const T* residual,
+    const T* weights,
+    T* score,
+    int64_t count,
+    T tau,
+    cudaStream_t stream
+) {
+    weighted_huber_score_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
+        residual, weights, score, count, tau
+    );
+    return last_launch_error<T>();
+}
+
+template <typename T>
+cudaError_t launch_soft_threshold_candidate(
+    const T* beta,
+    const T* gradient,
+    T inverse_phi,
+    T threshold,
+    T* candidate,
+    int64_t count,
+    int64_t penalized_count,
+    cudaStream_t stream
+) {
+    soft_threshold_candidate_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
+        beta, gradient, inverse_phi, threshold, candidate, count, penalized_count
+    );
+    return last_launch_error<T>();
+}
+
 template cudaError_t launch_append_intercept<float>(
     const float*, float*, int64_t, int64_t, cudaStream_t
 );
@@ -538,5 +646,23 @@ template cudaError_t launch_transpose<double>(
 );
 template cudaError_t launch_mirror_lower_triangle<float>(float*, int64_t, cudaStream_t);
 template cudaError_t launch_mirror_lower_triangle<double>(double*, int64_t, cudaStream_t);
+template cudaError_t launch_penalty_sign<float>(
+    const float*, float*, int64_t, int64_t, cudaStream_t
+);
+template cudaError_t launch_penalty_sign<double>(
+    const double*, double*, int64_t, int64_t, cudaStream_t
+);
+template cudaError_t launch_weighted_huber_score<float>(
+    const float*, const float*, float*, int64_t, float, cudaStream_t
+);
+template cudaError_t launch_weighted_huber_score<double>(
+    const double*, const double*, double*, int64_t, double, cudaStream_t
+);
+template cudaError_t launch_soft_threshold_candidate<float>(
+    const float*, const float*, float, float, float*, int64_t, int64_t, cudaStream_t
+);
+template cudaError_t launch_soft_threshold_candidate<double>(
+    const double*, const double*, double, double, double*, int64_t, int64_t, cudaStream_t
+);
 
 }  // namespace rh_cuda

@@ -31,6 +31,8 @@ class NativeCpuBackend(NativeEngineBackend):
     # Inherited from NumPyBackend but never applicable: this backend runs
     # the whole batch natively and never reaches the portable solver.
     supports_elementwise_workspace = False
+    #: The Rust engine implements every public penalty.
+    native_update_penalties = frozenset({"none", "l1"})
 
     _EXPECTED_ABI_VERSION = _EXPECTED_ABI_VERSION
     _EXPECTED_PYTHON_API_VERSION = _EXPECTED_PYTHON_API_VERSION

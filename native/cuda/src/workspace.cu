@@ -27,6 +27,7 @@ RhCudaEngine::~RhCudaEngine() noexcept {
     release(d_delta, stream, stream_ordered_allocations);
     release(d_history_vector, stream, stream_ordered_allocations);
     release(d_gradient, stream, stream_ordered_allocations);
+    release(d_penalty_sign, stream, stream_ordered_allocations);
     release(d_direction, stream, stream_ordered_allocations);
     release(d_gram, stream, stream_ordered_allocations);
     release(d_hessian, stream, stream_ordered_allocations);
@@ -105,11 +106,12 @@ void allocate_static_buffers(RhCudaEngine* engine) {
     allocate_engine(&engine->d_delta, p, "coefficient delta");
     allocate_engine(&engine->d_history_vector, p, "history vector");
     allocate_engine(&engine->d_gradient, p, "gradient");
+    allocate_engine(&engine->d_penalty_sign, p, "L1 historical subgradient");
     allocate_engine(&engine->d_direction, p, "Newton direction");
     allocate_engine(&engine->d_gram, square, "weighted gram");
     allocate_engine(&engine->d_hessian, square, "Hessian");
     allocate_engine(&engine->d_factor, square, "factor matrix");
-    allocate_engine(&engine->d_reduction_results, 4, "device reduction results");
+    allocate_engine(&engine->d_reduction_results, kReductionSlots, "device reduction results");
     allocate<int>(
         reinterpret_cast<void**>(&engine->d_pivots),
         p,
@@ -131,7 +133,7 @@ void allocate_static_buffers(RhCudaEngine* engine) {
         "pinned host solver info"
     );
     check_cuda(
-        cudaMallocHost(&engine->h_reduction_results, 4 * sizeof(double)),
+        cudaMallocHost(&engine->h_reduction_results, kReductionSlots * sizeof(double)),
         "pinned host objective reductions"
     );
 

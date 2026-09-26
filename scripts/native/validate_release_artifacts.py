@@ -18,10 +18,24 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by the Python 3.10 C
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BASE_NAME = "renewable-huber"
-SUPPORTED_PYTHON = ">=3.10,<3.13"
+SUPPORTED_PYTHON = ">=3.10,<3.14"
 NATIVE_PROJECTS = {
     "cpu": ("renewable-huber-native-cpu", "_renewable_huber_native_cpu"),
     "cuda": ("renewable-huber-native-cuda", "_renewable_huber_native_cuda"),
+}
+# Runtime libraries each native wheel loads, supplied by NVIDIA's own wheels
+# rather than bundled or taken from a system toolkit. The CUDA 12.9 floors are
+# the components the release is compiled against; renewable_huber._cuda_runtime
+# loads exactly these packages.
+NATIVE_RUNTIME_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "cpu": (),
+    "cuda": (
+        "nvidia-cuda-runtime-cu12>=12.9",
+        "nvidia-cublas-cu12>=12.9",
+        "nvidia-cusolver-cu12>=11.7.5",
+        "nvidia-cusparse-cu12>=12.5.10",
+        "nvidia-nvjitlink-cu12>=12.9",
+    ),
 }
 
 
@@ -80,8 +94,9 @@ def check_source_metadata(root: Path = PROJECT_ROOT) -> str:
         if project.get("version") != version:
             errors.append(f"{path}: version must equal base version {version}")
         dependencies = tuple(str(item) for item in project.get("dependencies", []))
-        if dependencies != (expected_dependency,):
-            errors.append(f"{path}: dependencies must be [{expected_dependency!r}]")
+        expected_dependencies = (expected_dependency, *NATIVE_RUNTIME_DEPENDENCIES[kind])
+        if dependencies != expected_dependencies:
+            errors.append(f"{path}: dependencies must be {list(expected_dependencies)!r}")
         native_requires_python = project.get("requires-python")
         if native_requires_python != SUPPORTED_PYTHON:
             errors.append(
@@ -167,6 +182,9 @@ def _check_native_wheel(
         errors.append(
             f"{wheel.path.name}: missing exact base dependency {BASE_NAME}=={expected_version}"
         )
+    for runtime_requirement in NATIVE_RUNTIME_DEPENDENCIES[kind]:
+        if _normalized_requirement(runtime_requirement) not in requirements:
+            errors.append(f"{wheel.path.name}: missing runtime dependency {runtime_requirement}")
     if not any(
         Path(member).name.startswith(module_name) and Path(member).suffix in {".so", ".pyd"}
         for member in wheel.members

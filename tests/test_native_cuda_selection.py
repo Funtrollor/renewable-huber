@@ -12,6 +12,7 @@ belongs in ``test_native_cuda_backend.py``.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import types
 import unittest
@@ -22,7 +23,7 @@ import numpy as np
 import renewable_huber
 from renewable_huber import RenewableHuberRegressor
 from renewable_huber.backends import resolve_backend
-from renewable_huber.exceptions import BackendUnavailableError, NotFittedError
+from renewable_huber.exceptions import BackendUnavailableError, NotFittedError, ValidationError
 from renewable_huber.state import RenewableHuberState
 
 
@@ -31,7 +32,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
         unavailable = types.SimpleNamespace(
             is_available=lambda: False,
             device_count=lambda: 0,
-            version=lambda: {"abi_version": 1, "python_api_version": 3},
+            version=lambda: {"abi_version": 2, "python_api_version": 4},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": unavailable}),
@@ -44,7 +45,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
         incompatible = types.SimpleNamespace(
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 999},
+            version=lambda: {"abi_version": 2, "python_api_version": 999},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": incompatible}),
@@ -58,8 +59,8 @@ class NativeCudaSelectionTests(unittest.TestCase):
             is_available=lambda: True,
             device_count=lambda: 1,
             version=lambda: {
-                "abi_version": 1,
-                "python_api_version": 3,
+                "abi_version": 2,
+                "python_api_version": 4,
                 "supports_cuda_graphs": False,
                 "supports_fast_math": False,
             },
@@ -116,8 +117,8 @@ class NativeCudaSelectionTests(unittest.TestCase):
             is_available=lambda: True,
             device_count=lambda: 1,
             version=lambda: {
-                "abi_version": 1,
-                "python_api_version": 3,
+                "abi_version": 2,
+                "python_api_version": 4,
                 "initial_state": "canonical_empty",
                 "supports_cuda_graphs": True,
                 "supports_fast_math": True,
@@ -166,14 +167,15 @@ class NativeCudaSelectionTests(unittest.TestCase):
                 restore_calls += 1
                 self.coefficients = coefficients.copy()
 
-            def predict(self, X: np.ndarray) -> np.ndarray:
+            def predict(self, X: np.ndarray, n_features_in: int, fit_intercept: bool) -> np.ndarray:
+                del n_features_in, fit_intercept
                 return X @ self.coefficients
 
         extension = types.SimpleNamespace(
             NativeCudaEngine=FakeEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 3},
+            version=lambda: {"abi_version": 2, "python_api_version": 4},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": extension}),
@@ -202,7 +204,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=BrokenEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 3},
+            version=lambda: {"abi_version": 2, "python_api_version": 4},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -256,6 +258,8 @@ class NativeCudaSelectionTests(unittest.TestCase):
                 max_iter: int,
                 tol: float,
                 ridge: float,
+                penalty: str,
+                lambda_scale: float,
             ) -> dict[str, object]:
                 del (
                     y,
@@ -266,6 +270,8 @@ class NativeCudaSelectionTests(unittest.TestCase):
                     bandwidth_scale,
                     max_iter,
                     ridge,
+                    penalty,
+                    lambda_scale,
                 )
                 self.calls += 1
                 self.coefficients = np.arange(self.n_parameters, dtype=self.dtype)
@@ -288,14 +294,15 @@ class NativeCudaSelectionTests(unittest.TestCase):
                     "bandwidth": 0.5,
                 }
 
-            def predict(self, X: np.ndarray) -> np.ndarray:
+            def predict(self, X: np.ndarray, n_features_in: int, fit_intercept: bool) -> np.ndarray:
+                del n_features_in, fit_intercept
                 return X @ self.coefficients
 
         available = types.SimpleNamespace(
             NativeCudaEngine=FakeEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 3},
+            version=lambda: {"abi_version": 2, "python_api_version": 4},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -369,7 +376,8 @@ class NativeCudaSelectionTests(unittest.TestCase):
                     "bandwidth": 0.5,
                 }
 
-            def predict(self, X: np.ndarray) -> np.ndarray:
+            def predict(self, X: np.ndarray, n_features_in: int, fit_intercept: bool) -> np.ndarray:
+                del n_features_in, fit_intercept
                 if not predict_failures:
                     predict_failures.append(True)
                     self.coefficients[:] = np.nan
@@ -380,7 +388,7 @@ class NativeCudaSelectionTests(unittest.TestCase):
             NativeCudaEngine=RecoveringEngine,
             is_available=lambda: True,
             device_count=lambda: 1,
-            version=lambda: {"abi_version": 1, "python_api_version": 3},
+            version=lambda: {"abi_version": 2, "python_api_version": 4},
         )
         with (
             mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": available}),
@@ -403,6 +411,153 @@ class NativeCudaSelectionTests(unittest.TestCase):
                 model.predict(X)
             np.testing.assert_array_equal(model.predict(X), np.zeros(4))
             self.assertEqual(len(engines), 3)
+
+    def test_l1_reaches_the_engine_with_its_penalty_and_lambda_scale(self) -> None:
+        engine, extension = _recording_extension(supported_penalties=["none", "l1"])
+        with _patched_extension(extension):
+            model = RenewableHuberRegressor(
+                backend="native_cuda", device="cuda", penalty="l1", lambda_scale=0.35
+            )
+            X = np.arange(12, dtype=np.float64).reshape(4, 3)
+            model.fit(X, np.arange(4, dtype=np.float64))
+        self.assertEqual(len(engine.updates), 1)
+        self.assertEqual(engine.updates[0]["penalty"], "l1")
+        self.assertEqual(engine.updates[0]["lambda_scale"], 0.35)
+
+    def test_unadvertised_penalty_is_refused_before_the_engine(self) -> None:
+        engine, extension = _recording_extension(supported_penalties=None)
+        with _patched_extension(extension):
+            backend = resolve_backend("native_cuda", device="cuda")
+            self.assertEqual(backend.native_update_penalties, frozenset({"none"}))
+            model = RenewableHuberRegressor(backend="native_cuda", device="cuda", penalty="l1")
+            X = np.arange(12, dtype=np.float64).reshape(4, 3)
+            with self.assertRaisesRegex(ValidationError, "does not support penalty='l1'"):
+                model.fit(X, np.arange(4, dtype=np.float64))
+        self.assertEqual(engine.updates, [])
+
+    def test_prediction_sends_unexpanded_host_features(self) -> None:
+        # The engine appends the intercept on device, so predict must not widen
+        # the host matrix first: a column_stack copy is exactly what it avoids.
+        engine, extension = _recording_extension(supported_penalties=["none", "l1"])
+        with _patched_extension(extension):
+            model = RenewableHuberRegressor(backend="native_cuda", device="cuda")
+            X = np.arange(12, dtype=np.float64).reshape(4, 3)
+            model.fit(X, np.arange(4, dtype=np.float64))
+            model.predict(X)
+        self.assertEqual(engine.predictions, [("host", (4, 3), 3, True)])
+
+    def test_device_prediction_uses_the_dlpack_entry_point(self) -> None:
+        engine, extension = _recording_extension(supported_penalties=["none"], device_predict=True)
+        tensor = _FakeCudaTensor((5, 2))
+        with _patched_extension(extension):
+            backend = resolve_backend("native_cuda", device="cuda")
+            state = RenewableHuberState.empty(2, fit_intercept=True, xp=np, dtype=np.float64)
+            prediction = backend.native_predict(tensor, state)
+        self.assertEqual(engine.predictions, [("device", (5, 2), 2, True)])
+        self.assertEqual(prediction.shape, (5,))
+        self.assertIsInstance(prediction, np.ndarray)
+
+    def test_device_prediction_requires_advertised_support(self) -> None:
+        engine, extension = _recording_extension(supported_penalties=["none"], device_predict=False)
+        with _patched_extension(extension):
+            backend = resolve_backend("native_cuda", device="cuda")
+            state = RenewableHuberState.empty(2, fit_intercept=True, xp=np, dtype=np.float64)
+            with self.assertRaisesRegex(BackendUnavailableError, "DLPack prediction"):
+                backend.native_predict(_FakeCudaTensor((5, 2)), state)
+        self.assertEqual(engine.predictions, [])
+
+
+class _FakeCudaTensor:
+    """Just enough of a CUDA DLPack producer for the backend's routing."""
+
+    def __init__(self, shape: tuple[int, ...]) -> None:
+        self.shape = shape
+
+    def __dlpack__(self, stream: int | None = None) -> object:
+        return stream
+
+    def __dlpack_device__(self) -> tuple[int, int]:
+        return 2, 0
+
+
+class _RecordingEngine:
+    def __init__(self, dtype: str, n_parameters: int, device_id: int) -> None:
+        del device_id
+        self.dtype = np.dtype(dtype)
+        self.n_parameters = n_parameters
+        self.updates: list[dict[str, object]] = []
+        self.predictions: list[tuple[str, tuple[int, ...], int, bool]] = []
+
+    def restore(self, *args: object) -> None:
+        del args
+
+    def update(
+        self, X: np.ndarray, y: np.ndarray, sample_weight: object, **config: object
+    ) -> dict[str, object]:
+        del y, sample_weight
+        self.updates.append(dict(config))
+        return {
+            "coefficients": np.zeros(self.n_parameters, dtype=self.dtype),
+            "information": np.eye(self.n_parameters, dtype=self.dtype),
+            "n_samples_seen": X.shape[0],
+            "batch_count": 1,
+            "previous_lambda": 0.0,
+            "weight_sum": float(config["batch_weight"]),
+            "iterations": 1,
+            "converged": True,
+            "used_regularized_fallback": False,
+            "objective": 0.0,
+            "lambda_value": 0.0,
+            "bandwidth": 0.5,
+        }
+
+    def predict(self, X: np.ndarray, n_features_in: int, fit_intercept: bool) -> np.ndarray:
+        self.predictions.append(("host", X.shape, n_features_in, fit_intercept))
+        return np.zeros(X.shape[0], dtype=self.dtype)
+
+    def predict_device(self, X: object, n_features_in: int, fit_intercept: bool) -> np.ndarray:
+        shape = tuple(X.shape)
+        self.predictions.append(("device", shape, n_features_in, fit_intercept))
+        return np.zeros(shape[0], dtype=self.dtype)
+
+
+def _recording_extension(
+    *, supported_penalties: list[str] | None, device_predict: bool = True
+) -> tuple[_RecordingEngine, types.SimpleNamespace]:
+    created: list[_RecordingEngine] = []
+
+    class Proxy:
+        """Route attribute access to the most recently created engine."""
+
+        def __getattr__(self, name: str) -> object:
+            if not created:
+                return [] if name in {"updates", "predictions"} else None
+            return getattr(created[-1], name)
+
+    def factory(dtype: str, n_parameters: int, device_id: int) -> _RecordingEngine:
+        engine = _RecordingEngine(dtype, n_parameters, device_id)
+        created.append(engine)
+        return engine
+
+    version: dict[str, object] = {"abi_version": 2, "python_api_version": 4}
+    if supported_penalties is not None:
+        version["supported_penalties"] = supported_penalties
+    if device_predict:
+        version["device_predict"] = "dlpack"
+    extension = types.SimpleNamespace(
+        NativeCudaEngine=factory,
+        is_available=lambda: True,
+        device_count=lambda: 1,
+        version=lambda: dict(version),
+    )
+    return Proxy(), extension  # type: ignore[return-value]
+
+
+def _patched_extension(extension: types.SimpleNamespace) -> contextlib.ExitStack:
+    stack = contextlib.ExitStack()
+    stack.enter_context(mock.patch.dict(sys.modules, {"renewable_huber._native_cuda": extension}))
+    stack.enter_context(mock.patch.object(renewable_huber, "_native_cuda", extension, create=True))
+    return stack
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@
 #include <cstddef>
 
 static_assert(sizeof(void*) == 8, "the renewable-huber CUDA ABI is 64-bit only");
-static_assert(RH_CUDA_ABI_VERSION == 1u, "ABI version drifted from the contract manifest");
+static_assert(RH_CUDA_ABI_VERSION == 2u, "ABI version drifted from the contract manifest");
 
 
 static_assert(RH_CUDA_STATUS_SUCCESS == 0, "status code RH_CUDA_STATUS_SUCCESS drifted from the contract manifest");
@@ -37,6 +37,12 @@ static_assert(RH_CUDA_STATUS_INTERNAL_ERROR == 8, "status code RH_CUDA_STATUS_IN
 
 static_assert(RH_CUDA_DTYPE_FLOAT32 == 1, "dtype code RH_CUDA_DTYPE_FLOAT32 drifted from the contract manifest");
 static_assert(RH_CUDA_DTYPE_FLOAT64 == 2, "dtype code RH_CUDA_DTYPE_FLOAT64 drifted from the contract manifest");
+
+static_assert(RH_CUDA_PENALTY_NONE == 0, "penalty code RH_CUDA_PENALTY_NONE drifted from the contract manifest");
+static_assert(RH_CUDA_PENALTY_L1 == 1, "penalty code RH_CUDA_PENALTY_L1 drifted from the contract manifest");
+
+static_assert(RH_CUDA_MEMORY_HOST == 0, "memory code RH_CUDA_MEMORY_HOST drifted from the contract manifest");
+static_assert(RH_CUDA_MEMORY_DEVICE == 1, "memory code RH_CUDA_MEMORY_DEVICE drifted from the contract manifest");
 
 static_assert(RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS == 1u, "engine flag RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS drifted from the contract manifest");
 static_assert(RH_CUDA_ENGINE_FLAG_FAST_MATH == 2u, "engine flag RH_CUDA_ENGINE_FLAG_FAST_MATH drifted from the contract manifest");
@@ -92,23 +98,29 @@ static_assert(sizeof(((RhCudaHostState*)0)->previous_lambda) == 8, "RhCudaHostSt
 static_assert(offsetof(RhCudaHostState, weight_sum) == 48, "RhCudaHostState.weight_sum offset drifted from the contract manifest");
 static_assert(sizeof(((RhCudaHostState*)0)->weight_sum) == 8, "RhCudaHostState.weight_sum width drifted from the contract manifest");
 
-static_assert(sizeof(RhCudaUnpenalizedConfig) == 56, "RhCudaUnpenalizedConfig size drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, abi_version) == 0, "RhCudaUnpenalizedConfig.abi_version offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->abi_version) == 4, "RhCudaUnpenalizedConfig.abi_version width drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, struct_size) == 4, "RhCudaUnpenalizedConfig.struct_size offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->struct_size) == 4, "RhCudaUnpenalizedConfig.struct_size width drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, n_features_in) == 8, "RhCudaUnpenalizedConfig.n_features_in offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->n_features_in) == 8, "RhCudaUnpenalizedConfig.n_features_in width drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, max_iter) == 16, "RhCudaUnpenalizedConfig.max_iter offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->max_iter) == 8, "RhCudaUnpenalizedConfig.max_iter width drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, tau) == 24, "RhCudaUnpenalizedConfig.tau offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->tau) == 8, "RhCudaUnpenalizedConfig.tau width drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, bandwidth_scale) == 32, "RhCudaUnpenalizedConfig.bandwidth_scale offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->bandwidth_scale) == 8, "RhCudaUnpenalizedConfig.bandwidth_scale width drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, tolerance) == 40, "RhCudaUnpenalizedConfig.tolerance offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->tolerance) == 8, "RhCudaUnpenalizedConfig.tolerance width drifted from the contract manifest");
-static_assert(offsetof(RhCudaUnpenalizedConfig, ridge) == 48, "RhCudaUnpenalizedConfig.ridge offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaUnpenalizedConfig*)0)->ridge) == 8, "RhCudaUnpenalizedConfig.ridge width drifted from the contract manifest");
+static_assert(sizeof(RhCudaUpdateConfig) == 72, "RhCudaUpdateConfig size drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, abi_version) == 0, "RhCudaUpdateConfig.abi_version offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->abi_version) == 4, "RhCudaUpdateConfig.abi_version width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, struct_size) == 4, "RhCudaUpdateConfig.struct_size offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->struct_size) == 4, "RhCudaUpdateConfig.struct_size width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, n_features_in) == 8, "RhCudaUpdateConfig.n_features_in offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->n_features_in) == 8, "RhCudaUpdateConfig.n_features_in width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, max_iter) == 16, "RhCudaUpdateConfig.max_iter offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->max_iter) == 8, "RhCudaUpdateConfig.max_iter width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, tau) == 24, "RhCudaUpdateConfig.tau offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->tau) == 8, "RhCudaUpdateConfig.tau width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, bandwidth_scale) == 32, "RhCudaUpdateConfig.bandwidth_scale offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->bandwidth_scale) == 8, "RhCudaUpdateConfig.bandwidth_scale width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, tolerance) == 40, "RhCudaUpdateConfig.tolerance offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->tolerance) == 8, "RhCudaUpdateConfig.tolerance width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, ridge) == 48, "RhCudaUpdateConfig.ridge offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->ridge) == 8, "RhCudaUpdateConfig.ridge width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, penalty) == 56, "RhCudaUpdateConfig.penalty offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->penalty) == 4, "RhCudaUpdateConfig.penalty width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, reserved0) == 60, "RhCudaUpdateConfig.reserved0 offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->reserved0) == 4, "RhCudaUpdateConfig.reserved0 width drifted from the contract manifest");
+static_assert(offsetof(RhCudaUpdateConfig, lambda_scale) == 64, "RhCudaUpdateConfig.lambda_scale offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaUpdateConfig*)0)->lambda_scale) == 8, "RhCudaUpdateConfig.lambda_scale width drifted from the contract manifest");
 
 static_assert(sizeof(RhCudaHostBatch) == 56, "RhCudaHostBatch size drifted from the contract manifest");
 static_assert(offsetof(RhCudaHostBatch, abi_version) == 0, "RhCudaHostBatch.abi_version offset drifted from the contract manifest");
@@ -146,19 +158,25 @@ static_assert(sizeof(((RhCudaDeviceBatch*)0)->n_columns) == 8, "RhCudaDeviceBatc
 static_assert(offsetof(RhCudaDeviceBatch, batch_weight) == 48, "RhCudaDeviceBatch.batch_weight offset drifted from the contract manifest");
 static_assert(sizeof(((RhCudaDeviceBatch*)0)->batch_weight) == 8, "RhCudaDeviceBatch.batch_weight width drifted from the contract manifest");
 
-static_assert(sizeof(RhCudaHostPrediction) == 40, "RhCudaHostPrediction size drifted from the contract manifest");
-static_assert(offsetof(RhCudaHostPrediction, abi_version) == 0, "RhCudaHostPrediction.abi_version offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaHostPrediction*)0)->abi_version) == 4, "RhCudaHostPrediction.abi_version width drifted from the contract manifest");
-static_assert(offsetof(RhCudaHostPrediction, struct_size) == 4, "RhCudaHostPrediction.struct_size offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaHostPrediction*)0)->struct_size) == 4, "RhCudaHostPrediction.struct_size width drifted from the contract manifest");
-static_assert(offsetof(RhCudaHostPrediction, x_design) == 8, "RhCudaHostPrediction.x_design offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaHostPrediction*)0)->x_design) == 8, "RhCudaHostPrediction.x_design width drifted from the contract manifest");
-static_assert(offsetof(RhCudaHostPrediction, prediction) == 16, "RhCudaHostPrediction.prediction offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaHostPrediction*)0)->prediction) == 8, "RhCudaHostPrediction.prediction width drifted from the contract manifest");
-static_assert(offsetof(RhCudaHostPrediction, n_rows) == 24, "RhCudaHostPrediction.n_rows offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaHostPrediction*)0)->n_rows) == 8, "RhCudaHostPrediction.n_rows width drifted from the contract manifest");
-static_assert(offsetof(RhCudaHostPrediction, n_columns) == 32, "RhCudaHostPrediction.n_columns offset drifted from the contract manifest");
-static_assert(sizeof(((RhCudaHostPrediction*)0)->n_columns) == 8, "RhCudaHostPrediction.n_columns width drifted from the contract manifest");
+static_assert(sizeof(RhCudaPrediction) == 56, "RhCudaPrediction size drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, abi_version) == 0, "RhCudaPrediction.abi_version offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->abi_version) == 4, "RhCudaPrediction.abi_version width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, struct_size) == 4, "RhCudaPrediction.struct_size offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->struct_size) == 4, "RhCudaPrediction.struct_size width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, x_design) == 8, "RhCudaPrediction.x_design offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->x_design) == 8, "RhCudaPrediction.x_design width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, prediction) == 16, "RhCudaPrediction.prediction offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->prediction) == 8, "RhCudaPrediction.prediction width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, n_rows) == 24, "RhCudaPrediction.n_rows offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->n_rows) == 8, "RhCudaPrediction.n_rows width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, n_columns) == 32, "RhCudaPrediction.n_columns offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->n_columns) == 8, "RhCudaPrediction.n_columns width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, n_features_in) == 40, "RhCudaPrediction.n_features_in offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->n_features_in) == 8, "RhCudaPrediction.n_features_in width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, input_location) == 48, "RhCudaPrediction.input_location offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->input_location) == 4, "RhCudaPrediction.input_location width drifted from the contract manifest");
+static_assert(offsetof(RhCudaPrediction, reserved0) == 52, "RhCudaPrediction.reserved0 offset drifted from the contract manifest");
+static_assert(sizeof(((RhCudaPrediction*)0)->reserved0) == 4, "RhCudaPrediction.reserved0 width drifted from the contract manifest");
 
 static_assert(sizeof(RhCudaDiagnostics) == 48, "RhCudaDiagnostics size drifted from the contract manifest");
 static_assert(offsetof(RhCudaDiagnostics, abi_version) == 0, "RhCudaDiagnostics.abi_version offset drifted from the contract manifest");

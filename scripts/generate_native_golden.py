@@ -1,4 +1,10 @@
-"""Generate the versioned native-core differential-testing corpus."""
+"""Generate the versioned native-core differential-testing corpora.
+
+``v1`` is frozen: it must stay byte-identical, so ``--check`` is the only
+operation anyone should run against it.  ``v2`` adds the L1 cases that
+native CUDA ABI 2 is accepted against.  Both are generated from the NumPy
+reference, never from a native engine.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +22,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from renewable_huber import RenewableHuberRegressor  # noqa: E402
 
-DEFAULT_OUTPUT = PROJECT_ROOT / "tests" / "golden" / "native_core_v1.json"
+CORPUS_OUTPUTS = {
+    "v1": PROJECT_ROOT / "tests" / "golden" / "native_core_v1.json",
+    "v2": PROJECT_ROOT / "tests" / "golden" / "native_core_v2.json",
+}
 
 
 def _array(value: Any) -> list[Any]:
@@ -175,8 +184,132 @@ def _rank_deficient_case() -> dict[str, Any]:
     )
 
 
+# The v2 L1 cases converge at tol=1e-6 in tens of iterations.  Tighter
+# tolerances make LAMM stall at max_iter, and a non-converged trajectory is a
+# poor cross-engine oracle.  Their float64 tolerances admit one iteration's
+# difference in where an engine's reduction order stops the solver.
+
+
+def _weighted_three_batch_l1_case() -> dict[str, Any]:
+    rng = np.random.default_rng(5201)
+    X = rng.normal(size=(90, 5))
+    y = X @ np.asarray([1.1, 0.0, -0.8, 0.0, 0.35]) + 0.45
+    y += rng.normal(scale=0.07, size=X.shape[0])
+    y[[11, 52, 77]] += np.asarray([5.0, -4.5, 3.5])
+    weights = np.tile(np.asarray([1.0, 0.0, 2.5, 0.5, 1.0, 3.0]), 15)
+    probe = np.asarray([[0.0] * 5, [1.0, -0.5, 0.25, 2.0, -1.0], [-1.5, 1.0, 0.0, 0.5, 0.75]])
+    return _run_case(
+        case_id="weighted_three_batch_l1_f64",
+        description="Three weighted L1 batches, including zero and non-unit weights and outliers.",
+        config={
+            "penalty": "l1",
+            "lambda_scale": 0.6,
+            "max_iter": 2000,
+            "tol": 1e-6,
+            "dtype": "float64",
+        },
+        batches=[
+            (X[:25], y[:25], weights[:25]),
+            (X[25:58], y[25:58], weights[25:58]),
+            (X[58:], y[58:], weights[58:]),
+        ],
+        probe_X=probe,
+        rtol=2e-5,
+        atol=2e-6,
+    )
+
+
+def _float32_no_intercept_l1_case() -> dict[str, Any]:
+    rng = np.random.default_rng(5202)
+    X = rng.normal(size=(96, 4)).astype(np.float32)
+    beta = np.asarray([1.3, 0.0, -0.9, 0.0], dtype=np.float32)
+    y = (X @ beta + rng.normal(scale=0.05, size=X.shape[0])).astype(np.float32)
+    probe = np.asarray([[1.0, 1.0, -1.0, 0.5], [-0.5, 2.0, 0.25, -1.0]], dtype=np.float32)
+    return _run_case(
+        case_id="multi_batch_l1_no_intercept_f32",
+        description="Float32 L1 stream without an intercept whose truth has exact zeros.",
+        config={
+            "penalty": "l1",
+            "lambda_scale": 0.8,
+            "fit_intercept": False,
+            "max_iter": 2000,
+            "tol": 1e-6,
+            "dtype": "float32",
+        },
+        batches=[(X[:40], y[:40], None), (X[40:], y[40:], None)],
+        probe_X=probe,
+        rtol=3e-4,
+        atol=3e-5,
+    )
+
+
+def _sparse_l1_intercept_case() -> dict[str, Any]:
+    rng = np.random.default_rng(5203)
+    X = rng.normal(size=(70, 8))
+    beta = np.zeros(8)
+    beta[[0, 5]] = [2.0, -1.25]
+    y = X @ beta + 3.0 + rng.normal(scale=0.05, size=X.shape[0])
+    probe = np.asarray([[0.0] * 8, [1.0] * 8])
+    return _run_case(
+        case_id="sparse_l1_intercept_f64",
+        description="Sparse L1 truth with a large intercept that must stay unpenalized.",
+        config={
+            "penalty": "l1",
+            "lambda_scale": 1.5,
+            "max_iter": 2000,
+            "tol": 1e-6,
+            "dtype": "float64",
+        },
+        batches=[(X[:35], y[:35], None), (X[35:], y[35:], None)],
+        probe_X=probe,
+        rtol=2e-5,
+        atol=2e-6,
+    )
+
+
+def _zero_lambda_l1_case() -> dict[str, Any]:
+    rng = np.random.default_rng(5204)
+    X = rng.normal(size=(60, 3))
+    y = X @ np.asarray([0.7, -1.1, 0.3]) - 0.15 + rng.normal(scale=0.1, size=X.shape[0])
+    probe = np.asarray([[0.5, 0.5, 0.5], [-1.0, 0.0, 1.0]])
+    return _run_case(
+        case_id="streaming_l1_zero_lambda_f64",
+        description="L1 solver with lambda_scale=0: proximal steps without shrinkage.",
+        config={
+            "penalty": "l1",
+            "lambda_scale": 0.0,
+            "max_iter": 2000,
+            "tol": 1e-6,
+            "dtype": "float64",
+        },
+        batches=[(X[:20], y[:20], None), (X[20:40], y[20:40], None), (X[40:], y[40:], None)],
+        probe_X=probe,
+        rtol=2e-5,
+        atol=2e-6,
+    )
+
+
+def generate_v2_corpus() -> dict[str, Any]:
+    """Return the deterministic L1 corpus native CUDA ABI 2 is accepted against."""
+
+    return {
+        "schema": "renewable-huber-native-golden",
+        "schema_version": 2,
+        "oracle": {
+            "implementation": "renewable_huber NumPy backend",
+            "role": "Pre-native reference for L1 differential testing",
+        },
+        "cases": [
+            _weighted_three_batch_l1_case(),
+            _float32_no_intercept_l1_case(),
+            _sparse_l1_intercept_case(),
+            _zero_lambda_l1_case(),
+        ],
+    }
+
+
 def generate_corpus() -> dict[str, Any]:
-    """Return the complete deterministic corpus."""
+    """Return the complete deterministic v1 corpus."""
 
     return {
         "schema": "renewable-huber-native-golden",
@@ -225,10 +358,13 @@ def main() -> int:
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--write", action="store_true", help="Write the generated corpus")
     action.add_argument("--check", action="store_true", help="Compare with the committed corpus")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--corpus", choices=sorted(CORPUS_OUTPUTS), default="v1")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.output is None:
+        args.output = CORPUS_OUTPUTS[args.corpus]
 
-    generated = generate_corpus()
+    generated = generate_corpus() if args.corpus == "v1" else generate_v2_corpus()
     if args.write:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(

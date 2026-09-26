@@ -14,6 +14,7 @@ from renewable_huber.backends.capabilities import capabilities_of
 from renewable_huber.exceptions import ValidationError
 
 CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v1.json"
+V2_CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v2.json"
 NATIVE_TOLERANCES = {
     "float32": (3e-4, 3e-5),
     # A vendor LU solve can cross the relative convergence boundary one or
@@ -27,7 +28,13 @@ def _native_cuda_ready() -> bool:
     try:
         from renewable_huber import _native_cuda
 
-        return bool(_native_cuda.is_available() and _native_cuda.device_count())
+        version = _native_cuda.version()
+        return bool(
+            _native_cuda.is_available()
+            and _native_cuda.device_count()
+            and version.get("abi_version") == 2
+            and version.get("python_api_version") == 4
+        )
     except (ImportError, OSError, RuntimeError):
         return False
 
@@ -107,6 +114,48 @@ class NativeCudaDlpackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "cannot mix host arrays"):
             model.fit(self.cp.asarray(self.X), self.y)
 
+    def test_dlpack_prediction_matches_host_prediction(self) -> None:
+        # Both the raw feature matrix (intercept appended on device) and an
+        # already expanded design must be read in place and agree with host.
+        model = RenewableHuberRegressor(
+            backend="native_cuda", device="cuda", dtype="float32", max_iter=80
+        ).fit(self.X, self.y)
+        host = model.predict(self.X)
+        device = model.predict(self.cp.asarray(self.X))
+        self.assertIsInstance(device, np.ndarray)
+        np.testing.assert_array_equal(device, host)
+
+        no_intercept = RenewableHuberRegressor(
+            backend="native_cuda", device="cuda", dtype="float32", fit_intercept=False
+        ).fit(self.X, self.y)
+        np.testing.assert_array_equal(
+            no_intercept.predict(self.cp.asarray(self.X)), no_intercept.predict(self.X)
+        )
+
+    def test_dlpack_prediction_requires_exact_dtype(self) -> None:
+        model = RenewableHuberRegressor(backend="native_cuda", device="cuda", dtype="float32").fit(
+            self.X, self.y
+        )
+        with self.assertRaisesRegex(TypeError, "dtype must exactly match"):
+            model.predict(self.cp.asarray(self.X, dtype=self.cp.float64))
+
+    def test_dlpack_l1_device_input_matches_host_input(self) -> None:
+        config = dict(
+            backend="native_cuda",
+            device="cuda",
+            dtype="float32",
+            penalty="l1",
+            lambda_scale=0.5,
+            max_iter=200,
+        )
+        host = RenewableHuberRegressor(**config).fit(self.X, self.y)
+        device = RenewableHuberRegressor(**config).fit(
+            self.cp.asarray(self.X), self.cp.asarray(self.y)
+        )
+        np.testing.assert_allclose(device.coef_, host.coef_, rtol=3e-4, atol=3e-5)
+        self.assertAlmostEqual(device.intercept_, host.intercept_, places=4)
+        self.assertEqual(device.diagnostics_.lambda_value, host.diagnostics_.lambda_value)
+
     def test_dlpack_rank_deficiency_initializes_lazy_svd_fallback(self) -> None:
         rng = np.random.default_rng(177)
         base = rng.normal(size=(96, 2))
@@ -165,12 +214,51 @@ class NativeCudaGoldenTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
 
-    def test_unpenalized_golden_cases(self) -> None:
+    def test_complete_v1_golden_corpus(self) -> None:
         for case in self.corpus["cases"]:
-            if case["config"]["penalty"] != "none":
-                continue
             with self.subTest(case=case["id"]):
                 self._replay_case(case)
+
+    def test_complete_v2_l1_corpus(self) -> None:
+        corpus = json.loads(V2_CORPUS_PATH.read_text(encoding="utf-8"))
+        for case in corpus["cases"]:
+            with self.subTest(case=case["id"]):
+                self._replay_case(case)
+
+    def test_l1_checkpoint_resumes_across_all_three_engines(self) -> None:
+        # NumPy -> CUDA -> NumPy and, when available, CUDA -> Rust CPU: every
+        # hop restores previous_lambda and the historical subgradient from the
+        # portable v2 checkpoint and must match the uninterrupted oracle.
+        corpus = json.loads(V2_CORPUS_PATH.read_text(encoding="utf-8"))
+        case = next(case for case in corpus["cases"] if case["id"] == "weighted_three_batch_l1_f64")
+        rtol, atol = float(case["rtol"]), float(case["atol"])
+        first, second, third = case["batches"]
+        oracle = RenewableHuberRegressor(**{**case["config"], "backend": "numpy", "device": "cpu"})
+        engines = ["native_cuda", "native_cpu" if _native_cpu_ready() else "numpy"]
+        model = RenewableHuberRegressor(**{**case["config"], "backend": "numpy", "device": "cpu"})
+        probe = np.asarray(case["probe_X"], dtype=np.float64)
+        with TemporaryDirectory() as directory:
+            self._partial_fit(oracle, first)
+            self._partial_fit(model, first)
+            for backend, batch in zip(engines, (second, third), strict=True):
+                checkpoint = Path(directory) / f"l1-{backend}.npz"
+                model.save(checkpoint)
+                device = "cuda" if backend == "native_cuda" else "cpu"
+                model = RenewableHuberRegressor.load(checkpoint, backend=backend, device=device)
+                np.testing.assert_allclose(
+                    model.predict(probe), oracle.predict(probe), rtol=rtol, atol=atol
+                )
+                self._partial_fit(oracle, batch)
+                self._partial_fit(model, batch)
+                np.testing.assert_allclose(
+                    model.state_.coefficients, oracle.state_.coefficients, rtol=rtol, atol=atol
+                )
+                np.testing.assert_allclose(
+                    model.state_.information, oracle.state_.information, rtol=rtol, atol=atol
+                )
+                self.assertAlmostEqual(
+                    model.state_.previous_lambda, oracle.state_.previous_lambda, delta=1e-12
+                )
 
     def test_engine_is_reused_across_batches(self) -> None:
         case = next(
@@ -195,12 +283,14 @@ class NativeCudaGoldenTests(unittest.TestCase):
             observed = executor.submit(model.predict, probe).result()
         np.testing.assert_allclose(observed, expected, rtol=1e-10, atol=1e-11)
 
-    def test_l1_is_an_explicit_error(self) -> None:
+    def test_l1_uses_the_native_engine(self) -> None:
         X = np.arange(24, dtype=np.float64).reshape(8, 3)
         y = np.arange(8, dtype=np.float64)
         model = RenewableHuberRegressor(backend="native_cuda", device="cuda", penalty="l1")
-        with self.assertRaisesRegex(ValidationError, "penalty='none'"):
-            model.fit(X, y)
+        model.fit(X, y)
+        self.assertIsNotNone(model._backend._engine)
+        self.assertGreater(model.diagnostics_.lambda_value, 0.0)
+        self.assertEqual(model.state_.previous_lambda, model.diagnostics_.lambda_value)
 
     def test_checkpoint_resume_and_numpy_migration(self) -> None:
         case = next(
@@ -409,6 +499,7 @@ class NativeCudaCapabilityTests(unittest.TestCase):
         self.assertIsNotNone(capabilities.sum_scalar)
         self.assertIsNotNone(capabilities.read_cuda_features)
         self.assertFalse(capabilities.elementwise_workspace)
+        self.assertEqual(capabilities.native_update_penalties, frozenset({"none", "l1"}))
 
 
 if __name__ == "__main__":

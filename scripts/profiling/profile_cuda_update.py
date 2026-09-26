@@ -186,8 +186,6 @@ def main() -> int:
         or args.repeats < 1
     ):
         parser.error("sizes and repeats must be positive; warmup must be non-negative")
-    if args.engine == "native_cuda" and args.penalty != "none":
-        parser.error("the P2 native CUDA engine currently supports only penalty='none'")
     if (args.cuda_graphs or args.cuda_fast_math) and args.engine != "native_cuda":
         parser.error("CUDA tuning flags require --engine native_cuda")
     if args.cuda_fast_math and args.dtype != "float32":

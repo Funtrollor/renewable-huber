@@ -10,6 +10,7 @@ import numpy as np
 from renewable_huber import RenewableHuberRegressor
 
 CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v1.json"
+V2_CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v2.json"
 
 
 class NativeGoldenCorpusTests(unittest.TestCase):
@@ -32,6 +33,34 @@ class NativeGoldenCorpusTests(unittest.TestCase):
 
     def test_numpy_oracle_replays_every_case(self) -> None:
         for case in self.corpus["cases"]:
+            with self.subTest(case=case["id"]):
+                self._replay_case(case)
+
+    def test_v2_schema_and_case_ids_are_stable(self) -> None:
+        corpus = json.loads(V2_CORPUS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(corpus["schema"], "renewable-huber-native-golden")
+        self.assertEqual(corpus["schema_version"], 2)
+        self.assertEqual(
+            [case["id"] for case in corpus["cases"]],
+            [
+                "weighted_three_batch_l1_f64",
+                "multi_batch_l1_no_intercept_f32",
+                "sparse_l1_intercept_f64",
+                "streaming_l1_zero_lambda_f64",
+            ],
+        )
+        # Every v2 case is an L1 stream whose expected solver runs converged,
+        # so an engine that stops early or late is caught by the flag itself.
+        for case in corpus["cases"]:
+            with self.subTest(case=case["id"]):
+                self.assertEqual(case["config"]["penalty"], "l1")
+                self.assertTrue(
+                    all(state["diagnostics"]["converged"] for state in case["expected"]["states"])
+                )
+
+    def test_numpy_oracle_replays_every_v2_case(self) -> None:
+        corpus = json.loads(V2_CORPUS_PATH.read_text(encoding="utf-8"))
+        for case in corpus["cases"]:
             with self.subTest(case=case["id"]):
                 self._replay_case(case)
 
