@@ -161,7 +161,7 @@ jobs:
       - name: Build manylinux_2_28 CUDA 12 wheel
         run: >-
           docker run --rm -e RH_CUDA_ARCHITECTURES -v "$PWD:/io" -w /io
-          quay.io/pypa/manylinux_2_28_x86_64
+          quay.io/pypa/manylinux_2_28_x86_64@sha256:2394d7b597cb186bc1e9da06543ec1e2a97533a2e1a5ce739c65e755571de7bd
           bash scripts/native/build_linux_cuda_wheel.sh --python 3.12 --out dist-native-cuda
       - name: Build matching base wheel and check metadata
         run: |

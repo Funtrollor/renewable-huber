@@ -37,7 +37,8 @@ Linux CUDA wheels 在 `quay.io/pypa/manylinux_2_28_x86_64` container 內由
 `scripts/native/build_linux_cuda_wheel.sh` 建置，因此 wheel 宣告的 glibc 2.28 tag
 對 binary 成立。腳本以 `--auditwheel skip` 刻意不 vendor NVIDIA 函式庫，並在
 container 內用 `cuobjdump` 檢查 SASS／PTX，另拒絕宣告 runtime closure 以外的
-`NEEDED`。一般 PR CI 的 `native-cuda-linux-wheel` job 執行同一支腳本（縮小的
+`NEEDED`。兩個 workflow 以同一個 digest 固定這個 image；Dependabot 看不到 `run:`
+步驟裡的 image，更新時需手動把兩處 digest 一起換掉。一般 PR CI 的 `native-cuda-linux-wheel` job 執行同一支腳本（縮小的
 架構清單）並在無 GPU runner 上乾淨安裝、匯入，因此 release 路徑在 tag 前就已被
 驗證。
 

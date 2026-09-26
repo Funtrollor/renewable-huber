@@ -14,7 +14,7 @@
 #
 # Usage (from the repository root, mounted at /io):
 #   docker run --rm -e RH_CUDA_ARCHITECTURES -v "$PWD:/io" -w /io \
-#     quay.io/pypa/manylinux_2_28_x86_64 \
+#     quay.io/pypa/manylinux_2_28_x86_64@sha256:<digest pinned in the workflows> \
 #     bash scripts/native/build_linux_cuda_wheel.sh --python 3.12 --out dist-native-cuda
 set -euo pipefail
 
