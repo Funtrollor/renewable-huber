@@ -44,7 +44,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 foreach ($line in $compilerEnvironment) {
     if ($line -match "^([^=]+)=(.*)$") {
-        # The Codex/CI launcher can supply case-variant environment keys.
+        # A CI launcher can supply case-variant environment keys.
         # PowerShell's Env: provider rejects those duplicates while the .NET
         # process API safely applies the Visual Studio environment in place.
         [Environment]::SetEnvironmentVariable(

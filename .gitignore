@@ -30,7 +30,6 @@ scripts/prototypes/
 scripts/wildfire/
 
 # Local research material and tooling state
-.agents/
 # Per-machine agent state: Claude Code writes session-derived permission
 # allowlists containing absolute local paths.
 .claude/

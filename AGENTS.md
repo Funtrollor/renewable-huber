@@ -23,8 +23,8 @@ Always check which scheme a document is using.
 
 P0 through P3 of the maintainability audit are implemented and verified. P3
 added the `CheckpointPayload` boundary, executable unittest profiles and the
-shape-sweep module split. See `docs/agent-handoff.md` for the acceptance
-evidence and remaining follow-up work.
+shape-sweep module split; `docs/maintainability-refactor.md` records what each
+phase changed and why.
 
 The native CUDA engine is at C ABI 2 / Python API 4: it implements
 `penalty="l1"` (`docs/native-penalty-completion-plan.md`) and device-resident
@@ -37,23 +37,13 @@ bounds and what it deliberately declines to do are in
 [`docs/cpu-auto-dispatch-rfc.md`](docs/cpu-auto-dispatch-rfc.md); the
 invariants it introduces are in the list below.
 
-## Agent roles and hand-off
+## Working rules
 
-- **Claude Code writes implementation code from an agreed engineering plan.**
-- **Codex owns architecture, review, acceptance, commits, pushes and pull
-  requests.** Claude Code must not commit or push this repository.
-- Before starting work, both agents read this file and
-  [`docs/agent-handoff.md`](docs/agent-handoff.md), then inspect `git status`
-  and the commits made since the hand-off's base SHA.
-- After a work session, append one structured entry to `docs/agent-handoff.md`.
-  Never use a transcript or an ignored `.claude/` file as the only record of a
-  design decision.
-- Do not run both agents in the same working tree at the same time. Use
-  separate branches/worktrees, and let Codex integrate reviewed commits or
-  uncommitted patches into the publishing branch.
-
-Nothing in it changes an algorithm, a kernel order, stream behaviour, or a
-public API. Keep it that way: the committed schema-v2 baselines are CPU
+- Record design decisions in the repository (a doc under `docs/`, the
+  CHANGELOG, or the pull request description), never only in a transcript or
+  an ignored `.claude/` file.
+- Structural refactors must not change an algorithm, a kernel order, stream
+  behaviour, or a public API. The committed schema-v2 baselines are CPU
 1.17x–15.65x (median 1.68x), CUDA host 1.04x–1.96x (median 1.35x), and CUDA
 DLPack 1.06x–2.04x (median 1.53x). Differences within about 10% on this GPU are
 noise, not a performance claim. The golden corpus must stay bit-identical.

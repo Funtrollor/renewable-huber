@@ -64,7 +64,6 @@ include = [
   "/pyproject.toml",
 ]
 exclude = [
-  "/.agents/**",
   "/.gpu_test_packages/**",
   "/.venv/**",
   "/archives/**",
