@@ -9,6 +9,7 @@ from typing import Any
 from ..backends.capabilities import capabilities_of
 from ..backends.protocol import ArrayBackend
 from ..config import EstimatorConfig
+from ..exceptions import ValidationError
 from ..state import RenewableHuberState
 from .loss import (
     huber_loss,
@@ -417,6 +418,14 @@ def renewable_update(
     state.validate()
     capabilities = capabilities_of(backend)
     if capabilities.native_update is not None:
+        supported = capabilities.native_update_penalties
+        if supported is not None and config.penalty not in supported:
+            # Refuse before the engine sees the batch: an engine that does not
+            # implement a penalty must never be asked to approximate it.
+            raise ValidationError(
+                f"backend={getattr(backend, 'name', type(backend).__name__)!r} does not "
+                f"support penalty={config.penalty!r}; supported: {sorted(supported)}"
+            )
         if batch_weight is None:
             batch_weight = float(X.shape[0])
         return capabilities.native_update(

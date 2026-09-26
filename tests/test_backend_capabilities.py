@@ -28,6 +28,43 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertIsNone(capabilities.huber_loss)
         self.assertIsNone(capabilities.read_n_jobs)
         self.assertIsNone(capabilities.read_cuda_features)
+        # No restriction: the portable solver implements every penalty.
+        self.assertIsNone(capabilities.native_update_penalties)
+
+    def test_native_backends_declare_their_penalties_at_class_or_instance_level(self) -> None:
+        from renewable_huber.backends.native_cpu_backend import NativeCpuBackend
+        from renewable_huber.backends.native_cuda_backend import _DEFAULT_PENALTIES
+
+        self.assertEqual(NativeCpuBackend.native_update_penalties, frozenset({"none", "l1"}))
+        # An extension that does not advertise its penalties is assumed to
+        # implement only the unpenalized solver, never L1 by default.
+        self.assertEqual(_DEFAULT_PENALTIES, frozenset({"none"}))
+
+    def test_core_refuses_a_penalty_the_native_engine_does_not_advertise(self) -> None:
+        from renewable_huber.config import EstimatorConfig
+        from renewable_huber.core import renewable_update
+        from renewable_huber.exceptions import ValidationError
+        from renewable_huber.state import RenewableHuberState
+
+        calls: list[str] = []
+
+        class NoneOnly(NumPyBackend):
+            name = "none_only"
+            native_update_penalties = frozenset({"none"})
+
+            def renewable_update(self, *args: Any, **kwargs: Any) -> Any:
+                calls.append("native")
+                raise AssertionError("the engine must not be reached")
+
+        backend = NoneOnly("float64")
+        state = RenewableHuberState.empty(2, fit_intercept=True, xp=np, dtype=np.float64)
+        X = np.column_stack((np.eye(3, 2), np.ones(3)))
+        y = np.ones(3)
+        config = EstimatorConfig(penalty="l1")
+        with self.assertRaisesRegex(ValidationError, "does not support penalty='l1'"):
+            renewable_update(X, y, state, config, backend)
+        self.assertEqual(calls, [])
+        self.assertEqual(capabilities_of(backend).native_update_penalties, frozenset({"none"}))
 
     def test_elementwise_workspace_matches_the_documented_backend_set(self) -> None:
         # Before the capability object this was `backend.name in {"numpy",

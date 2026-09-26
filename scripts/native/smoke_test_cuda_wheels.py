@@ -37,10 +37,12 @@ def _smoke_program(version: str, *, import_only: bool) -> str:
         "from renewable_huber import RenewableHuberRegressor, __version__; "
         "from renewable_huber import _native_cuda; "
         f"assert __version__=={version!r}; "
-        "assert _native_cuda.version()['abi_version']==1; "
-        "assert _native_cuda.version()['python_api_version']==3; "
+        "assert _native_cuda.version()['abi_version']==2; "
+        "assert _native_cuda.version()['python_api_version']==4; "
         "assert _native_cuda.version()['supports_cuda_graphs']; "
         "assert _native_cuda.version()['supports_fast_math']; "
+        "assert set(_native_cuda.version()['supported_penalties'])=={'none','l1'}; "
+        "assert _native_cuda.version()['device_predict']=='dlpack'; "
     )
     if import_only:
         return common + "assert isinstance(_native_cuda.is_available(), bool)"
@@ -50,7 +52,10 @@ def _smoke_program(version: str, *, import_only: bool) -> str:
         "y=np.arange(8,dtype=np.float32); "
         "m=RenewableHuberRegressor(backend='native_cuda',device='cuda',"
         "dtype='float32',fit_intercept=False,max_iter=20).fit(X,y); "
-        "assert m.predict(X).shape==(8,)"
+        "assert m.predict(X).shape==(8,); "
+        "l1=RenewableHuberRegressor(backend='native_cuda',device='cuda',"
+        "dtype='float32',penalty='l1',max_iter=20).fit(X,y); "
+        "assert l1.predict(X).shape==(8,)"
     )
 
 

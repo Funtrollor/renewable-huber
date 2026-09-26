@@ -4,17 +4,20 @@
 //! `CudaError` with a Rust message, and means a malformed request never reaches
 //! code holding device resources.
 
-use crate::types::{CudaError, UnpenalizedConfig};
+use crate::types::{CudaError, UpdateConfig};
 
-pub(crate) fn validate_unpenalized_config(
+/// Accept `n_features_in` only when it and the intercept flag reproduce the
+/// engine's parameter count.
+pub(crate) fn validate_intercept_layout(
     n_parameters: usize,
-    config: UnpenalizedConfig,
-) -> Result<(), CudaError> {
-    let n_features_in = usize::try_from(config.n_features_in).map_err(|_| {
+    n_features_in: i64,
+    fit_intercept: bool,
+) -> Result<usize, CudaError> {
+    let n_features_in = usize::try_from(n_features_in).map_err(|_| {
         CudaError::InvalidArgument("n_features_in must be greater than zero".to_owned())
     })?;
     let expected_parameters = n_features_in
-        .checked_add(usize::from(config.fit_intercept))
+        .checked_add(usize::from(fit_intercept))
         .ok_or_else(|| {
             CudaError::InvalidArgument("feature and intercept dimensions are too large".to_owned())
         })?;
@@ -23,21 +26,32 @@ pub(crate) fn validate_unpenalized_config(
             "n_parameters must equal n_features_in plus the intercept column".to_owned(),
         ));
     }
-    if config.max_iter < 1
-        || !config.tau.is_finite()
-        || config.tau <= 0.0
-        || !config.bandwidth_scale.is_finite()
-        || config.bandwidth_scale <= 0.0
-        || !config.tolerance.is_finite()
-        || config.tolerance <= 0.0
-        || !config.ridge.is_finite()
-        || config.ridge < 0.0
-    {
-        return Err(CudaError::InvalidArgument(
-            "received invalid unpenalized solver configuration".to_owned(),
-        ));
+    Ok(n_features_in)
+}
+
+pub(crate) fn validate_update_config(
+    n_parameters: usize,
+    config: UpdateConfig,
+) -> Result<(), CudaError> {
+    validate_intercept_layout(n_parameters, config.n_features_in, config.fit_intercept)?;
+    let max_iter = usize::try_from(config.max_iter)
+        .ok()
+        .filter(|value| *value >= 1)
+        .ok_or_else(|| CudaError::InvalidArgument("max_iter must be positive".to_owned()))?;
+    // The numerical policy (finite positive tau/bandwidth/tolerance,
+    // non-negative ridge and lambda_scale) is the engine-independent one the
+    // CPU engine enforces; share it rather than restate it.
+    rh_core::UpdateConfig {
+        tau: config.tau,
+        penalty: config.penalty,
+        lambda_scale: config.lambda_scale,
+        bandwidth_scale: config.bandwidth_scale,
+        max_iter,
+        tolerance: config.tolerance,
+        ridge: config.ridge,
     }
-    Ok(())
+    .validate()
+    .map_err(|error| CudaError::InvalidArgument(error.to_string()))
 }
 
 #[cfg(feature = "cuda")]

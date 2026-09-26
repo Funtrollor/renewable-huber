@@ -57,7 +57,7 @@ a device-side implementation.
 Hardware validation is local-only and must not be dispatched through GitHub
 Actions. Use the fixed GPU host with the `cuda-full` environment, record the
 exact commit and dependency versions, and retain the generated JSON outside the
-repository for Codex review:
+repository for review:
 
 ```bash
 bash scripts/setup-wsl-venv.sh --profile cuda-full

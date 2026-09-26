@@ -29,7 +29,7 @@ SolveOutcome solve_unpenalized(
     RhCudaEngine* engine,
     int rows,
     const T* weights,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     double n_total,
     T tau,
     T bandwidth
@@ -47,6 +47,8 @@ SolveOutcome solve_unpenalized(
         engine, rows, typed<T>(engine->d_trial_beta), weights, tau, n_total
     ).objective;
     CandidateObjectiveGraph candidate_graph(engine);
+    ObjectiveTerms<T> candidate_terms;
+    candidate_terms.previous_beta = typed<T>(engine->d_trial_beta);
 
     for (int iteration = 1; iteration <= static_cast<int>(config->max_iter); ++iteration) {
         compute_gradient_hessian<T>(
@@ -89,7 +91,7 @@ SolveOutcome solve_unpenalized(
                 weights,
                 tau,
                 n_total,
-                typed<T>(engine->d_trial_beta)
+                candidate_terms
             );
             candidate_objective = candidate_result.objective;
             if (cholesky_status_pending) {
@@ -123,6 +125,124 @@ SolveOutcome solve_unpenalized(
         outcome.residual_is_current = true;
         outcome.objective = candidate_objective;
         outcome.iterations = iteration;
+        if (candidate_result.difference_norm <=
+            config->tolerance * (1.0 + candidate_result.beta_norm)) {
+            outcome.converged = true;
+            return outcome;
+        }
+    }
+    outcome.iterations = config->max_iter;
+    outcome.converged = false;
+    return outcome;
+}
+
+/*
+ * LAMM proximal-gradient transition for the L1 penalty, mirroring the NumPy
+ * reference and the Rust CPU engine step for step: majorize with a quadratic
+ * of curvature phi, soft-threshold every coordinate except the trailing
+ * intercept, double phi until the candidate's smooth objective sits under
+ * the majorizer, then halve phi (floored at 1e-8) after an accepted step.
+ *
+ * The residual resident in d_residual always belongs to d_trial_beta at the
+ * top of an iteration: the initial objective evaluates it, and every accepted
+ * candidate objective re-establishes it for the next gradient.
+ */
+template <typename T>
+SolveOutcome solve_l1(
+    RhCudaEngine* engine,
+    int rows,
+    const T* weights,
+    const RhCudaUpdateConfig* config,
+    double n_total,
+    T tau,
+    double lambda_value,
+    int64_t penalized_count,
+    const T* penalty_sign,
+    double penalty_scale
+) {
+    const int parameters = static_cast<int>(engine->n_parameters);
+    check_cuda(
+        rh_cuda::launch_copy(
+            typed<T>(engine->d_trial_beta), typed<T>(engine->d_coefficients), parameters, engine->stream
+        ),
+        "initialize proximal coefficients"
+    );
+
+    ObjectiveTerms<T> base_terms;
+    base_terms.penalty_sign = penalty_sign;
+    base_terms.penalty_scale = penalty_scale;
+    SolveOutcome outcome;
+    outcome.objective = smooth_objective<T>(
+        engine, rows, typed<T>(engine->d_trial_beta), weights, tau, n_total, base_terms
+    ).objective;
+
+    CandidateObjectiveGraph candidate_graph(engine);
+    ObjectiveTerms<T> candidate_terms = base_terms;
+    candidate_terms.previous_beta = typed<T>(engine->d_trial_beta);
+    candidate_terms.gradient = typed<T>(engine->d_gradient);
+    double phi = 1.0;
+
+    for (int iteration = 1; iteration <= static_cast<int>(config->max_iter); ++iteration) {
+        compute_l1_gradient<T>(
+            engine,
+            rows,
+            typed<T>(engine->d_trial_beta),
+            weights,
+            tau,
+            n_total,
+            penalty_sign,
+            penalty_scale
+        );
+
+        bool accepted = false;
+        outcome.residual_is_current = false;
+        ObjectiveResult candidate_result;
+        for (int attempt = 0; attempt < 40; ++attempt) {
+            check_cuda(
+                rh_cuda::launch_soft_threshold_candidate(
+                    typed<T>(engine->d_trial_beta),
+                    typed<T>(engine->d_gradient),
+                    static_cast<T>(1.0 / phi),
+                    static_cast<T>(lambda_value / phi),
+                    typed<T>(engine->d_candidate),
+                    parameters,
+                    penalized_count,
+                    engine->stream
+                ),
+                "form proximal candidate"
+            );
+            candidate_result = candidate_graph.evaluate<T>(
+                rows,
+                typed<T>(engine->d_candidate),
+                weights,
+                tau,
+                n_total,
+                candidate_terms
+            );
+            const double upper_bound = outcome.objective + candidate_result.gradient_dot +
+                0.5 * phi * candidate_result.difference_norm * candidate_result.difference_norm;
+            if (candidate_result.objective <= upper_bound + 1.0e-12) {
+                accepted = true;
+                break;
+            }
+            phi *= 2.0;
+        }
+        if (!accepted) {
+            outcome.iterations = iteration;
+            outcome.converged = false;
+            return outcome;
+        }
+
+        check_cuda(
+            rh_cuda::launch_copy(
+                typed<T>(engine->d_trial_beta), typed<T>(engine->d_candidate), parameters, engine->stream
+            ),
+            "commit accepted proximal candidate to workspace"
+        );
+        outcome.residual_is_current = true;
+        outcome.objective = candidate_result.objective;
+        outcome.iterations = iteration;
+        phi = std::max(phi * 0.5, 1.0e-8);
         if (candidate_result.difference_norm <=
             config->tolerance * (1.0 + candidate_result.beta_norm)) {
             outcome.converged = true;
@@ -203,7 +323,7 @@ template <typename T>
 RhCudaStatus update_typed(
     RhCudaEngine* engine,
     const BatchView& batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     RhCudaDiagnostics* diagnostics,
     RhCudaHostState* exported_state
 ) {
@@ -221,8 +341,14 @@ RhCudaStatus update_typed(
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "state counters would overflow");
     }
 
+    const bool l1 = config->penalty == RH_CUDA_PENALTY_L1;
     const double n_total = engine->weight_sum + batch.batch_weight;
     const double bandwidth = bandwidth_for(engine, batch.batch_weight, config);
+    const double lambda_value = lambda_for(engine, batch.batch_weight, config);
+    // The trailing coordinate is the intercept exactly when the engine carries
+    // one parameter more than the caller has features; it is never penalized.
+    const int64_t penalized_count = engine->n_parameters -
+        (engine->n_parameters == config->n_features_in + 1 ? 1 : 0);
     copy_batch<T>(engine, batch);
     // DLPack keeps the producer target alive until this call returns. Alias it
     // directly during the solver instead of copying it into owned workspace;
@@ -233,15 +359,49 @@ RhCudaStatus update_typed(
         batch.copy_kind == cudaMemcpyDeviceToDevice
     );
     const T* weights = batch.sample_weight == nullptr ? nullptr : typed<T>(engine->d_weights);
-    const SolveOutcome outcome = solve_unpenalized<T>(
-        engine,
-        static_cast<int>(batch.n_rows),
-        weights,
-        config,
-        n_total,
-        static_cast<T>(config->tau),
-        static_cast<T>(bandwidth)
-    );
+    SolveOutcome outcome;
+    if (l1) {
+        // The reference applies the historical subgradient only once a
+        // previous batch exists; before that the state carries no lambda.
+        const T* penalty_sign = nullptr;
+        double penalty_scale = 0.0;
+        if (engine->n_samples_seen > 0) {
+            check_cuda(
+                rh_cuda::launch_penalty_sign(
+                    typed<T>(engine->d_coefficients),
+                    typed<T>(engine->d_penalty_sign),
+                    engine->n_parameters,
+                    penalized_count,
+                    engine->stream
+                ),
+                "form L1 historical subgradient"
+            );
+            penalty_sign = typed<T>(engine->d_penalty_sign);
+            penalty_scale = engine->weight_sum / n_total * engine->previous_lambda;
+        }
+        outcome = solve_l1<T>(
+            engine,
+            static_cast<int>(batch.n_rows),
+            weights,
+            config,
+            n_total,
+            static_cast<T>(config->tau),
+            lambda_value,
+            penalized_count,
+            penalty_sign,
+            penalty_scale
+        );
+    } else {
+        outcome = solve_unpenalized<T>(
+            engine,
+            static_cast<int>(batch.n_rows),
+            weights,
+            config,
+            n_total,
+            static_cast<T>(config->tau),
+            static_cast<T>(bandwidth)
+        );
+    }
     final_information<T>(
         engine,
         static_cast<int>(batch.n_rows),
@@ -250,6 +410,30 @@ RhCudaStatus update_typed(
         static_cast<T>(bandwidth),
         outcome.residual_is_current
     );
+    if (l1) {
+        // The reported objective adds lambda * ||beta||_1 over the penalized
+        // coordinates. Queue the reduction behind the solve so it shares the
+        // update's single transactional synchronization.
+        check_cublas(
+            Blas<T>::asum(
+                engine->cublas_reduction,
+                static_cast<int>(penalized_count),
+                typed<T>(engine->d_trial_beta),
+                typed<T>(engine->d_reduction_results) + 6
+            ),
+            "reduce final L1 norm"
+        );
+        check_cuda(
+            cudaMemcpyAsync(
+                typed<T>(engine->h_reduction_results) + 6,
+                typed<T>(engine->d_reduction_results) + 6,
+                sizeof(T),
+                cudaMemcpyDeviceToHost,
+                engine->stream
+            ),
+            "read final L1 norm"
+        );
+    }
 
     if (exported_state != nullptr) {
         // Both outputs still live in staging buffers. Queue their D2H copies
@@ -268,12 +452,17 @@ RhCudaStatus update_typed(
      * pointers so a hard CUDA failure leaves the active state untouched.
      */
     check_cuda(cudaStreamSynchronize(engine->stream), "complete renewable CUDA update");
+    double objective = outcome.objective;
+    if (l1) {
+        objective += lambda_value *
+            static_cast<double>(typed<T>(engine->h_reduction_results)[6]);
+    }
     std::swap(engine->d_coefficients, engine->d_trial_beta);
     std::swap(engine->d_information, engine->d_information_next);
 
     engine->n_samples_seen += batch.n_rows;
     engine->batch_count += 1;
-    engine->previous_lambda = 0.0;
+    engine->previous_lambda = lambda_value;
     engine->weight_sum = n_total;
     if (exported_state != nullptr) {
         fill_state_metadata(engine, exported_state);
@@ -282,31 +471,82 @@ RhCudaStatus update_typed(
     diagnostics->iterations = outcome.iterations;
     diagnostics->converged = outcome.converged ? 1 : 0;
     diagnostics->used_regularized_fallback = outcome.used_fallback ? 1 : 0;
-    diagnostics->objective = outcome.objective;
-    diagnostics->lambda_value = 0.0;
+    diagnostics->objective = objective;
+    diagnostics->lambda_value = lambda_value;
     diagnostics->bandwidth = bandwidth;
     return RH_CUDA_STATUS_SUCCESS;
 }
 
 template <typename T>
-RhCudaStatus predict_typed(RhCudaEngine* engine, const RhCudaHostPrediction* request) {
-    check_header(request, "host prediction");
+RhCudaStatus predict_typed(RhCudaEngine* engine, const RhCudaPrediction* request) {
+    check_header(request, "prediction");
     if (request->x_design == nullptr || request->prediction == nullptr || request->n_rows <= 0 ||
-        request->n_rows > std::numeric_limits<int>::max() || request->n_columns != engine->n_parameters) {
-        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "host prediction has an invalid contiguous design matrix");
+        request->n_rows > std::numeric_limits<int>::max() || request->reserved0 != 0) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "prediction request is malformed");
+    }
+    if (request->input_location != RH_CUDA_MEMORY_HOST &&
+        request->input_location != RH_CUDA_MEMORY_DEVICE) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "prediction input_location is unknown");
+    }
+    validate_intercept_layout(request->n_features_in, engine);
+    if (request->n_columns != engine->n_parameters && request->n_columns != request->n_features_in) {
+        fail(
+            RH_CUDA_STATUS_INVALID_ARGUMENT,
+            "prediction columns must match n_features_in or the expanded engine parameters"
+        );
+    }
+    const bool device_input = request->input_location == RH_CUDA_MEMORY_DEVICE;
+    if (device_input) {
+        validate_device_pointer(engine, request->x_design, "inspect device prediction X");
     }
     ensure_batch_capacity<T>(engine, request->n_rows);
-    const size_t matrix = checked_elements(request->n_rows, engine->n_parameters, "prediction design");
-    check_cuda(
-        cudaMemcpyAsync(
-            engine->d_design,
-            request->x_design,
-            matrix * sizeof(T),
-            cudaMemcpyHostToDevice,
-            engine->stream
-        ),
-        "copy prediction design to device"
-    );
+    const size_t matrix = checked_elements(request->n_rows, request->n_columns, "prediction design");
+    const cudaMemcpyKind copy_kind = device_input ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
+
+    const T* design = typed<T>(engine->d_design);
+    if (request->n_columns == engine->n_parameters) {
+        if (device_input) {
+            // An expanded device design is read in place: the GEMV below is
+            // the only consumer, so a staging copy would buy nothing.
+            design = typed<T>(request->x_design);
+        } else {
+            check_cuda(
+                cudaMemcpyAsync(
+                    engine->d_design,
+                    request->x_design,
+                    matrix * sizeof(T),
+                    copy_kind,
+                    engine->stream
+                ),
+                "copy prediction design to device"
+            );
+        }
+    } else {
+        const T* features = typed<T>(request->x_design);
+        if (!device_input) {
+            check_cuda(
+                cudaMemcpyAsync(
+                    engine->d_weighted_design,
+                    request->x_design,
+                    matrix * sizeof(T),
+                    copy_kind,
+                    engine->stream
+                ),
+                "copy prediction features to device"
+            );
+            features = typed<T>(engine->d_weighted_design);
+        }
+        check_cuda(
+            rh_cuda::launch_append_intercept(
+                features,
+                typed<T>(engine->d_design),
+                request->n_rows,
+                request->n_columns,
+                engine->stream
+            ),
+            "append prediction intercept column on device"
+        );
+    }
     const int rows = static_cast<int>(request->n_rows);
     const int parameters = static_cast<int>(engine->n_parameters);
     const T one = static_cast<T>(1);
@@ -318,13 +558,13 @@ RhCudaStatus predict_typed(RhCudaEngine* engine, const RhCudaHostPrediction* req
             parameters,
             rows,
             &one,
-            typed<T>(engine->d_design),
+            design,
             parameters,
             typed<T>(engine->d_coefficients),
             &zero,
             typed<T>(engine->d_residual)
         ),
-        "compute host prediction"
+        "compute prediction"
     );
     check_cuda(
         cudaMemcpyAsync(
@@ -336,7 +576,7 @@ RhCudaStatus predict_typed(RhCudaEngine* engine, const RhCudaHostPrediction* req
         ),
         "copy prediction to host"
     );
-    check_cuda(cudaStreamSynchronize(engine->stream), "complete host prediction");
+    check_cuda(cudaStreamSynchronize(engine->stream), "complete prediction");
     return RH_CUDA_STATUS_SUCCESS;
 }
 
@@ -349,14 +589,14 @@ template void enqueue_state_copy<double>(
     RhCudaEngine*, const double*, const double*, RhCudaHostState*
 );
 template RhCudaStatus update_typed<float>(
-    RhCudaEngine*, const BatchView&, const RhCudaUnpenalizedConfig*,
+    RhCudaEngine*, const BatchView&, const RhCudaUpdateConfig*,
     RhCudaDiagnostics*, RhCudaHostState*
 );
 template RhCudaStatus update_typed<double>(
-    RhCudaEngine*, const BatchView&, const RhCudaUnpenalizedConfig*,
+    RhCudaEngine*, const BatchView&, const RhCudaUpdateConfig*,
     RhCudaDiagnostics*, RhCudaHostState*
 );
-template RhCudaStatus predict_typed<float>(RhCudaEngine*, const RhCudaHostPrediction*);
-template RhCudaStatus predict_typed<double>(RhCudaEngine*, const RhCudaHostPrediction*);
+template RhCudaStatus predict_typed<float>(RhCudaEngine*, const RhCudaPrediction*);
+template RhCudaStatus predict_typed<double>(RhCudaEngine*, const RhCudaPrediction*);
 
 }  // namespace rh_cuda::engine

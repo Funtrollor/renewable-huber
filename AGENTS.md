@@ -23,8 +23,13 @@ Always check which scheme a document is using.
 
 P0 through P3 of the maintainability audit are implemented and verified. P3
 added the `CheckpointPayload` boundary, executable unittest profiles and the
-shape-sweep module split. See `docs/agent-handoff.md` for the acceptance
-evidence and remaining follow-up work.
+shape-sweep module split; `docs/maintainability-refactor.md` records what each
+phase changed and why.
+
+The native CUDA engine is at C ABI 2 / Python API 4: it implements
+`penalty="l1"` (`docs/native-penalty-completion-plan.md`) and device-resident
+prediction, ships Linux `manylinux_2_28` wheels, takes its CUDA runtime from
+`nvidia-*-cu12` wheels, and every package supports CPython 3.10–3.13.
 
 On top of P3, `backend="auto"` on CPU may now select the Rust CPU engine from
 bounded runtime evidence measured on the current host. The design, its cost
@@ -32,23 +37,13 @@ bounds and what it deliberately declines to do are in
 [`docs/cpu-auto-dispatch-rfc.md`](docs/cpu-auto-dispatch-rfc.md); the
 invariants it introduces are in the list below.
 
-## Agent roles and hand-off
+## Working rules
 
-- **Claude Code writes implementation code from an agreed engineering plan.**
-- **Codex owns architecture, review, acceptance, commits, pushes and pull
-  requests.** Claude Code must not commit or push this repository.
-- Before starting work, both agents read this file and
-  [`docs/agent-handoff.md`](docs/agent-handoff.md), then inspect `git status`
-  and the commits made since the hand-off's base SHA.
-- After a work session, append one structured entry to `docs/agent-handoff.md`.
-  Never use a transcript or an ignored `.claude/` file as the only record of a
-  design decision.
-- Do not run both agents in the same working tree at the same time. Use
-  separate branches/worktrees, and let Codex integrate reviewed commits or
-  uncommitted patches into the publishing branch.
-
-Nothing in it changes an algorithm, a kernel order, stream behaviour, or a
-public API. Keep it that way: the committed schema-v2 baselines are CPU
+- Record design decisions in the repository (a doc under `docs/`, the
+  CHANGELOG, or the pull request description), never only in a transcript or
+  an ignored `.claude/` file.
+- Structural refactors must not change an algorithm, a kernel order, stream
+  behaviour, or a public API. The committed schema-v2 baselines are CPU
 1.17x–15.65x (median 1.68x), CUDA host 1.04x–1.96x (median 1.35x), and CUDA
 DLPack 1.06x–2.04x (median 1.53x). Differences within about 10% on this GPU are
 noise, not a performance claim. The golden corpus must stay bit-identical.
@@ -201,6 +196,28 @@ report; these are the ones worth memorising.
   in `PORTABLE_NATIVE_MODULES`; `validate_profiles` fails if one of those
   modules leaves `core`, and a self-test rejects unittest skip controls and
   executes the nine-test contract with the GPU hidden to prove it has no skips.
+- **A native engine is never asked to run a penalty it does not advertise.**
+  `native_update_penalties` is read only through `capabilities_of()`; the core
+  raises `ValidationError` before `native_update` for anything outside it, and
+  a CUDA extension that advertises nothing counts as `{"none"}`. The C ABI
+  rejects an unknown `RhCudaPenalty`, a non-zero `reserved0` and a bad
+  `lambda_scale` before enqueueing work. Relaxing any one of these lets an
+  engine silently solve L1 as unpenalized with every other test still green.
+  Guarded by `tests/test_backend_capabilities.py`,
+  `tests/test_native_cuda_selection.py` and the `l1_rejections_leave_state_untouched`
+  smoke case.
+- **`renewable_huber._cuda_runtime` uses the pip `nvidia-*-cu12` libraries only
+  as a complete set.** A partial set falls back entirely to the system
+  toolkit; loading some libraries from each puts two CUDA builds in one
+  process, which works until a symbol differs. Its component list must match
+  `NATIVE_RUNTIME_DEPENDENCIES` in `scripts/native/validate_release_artifacts.py`.
+  Guarded by `tests/test_native_cuda_runtime.py`.
+- **The Linux CUDA wheel is built with `--auditwheel skip` inside
+  `manylinux_2_28`, never repaired.** Repair would vendor the NVIDIA libraries
+  the wheel deliberately takes from its dependencies, and building outside the
+  container would make the glibc tag untrue. `scripts/native/build_linux_cuda_wheel.sh`
+  also fails on any `NEEDED` entry outside the declared runtime closure. CI and
+  the release run that same script; keep it that way.
 - **`CUDA_SEPARABLE_COMPILATION` must stay `OFF` in `native/cuda/CMakeLists.txt`.**
   Turning it on routes every architecture through nvlink, which emits SASS only.
   The device-linked image the runtime registers then has no PTX, so the

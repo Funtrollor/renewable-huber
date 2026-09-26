@@ -5,8 +5,7 @@
 
 - 基底：P0–P2 已合併；P3 基於 `14f9e72`
 - 依據：`renewable-huber 代碼結構與可維護性稽核報告`（稽核版本 df17d08）
-- 狀態：P0、P1、P2、P3 全部完成並驗證；完整驗收證據見
-  `docs/agent-handoff.md`
+- 狀態：P0、P1、P2、P3 全部完成並驗證
 
 ---
 
@@ -26,8 +25,8 @@
 ---
 
 ## 1. 這次重構的原則
-> 專案根目錄的 `AGENTS.md` 是這份報告的精簡版，Codex 每個 session 會自動讀取。
-> 它只放「違反會安靜壞掉」的不變條件與驗證指令；改動任何一邊時請保持兩邊一致。
+> 專案根目錄的 `AGENTS.md` 是這份報告的精簡版，只放「違反會安靜壞掉」的不變條件
+> 與驗證指令；改動任何一邊時請保持兩邊一致。
 
 
 三條，違反其中任何一條的修改都應該被退回：
@@ -244,7 +243,6 @@ CUDA benchmark harness 在這台機器上，**同一份 binary 連跑三次 medi
 - 位置：`/home/untrollor/renewable-huber`（ext4，**不是** `/mnt/c`；後者慢且有權限與大小寫問題）
 - Ubuntu 24.04.3，kernel 6.6.87.2-microsoft-standard-WSL2
 - `origin` 已指回 `https://github.com/Funtrollor/renewable-huber.git`
-- 分支 `codex/maintainability-p0`，8 個 commit，working tree 乾淨
 - `artifacts/` 的 105 個驗證基線已一併帶過來（gitignored）
 - **已安裝並驗證**：
   - gcc 13.3.0、g++、make、cmake 3.28.3、ninja 1.11.1、pkg-config
@@ -291,45 +289,7 @@ bash scripts/setup-wsl-venv.sh --profile cuda-full
 > **絕對不要在 WSL 裡安裝 Linux 顯示驅動。** WSL 的 GPU 是透過 Windows 驅動
 > passthrough，裝 Linux driver 會遮蔽掉它。上面的 repository 只含 toolkit。
 
-### 7.2 Windows 副本（原位置，仍存在）
-
-`C:\Users\Funtrollor\Desktop\bigDataAnynisit` **沒有刪除**。目前狀態：
-
-- 有完整的 8 個 commit，但**沒有這份報告的 commit**（報告在 WSL 端提交）
-- 有已建好並安裝的 native CPU + CUDA extension（`tmp/refactor-env`，Python 3.11）
-- **目前唯一驗證過 CUDA 完整流程的環境**
-
-同步方式：push 到 GitHub 後兩邊都從那裡拉。確認 WSL 環境可用之後再決定是否刪除 Windows 副本。
-
-### 7.3 Agent 環境（Claude Code / Codex）
-
-兩個 CLI 都裝在 WSL，透過 nvm 管理的 Node，全部在 `$HOME` 底下，不需要 root：
-
-| 項目 | 版本 / 位置 |
-|---|---|
-| Node | v24.19.0（`~/.nvm`） |
-| Claude Code | 2.1.223 |
-| Codex CLI | 0.146.1 |
-
-Windows 端的 session 紀錄已經搬過來：
-
-- Claude Code 以**工作目錄**當索引鍵，規則是把所有非 `[a-zA-Z0-9]` 的字元各換成一個 `-`
-  （`_` 也換，每個中文字各換一個）。所以
-  `C:\Users\Funtrollor\Desktop\bigDataAnynisit` → `C--Users-Funtrollor-Desktop-bigDataAnynisit`，
-  而 `/home/untrollor/renewable-huber` → `-home-untrollor-renewable-huber`。
-  兩個 session（6.4 MB）已複製到後者。
-- Codex 的 session 按日期分層並另有索引，`sessions/`、`session_index.jsonl`、
-  `config.toml`、`skills` 已複製（270 MB，其中 51 個 session 提到這個專案）。
-
-**`auth.json` 與憑證刻意沒有複製** —— 在 WSL 端重新登入。
-
-搬過來的 transcript 記錄的是 Windows 路徑。實測主 session 1691 行裡只有 42 處
-`C:\Users`、127 處提到 PowerShell，而 1457 行提到 `renewable-huber` —— 也就是說
-**實質內容（改了什麼、為什麼、驗證結果）與路徑無關**，Windows 特定的部分集中在 shell
-呼叫上。歷史可讀，但接手時仍應以本文件與 git history 為準：它們是被驗證過並萃取出來的
-結論，而 transcript 是過程。
-
-### 7.4 Windows/PowerShell 的坑（若還會用到）
+### 7.2 Windows/PowerShell 的坑（若還會用到）
 
 - **`2>&1` 用在原生執行檔上會造成假失敗**：PowerShell 5.1 把每行 stderr 包成 ErrorRecord，即使 exit code 是 0 也會讓 `$?` 變成 `$false`。maturin 建置成功卻回報 exit 1 就是這個原因。導向檔案再讀取。
 - **heredoc 不存在**，`<<'EOF'` 是 parser error。多行字串用 here-string 或改用 Bash 工具。
@@ -338,17 +298,17 @@ Windows 端的 session 紀錄已經搬過來：
 
 ---
 
-## 8. P3：已實作並通過 Codex 驗收
+## 8. P3：已實作並驗收
 
-在 `claude/maintainability-p3`（基底 `14f9e72`）上完成，**刻意不 commit**。逐項證據與未決問題見 `docs/agent-handoff.md`。
+基於 `14f9e72` 完成，並已合併。
 
 ### 8.1 `CheckpointPayload` 邊界
 
 `serialization.py` 變成純 codec：`CheckpointPayload` + `write_checkpoint` / `read_checkpoint`。它不再 import estimator、不建構 estimator、也不呼叫 `_restore_state`；那三件事移到 estimator 層的 `_checkpoint_payload()` 與 `_from_checkpoint_payload()`。`save()` / `load()` / `state_dict()` 的外部行為與 v2 檔案格式逐位元不變。
 
-**`save_model` / `load_model` 兩個模組層函式被移除** —— `load_model` 必然要建構 estimator，與這條邊界互斥。兩者都不在 `__all__`、不在任何文件裡，唯一呼叫者是 `estimator.py`。這是本次唯一的內部介面變更，交由 Codex 決定是否接受。
+**`save_model` / `load_model` 兩個模組層函式被移除** —— `load_model` 必然要建構 estimator，與這條邊界互斥。兩者都不在 `__all__`、不在任何文件裡，唯一呼叫者是 `estimator.py`。這是本次唯一的內部介面變更，已隨 P3 接受並記入 CHANGELOG。
 
-`diagnostics` 是 payload 的欄位但**沒有任何已發布格式會寫它**：解 v1/v2 一律得到 `None`，剛 `load()` 的模型讀 `diagnostics_` 仍拋 `NotFittedError`。要落檔就得升 v3，那是 Codex 的決定。
+`diagnostics` 是 payload 的欄位但**沒有任何已發布格式會寫它**：解 v1/v2 一律得到 `None`，剛 `load()` 的模型讀 `diagnostics_` 仍拋 `NotFittedError`。要落檔就得升 checkpoint 格式 v3。
 
 ### 8.2 測試 profile
 

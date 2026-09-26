@@ -59,7 +59,8 @@ ownership and the final stream completion guarantee its lifetime. Host input
 continues to use owned engine workspace.
 
 The original P2 extension reported C ABI version 1 and Python payload API
-version 2. The current extension reports C ABI version 1 and payload API 3.
+version 2; 0.6.1 reported C ABI 1 and payload API 3. The current extension
+reports C ABI version 2 and payload API 4.
 The base package checks both before creating an engine, so an
 older or unrelated native module fails explicitly instead of reaching a
 native method or result-dictionary mismatch later. Compatible builds
@@ -78,16 +79,17 @@ unpenalized solver:
 - finite least-squares-style handling of a rank-deficient Hessian;
 - portable NumPy state returned at the estimator/checkpoint boundary.
 
-The P2 engine does not yet implement the L1/LAMM loop. An explicit
-`backend="native_cuda", penalty="l1"` request raises a `ValidationError`; it
-never silently changes engines. Use `backend="cupy"` for L1 until that loop is
-moved in a later phase.
+The P2 engine did not implement the L1/LAMM loop, and an explicit
+`backend="native_cuda", penalty="l1"` request raised a `ValidationError`. C ABI
+2 / Python API 4 adds that loop; see `docs/native-penalty-completion-plan.md`.
+An extension that does not advertise `l1` in `supported_penalties` is still
+refused before any native call, never silently changed to another engine.
 
 ## Build on Windows
 
 Requirements:
 
-- Python 3.10-3.12 and Maturin;
+- Python 3.10-3.13 and Maturin;
 - stable Rust with the MSVC target;
 - Visual Studio 2022 C++ Build Tools;
 - CMake and Ninja;

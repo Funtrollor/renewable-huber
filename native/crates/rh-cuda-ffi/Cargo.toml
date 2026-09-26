@@ -16,6 +16,8 @@ default = []
 cuda = []
 
 [dependencies]
+# Penalty vocabulary and numerical config policy only; no buffers or engines.
+rh-core = { path = "../rh-core" }
 thiserror.workspace = true
 
 [build-dependencies]

@@ -50,7 +50,7 @@ using it.
 
 ## Build locally
 
-Create or activate a Python 3.10-3.12 virtual environment with Maturin and the
+Create or activate a Python 3.10-3.13 virtual environment with Maturin and the
 base project installed, then run:
 
 ```powershell

@@ -444,7 +444,7 @@ RhCudaStatus rh_cuda_engine_copy_state(RhCudaEngine* engine, RhCudaHostState* st
 RhCudaStatus rh_cuda_engine_update_host(
     RhCudaEngine* engine,
     const RhCudaHostBatch* batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     RhCudaDiagnostics* diagnostics
 ) {
     return guarded(engine, [&]() -> RhCudaStatus {
@@ -468,7 +468,7 @@ RhCudaStatus rh_cuda_engine_update_host(
 RhCudaStatus rh_cuda_engine_update_host_with_state(
     RhCudaEngine* engine,
     const RhCudaHostBatch* batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     RhCudaDiagnostics* diagnostics,
     RhCudaHostState* state
 ) {
@@ -503,7 +503,7 @@ RhCudaStatus rh_cuda_engine_stream(RhCudaEngine* engine, uintptr_t* stream) {
 RhCudaStatus rh_cuda_engine_update_device_with_state(
     RhCudaEngine* engine,
     const RhCudaDeviceBatch* batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     RhCudaDiagnostics* diagnostics,
     RhCudaHostState* state
 ) {
@@ -525,7 +525,7 @@ RhCudaStatus rh_cuda_engine_update_device_with_state(
     });
 }
 
-RhCudaStatus rh_cuda_engine_predict_host(RhCudaEngine* engine, const RhCudaHostPrediction* request) {
+RhCudaStatus rh_cuda_engine_predict(RhCudaEngine* engine, const RhCudaPrediction* request) {
     return guarded(engine, [&]() -> RhCudaStatus {
         if (engine->dtype == RH_CUDA_DTYPE_FLOAT32) {
             return predict_typed<float>(engine, request);

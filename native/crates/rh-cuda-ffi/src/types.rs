@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use rh_core::Penalty;
 use thiserror::Error;
 
 #[cfg(feature = "cuda")]
@@ -156,9 +157,12 @@ pub struct StateMetadata {
     pub weight_sum: f64,
 }
 
-/// Immutable unpenalized configuration for one complete batch transition.
+/// Immutable configuration for one complete batch transition.
+///
+/// `penalty` selects the damped Newton (`Penalty::None`) or LAMM proximal
+/// (`Penalty::L1`) solver; `lambda_scale` is ignored by the former.
 #[derive(Debug, Clone, Copy)]
-pub struct UnpenalizedConfig {
+pub struct UpdateConfig {
     pub n_features_in: i64,
     pub fit_intercept: bool,
     pub tau: f64,
@@ -166,7 +170,31 @@ pub struct UnpenalizedConfig {
     pub max_iter: i64,
     pub tolerance: f64,
     pub ridge: f64,
+    pub penalty: Penalty,
+    pub lambda_scale: f64,
 }
+
+#[cfg(feature = "cuda")]
+pub(crate) const fn penalty_code(penalty: Penalty) -> i32 {
+    match penalty {
+        Penalty::None => ffi::RH_CUDA_PENALTY_NONE,
+        Penalty::L1 => ffi::RH_CUDA_PENALTY_L1,
+    }
+}
+
+/// Parse the Python-facing penalty name.
+pub fn parse_penalty(name: &str) -> Result<Penalty, CudaError> {
+    match name {
+        "none" => Ok(Penalty::None),
+        "l1" => Ok(Penalty::L1),
+        _ => Err(CudaError::InvalidArgument(
+            "penalty must be either 'none' or 'l1'".to_owned(),
+        )),
+    }
+}
+
+/// Penalties the linked engine implements, in the Python-facing spelling.
+pub const SUPPORTED_PENALTIES: [&str; 2] = ["none", "l1"];
 
 /// One host-fed batch.  The `batch_weight` is supplied by Python validation,
 /// not recomputed by the native layer, to preserve the frequency-weight
@@ -191,6 +219,16 @@ pub struct DeviceBatch {
     pub n_rows: usize,
     pub n_columns: usize,
     pub batch_weight: f64,
+}
+
+/// A device-resident C-contiguous prediction matrix obtained from a DLPack
+/// producer.  As for [`DeviceBatch`], the C ABI validates the allocation and
+/// its owning device before reading it.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceMatrix {
+    pub address: usize,
+    pub rows: usize,
+    pub columns: usize,
 }
 
 /// Diagnostics from one update.  Non-convergence is a valid outcome and does

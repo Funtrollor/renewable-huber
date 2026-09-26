@@ -10,16 +10,17 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
 use rh_cuda_ffi::{
-    device_count as cuda_device_count, is_available as cuda_is_available, runtime_info, CudaDtype,
-    CudaEngine, CudaError, CudaScalar, DeviceBatch, Diagnostics, EngineTuning, HostBatch,
-    HostMatrix, HostState, HostVector, StateMetadata, UnpenalizedConfig,
+    device_count as cuda_device_count, is_available as cuda_is_available, parse_penalty,
+    runtime_info, CudaDtype, CudaEngine, CudaError, CudaScalar, DeviceBatch, DeviceMatrix,
+    Diagnostics, EngineTuning, HostBatch, HostMatrix, HostState, HostVector, StateMetadata,
+    UpdateConfig, SUPPORTED_PENALTIES,
 };
 
 mod dlpack;
 
 use dlpack::DlpackTensor;
 
-const PYTHON_API_VERSION: u32 = 3;
+const PYTHON_API_VERSION: u32 = 4;
 
 /// Host-fed adapter for one persistent, single-device native CUDA engine.
 ///
@@ -128,8 +129,9 @@ impl NativeCudaEngine {
         }
     }
 
-    /// Execute one validated unpenalized batch and return flat state/diagnostic
-    /// fields consumed by the Python native backend.
+    /// Execute one validated batch and return flat state/diagnostic fields
+    /// consumed by the Python native backend. `penalty` is `"none"` or
+    /// `"l1"`; any other value is rejected before the engine is touched.
     ///
     /// `batch_weight` is positional immediately after `sample_weight` to match
     /// the backend dispatcher.  It is calculated by the Python estimator from
@@ -147,6 +149,8 @@ impl NativeCudaEngine {
         max_iter,
         tol,
         ridge,
+        penalty,
+        lambda_scale,
     ))]
     #[allow(clippy::too_many_arguments)] // Stable, explicit Python update ABI.
     fn update<'py>(
@@ -163,8 +167,10 @@ impl NativeCudaEngine {
         max_iter: i64,
         tol: f64,
         ridge: f64,
+        penalty: &str,
+        lambda_scale: f64,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let config = UnpenalizedConfig {
+        let config = UpdateConfig {
             n_features_in,
             fit_intercept,
             tau,
@@ -172,6 +178,8 @@ impl NativeCudaEngine {
             max_iter,
             tolerance: tol,
             ridge,
+            penalty: parse_penalty(penalty).map_err(to_py_error)?,
+            lambda_scale,
         };
         match self.engine.dtype() {
             CudaDtype::Float32 => update_typed::<f32>(
@@ -210,6 +218,8 @@ impl NativeCudaEngine {
         max_iter,
         tol,
         ridge,
+        penalty,
+        lambda_scale,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn update_device<'py>(
@@ -226,8 +236,10 @@ impl NativeCudaEngine {
         max_iter: i64,
         tol: f64,
         ridge: f64,
+        penalty: &str,
+        lambda_scale: f64,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let config = UnpenalizedConfig {
+        let config = UpdateConfig {
             n_features_in,
             fit_intercept,
             tau,
@@ -235,6 +247,8 @@ impl NativeCudaEngine {
             max_iter,
             tolerance: tol,
             ridge,
+            penalty: parse_penalty(penalty).map_err(to_py_error)?,
+            lambda_scale,
         };
         let stream = self.engine.stream_handle().map_err(to_py_error)?;
         match self.engine.dtype() {
@@ -261,20 +275,72 @@ impl NativeCudaEngine {
         }
     }
 
-    /// Predict from a C-contiguous host design matrix and return a NumPy array
-    /// in this engine's strict dtype.
+    /// Predict from a C-contiguous host matrix and return a NumPy array in this
+    /// engine's strict dtype. The matrix may hold the expanded design or the
+    /// raw `n_features_in` features; the engine appends the intercept column.
+    #[pyo3(signature = (x_design, n_features_in, fit_intercept))]
     fn predict<'py>(
         &mut self,
         py: Python<'py>,
         x_design: &Bound<'py, PyAny>,
+        n_features_in: i64,
+        fit_intercept: bool,
     ) -> PyResult<Py<PyAny>> {
         match self.engine.dtype() {
-            CudaDtype::Float32 => Ok(predict_typed::<f32>(py, &mut self.engine, x_design)?
-                .into_any()
-                .unbind()),
-            CudaDtype::Float64 => Ok(predict_typed::<f64>(py, &mut self.engine, x_design)?
-                .into_any()
-                .unbind()),
+            CudaDtype::Float32 => Ok(predict_typed::<f32>(
+                py,
+                &mut self.engine,
+                x_design,
+                n_features_in,
+                fit_intercept,
+            )?
+            .into_any()
+            .unbind()),
+            CudaDtype::Float64 => Ok(predict_typed::<f64>(
+                py,
+                &mut self.engine,
+                x_design,
+                n_features_in,
+                fit_intercept,
+            )?
+            .into_any()
+            .unbind()),
+        }
+    }
+
+    /// Predict from a CUDA DLPack tensor on this engine's device. The tensor is
+    /// read in place on the engine stream; only the n_rows predictions cross
+    /// to the host, as a NumPy array.
+    #[pyo3(signature = (x_design, n_features_in, fit_intercept))]
+    fn predict_device<'py>(
+        &mut self,
+        py: Python<'py>,
+        x_design: &Bound<'py, PyAny>,
+        n_features_in: i64,
+        fit_intercept: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let stream = self.engine.stream_handle().map_err(to_py_error)?;
+        match self.engine.dtype() {
+            CudaDtype::Float32 => Ok(predict_device_typed::<f32>(
+                py,
+                &mut self.engine,
+                stream,
+                x_design,
+                n_features_in,
+                fit_intercept,
+            )?
+            .into_any()
+            .unbind()),
+            CudaDtype::Float64 => Ok(predict_device_typed::<f64>(
+                py,
+                &mut self.engine,
+                stream,
+                x_design,
+                n_features_in,
+                fit_intercept,
+            )?
+            .into_any()
+            .unbind()),
         }
     }
 
@@ -332,6 +398,8 @@ fn version<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
             result.set_item("device_count", 0)?;
         }
     }
+    result.set_item("supported_penalties", SUPPORTED_PENALTIES.to_vec())?;
+    result.set_item("device_predict", "dlpack")?;
     Ok(result)
 }
 
@@ -382,7 +450,7 @@ fn update_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
     y: &Bound<'py, PyAny>,
     sample_weight: Option<&Bound<'py, PyAny>>,
     batch_weight: f64,
-    config: UnpenalizedConfig,
+    config: UpdateConfig,
 ) -> PyResult<Bound<'py, PyDict>> {
     let x_design = readonly_matrix::<T>(x_design, "X_design")?;
     let y = readonly_vector::<T>(y, "y")?;
@@ -446,7 +514,7 @@ fn update_device_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sy
     y: &Bound<'py, PyAny>,
     sample_weight: Option<&Bound<'py, PyAny>>,
     batch_weight: f64,
-    config: UnpenalizedConfig,
+    config: UpdateConfig,
 ) -> PyResult<Bound<'py, PyDict>> {
     let expected = engine.dtype();
     let device_id = engine.device_id();
@@ -506,13 +574,47 @@ fn predict_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
     py: Python<'py>,
     engine: &mut CudaEngine,
     x_design: &Bound<'py, PyAny>,
+    n_features_in: i64,
+    fit_intercept: bool,
 ) -> PyResult<Bound<'py, PyArray1<T>>> {
     let x_design = readonly_matrix::<T>(x_design, "X_design")?;
     let x_values = contiguous_matrix(&x_design.0, "X_design")?;
     let matrix = HostMatrix::new(x_values, x_design.1, x_design.2).map_err(to_py_error)?;
     let mut prediction = vec![T::default(); matrix.rows()];
-    py.detach(|| engine.predict(matrix, &mut prediction))
+    py.detach(|| engine.predict(matrix, n_features_in, fit_intercept, &mut prediction))
         .map_err(to_py_error)?;
+    Ok(prediction.into_pyarray(py))
+}
+
+fn predict_device_typed<'py, T: CudaScalar + numpy::Element + Default + Send + Sync>(
+    py: Python<'py>,
+    engine: &mut CudaEngine,
+    stream: usize,
+    x_design: &Bound<'py, PyAny>,
+    n_features_in: i64,
+    fit_intercept: bool,
+) -> PyResult<Bound<'py, PyArray1<T>>> {
+    let x = DlpackTensor::consume(
+        py,
+        x_design,
+        stream,
+        engine.dtype(),
+        engine.device_id(),
+        2,
+        "X_design",
+    )?;
+    let matrix = DeviceMatrix {
+        address: x.address,
+        rows: x.shape[0],
+        columns: x.shape[1],
+    };
+    let mut prediction = vec![T::default(); matrix.rows];
+    // The capsule owner stays alive across the GIL release; the engine
+    // synchronizes its stream before returning, so the producer may reuse
+    // the storage as soon as it is dropped below.
+    py.detach(|| engine.predict_device(matrix, n_features_in, fit_intercept, &mut prediction))
+        .map_err(to_py_error)?;
+    drop(x);
     Ok(prediction.into_pyarray(py))
 }
 

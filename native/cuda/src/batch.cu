@@ -13,31 +13,45 @@
 
 namespace rh_cuda::engine {
 
-void validate_config(const RhCudaUnpenalizedConfig* config, const RhCudaEngine* engine) {
-    check_header(config, "unpenalized config");
+void validate_intercept_layout(int64_t n_features_in, const RhCudaEngine* engine) {
     // n_parameters is either n_features_in (no intercept) or n_features_in + 1
-    // (intercept).  Any wider gap would let copy_batch's device-side intercept
-    // append fill only part of d_design and leave the rest stale, so reject it
-    // here rather than solving against uninitialized columns.  The difference
-    // is taken rather than n_features_in + 1 so an extreme n_features_in cannot
+    // (intercept).  Any wider gap would let the device-side intercept append
+    // fill only part of d_design and leave the rest stale, so reject it here
+    // rather than solving against uninitialized columns.  The difference is
+    // taken rather than n_features_in + 1 so an extreme n_features_in cannot
     // overflow before it is rejected.
-    const int64_t intercept_gap = engine->n_parameters - config->n_features_in;
-    if (config->n_features_in <= 0 || (intercept_gap != 0 && intercept_gap != 1)) {
+    const int64_t intercept_gap = engine->n_parameters - n_features_in;
+    if (n_features_in <= 0 || (intercept_gap != 0 && intercept_gap != 1)) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "n_features_in is incompatible with engine state");
     }
+}
+
+void validate_config(const RhCudaUpdateConfig* config, const RhCudaEngine* engine) {
+    check_header(config, "update config");
+    validate_intercept_layout(config->n_features_in, engine);
     if (config->max_iter < 1 || config->max_iter > std::numeric_limits<int>::max()) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "max_iter must be in the CUDA solver range");
     }
     if (!finite_positive(config->tau) || !finite_positive(config->bandwidth_scale) ||
         !finite_positive(config->tolerance) || !finite_nonnegative(config->ridge)) {
-        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "unpenalized config contains an invalid numerical value");
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "update config contains an invalid numerical value");
+    }
+    // Fail closed: an unknown penalty must never be solved as if it were none.
+    if (config->penalty != RH_CUDA_PENALTY_NONE && config->penalty != RH_CUDA_PENALTY_L1) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "update config names an unknown penalty");
+    }
+    if (config->reserved0 != 0) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "update config reserved0 must be zero");
+    }
+    if (!finite_nonnegative(config->lambda_scale)) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "lambda_scale must be finite and non-negative");
     }
 }
 
 
 void validate_batch(
     const BatchView& batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     const RhCudaEngine* engine
 ) {
     if (batch.x_design == nullptr || batch.y == nullptr) {
@@ -57,7 +71,7 @@ void validate_batch(
     }
 }
 
-double bandwidth_for(const RhCudaEngine* engine, double batch_weight, const RhCudaUnpenalizedConfig* config) {
+double bandwidth_for(const RhCudaEngine* engine, double batch_weight, const RhCudaUpdateConfig* config) {
     const double n_total = engine->weight_sum + batch_weight;
     if (!finite_positive(n_total)) {
         fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "cumulative sample weight must be finite and positive");
@@ -65,6 +79,18 @@ double bandwidth_for(const RhCudaEngine* engine, double batch_weight, const RhCu
     const double predictors = static_cast<double>(std::max<int64_t>(config->n_features_in, 2));
     const double raw = config->bandwidth_scale / (std::sqrt(n_total) * std::log(predictors));
     return std::min(raw, config->tau);
+}
+
+double lambda_for(const RhCudaEngine* engine, double batch_weight, const RhCudaUpdateConfig* config) {
+    if (config->penalty != RH_CUDA_PENALTY_L1) {
+        return 0.0;
+    }
+    const double n_total = engine->weight_sum + batch_weight;
+    if (!finite_positive(n_total)) {
+        fail(RH_CUDA_STATUS_INVALID_ARGUMENT, "cumulative sample weight must be finite and positive");
+    }
+    const double predictors = static_cast<double>(std::max<int64_t>(config->n_features_in, 2));
+    return config->lambda_scale * config->tau * std::sqrt(std::log(predictors) / n_total);
 }
 
 void validate_device_pointer(const RhCudaEngine* engine, const void* pointer, const char* name) {

@@ -368,43 +368,33 @@ def main() -> int:
                                     record["cases"].append(case)
                                     _print_result(case)
                         if run_native_cuda:
-                            if penalty != "none":
-                                _record_skip(
-                                    record,
-                                    case_base,
-                                    engine="native_cuda_host_input",
+                            try:
+                                host_result, device_result = benchmark_native_cuda(
+                                    batches,
+                                    dtype=dtype,
+                                    penalty=penalty,
                                     lifecycle=lifecycle,
                                     operation=operation,
-                                    input_location="host",
-                                    reason="P2 native CUDA supports penalty='none' only",
+                                    warmup=args.warmup,
+                                    repeats=args.repeats,
+                                    max_iter=args.max_iter,
+                                    tol=args.tol,
+                                    minimum_sample_seconds=args.minimum_sample_seconds,
+                                    max_sample_repetitions=args.max_sample_repetitions,
                                 )
+                            except (BackendUnavailableError, ImportError, OSError) as error:
+                                record.setdefault("unavailable", {})["native_cuda"] = str(error)
+                                print(f"Native CUDA unavailable: {error}")
+                                run_native_cuda = False
                             else:
-                                try:
-                                    host_result, device_result = benchmark_native_cuda(
-                                        batches,
-                                        dtype=dtype,
-                                        lifecycle=lifecycle,
-                                        operation=operation,
-                                        warmup=args.warmup,
-                                        repeats=args.repeats,
-                                        max_iter=args.max_iter,
-                                        tol=args.tol,
-                                        minimum_sample_seconds=args.minimum_sample_seconds,
-                                        max_sample_repetitions=args.max_sample_repetitions,
-                                    )
-                                except (BackendUnavailableError, ImportError, OSError) as error:
-                                    record.setdefault("unavailable", {})["native_cuda"] = str(error)
-                                    print(f"Native CUDA unavailable: {error}")
-                                    run_native_cuda = False
-                                else:
-                                    for engine, result in (
-                                        ("native_cuda_host_input", host_result),
-                                        ("native_cuda_device_input", device_result),
-                                    ):
-                                        _add_throughput(result, shape.samples)
-                                        case = {**case_base, "engine": engine, "result": result}
-                                        record["cases"].append(case)
-                                        _print_result(case)
+                                for engine, result in (
+                                    ("native_cuda_host_input", host_result),
+                                    ("native_cuda_device_input", device_result),
+                                ):
+                                    _add_throughput(result, shape.samples)
+                                    case = {**case_base, "engine": engine, "result": result}
+                                    record["cases"].append(case)
+                                    _print_result(case)
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)

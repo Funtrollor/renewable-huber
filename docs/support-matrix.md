@@ -7,9 +7,9 @@
 | Backend | CPU | GPU | dtype | 作業系統範圍 | 安裝 extra | `predict` 回傳型別 | 主要限制 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `numpy` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；三者均進行基線 CI | 無（基礎安裝） | `numpy.ndarray` | `device="cuda"` 會直接報錯；效能取決於 NumPy 連結的 BLAS/LAPACK。 |
-| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.12；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.1` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。可由 `auto` 在 CPU 上選取，但僅在批次夠大且本機執行期量測支持時；要固定使用請明確指定。安裝 wheel 不需本機 Rust toolchain。 |
+| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.13（0.6.1：3.10–3.12）；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.1` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。可由 `auto` 在 CPU 上選取，但僅在批次夠大且本機執行期量測支持時；要固定使用請明確指定。安裝 wheel 不需本機 Rust toolchain。 |
 | `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；GPU correctness 與效能在固定本機主機驗證 | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
-| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.12、Windows x86-64 CUDA 12 wheel；本機固定 GPU 驗證 | `renewable-huber-native-cuda==0.6.1` | `numpy.ndarray` | Python API v3。Opt-in whole-batch engine；更新可接收 host NumPy，或同裝置、完全相同 dtype、C-contiguous 的 CuPy／PyTorch／TensorFlow eager DLPack input，絕不經 host staging；`predict` 目前只接受 host input 並回傳 NumPy；`penalty="none"` only。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不含 NVIDIA DLL；不需本機 nvcc，但需要相容 driver 與可由 `CUDA_PATH` 找到的 CUDA 12 runtime closure。 |
+| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.13 × Windows x86-64 與 Linux x86-64（`manylinux_2_28`）CUDA 12 wheels（0.6.1：Windows、3.10–3.12）；本機固定 GPU 驗證 | `renewable-huber-native-cuda` | `numpy.ndarray` | C ABI 2／Python API 4。Opt-in whole-batch engine；`penalty="none"` 與 `penalty="l1"`（0.6.1 只有 `none`）。更新與 `predict` 都可接收 host NumPy，或同裝置、完全相同 dtype、C-contiguous 的 CuPy／PyTorch／TensorFlow eager DLPack input，就地讀取、絕不經 host staging；`predict` 一律回傳 NumPy。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不打包 NVIDIA 函式庫，改以 `nvidia-*-cu12` 相依套件安裝 CUDA 12 runtime closure（0.6.1 仍需 `CUDA_PATH`）；需要相容 driver，不需本機 nvcc。 |
 | `torch` | 是 | NVIDIA CUDA | `float32`, `float64` | CPU：Linux／Windows／macOS；CUDA：依 PyTorch wheel 支援的 Linux／Windows | `gpu-torch` | `torch.Tensor` | `device="auto"` 使用 CPU；輸入會 detach、移至指定裝置並轉 dtype，不提供 autograd layer，也不支援 MPS device。 |
 | `tensorflow` | 是 | TensorFlow 可見的 CUDA GPU | `float32`, `float64` | 依 TensorFlow wheel；CPU backend CI 在 Linux，CUDA 通常為 Linux／WSL2 環境 | `gpu-tensorflow` | `tensorflow.Tensor` | 僅 eager execution，不可直接在 `tf.function` 內使用；`device="auto"` 使用 CPU；不支援 Metal/MPS device。 |
 
@@ -24,12 +24,15 @@ Native CUDA 的 `cuda_graphs` 與 `cuda_fast_math` 都預設為 `False`。
 Graph capture 不可用時會安全回退 strict stream；fast math 只允許 float32
 TF32，不適用 float64。fitted estimator 以 `cuda_features_` 回報實際狀態與計數。
 
-表中的 OS 範圍仍受 optional dependency 本身的 Python、driver 與硬體相容性限制。專案 CI 對 NumPy 與 native CPU wheel 執行 Python 3.10-3.12 × Linux/Windows/macOS；native CPU release 另產生 Linux aarch64 與 Apple Silicon wheels。Torch、TensorFlow 與 scikit-learn optional job 在 Linux CPU 執行；CuPy/native CUDA correctness、profiling、GPU 乾淨安裝與效能只在固定本機 GPU 主機驗證。Release workflow 可由 `main` 手動執行 build-only rehearsal，或由受信任 tag 建置正式 artifacts；hosted Windows runner 只編譯、檢查 fat binary 並在無 GPU 條件下驗證 wheel 可載入。CUDA wheel 包含 SM 75、80、86、89、90、120 SASS，且只保留 SM 120 PTX；使用者安裝 wheel 不需 native build toolchain。
+表中的 OS 範圍仍受 optional dependency 本身的 Python、driver 與硬體相容性限制。專案 CI 對 NumPy 與 native CPU wheel 執行 Python 3.10-3.13 × Linux/Windows/macOS，並在無 GPU 的 Linux runner 上以 release 同一支腳本建置 `manylinux_2_28` CUDA wheel、連同 `nvidia-*-cu12` runtime 乾淨安裝並匯入；native CPU release 另產生 Linux aarch64 與 Apple Silicon wheels。Torch、TensorFlow 與 scikit-learn optional job 在 Linux CPU 執行；CuPy/native CUDA correctness、profiling、GPU 乾淨安裝與效能只在固定本機 GPU 主機驗證。Release workflow 可由 `main` 手動執行 build-only rehearsal，或由受信任 tag 建置正式 artifacts；hosted Windows／Linux runner 只編譯、檢查 fat binary 並在無 GPU 條件下驗證 wheel 可載入。CUDA wheel 包含 SM 75、80、86、89、90、120 SASS，且只保留 SM 120 PTX；使用者安裝 wheel 不需 native build toolchain。
 
-Native CUDA wheel 不封裝 NVIDIA runtime。執行環境需要 `cudart64_12.dll`、
-`cublas64_12.dll`、`cublasLt64_12.dll`、`cusolver64_11.dll`、
-`cusparse64_12.dll` 與 `nvJitLink_120_0.dll`，並須讓套件能透過
-`CUDA_PATH`／`CUDA_PATH_V*` 或 `nvcc` 所在 toolkit 找到其 `bin` 目錄。
+Native CUDA wheel 不封裝 NVIDIA runtime。執行時需要 cudart、cuBLAS／cuBLASLt、
+cuSOLVER、cuSPARSE 與 nvJitLink（Windows：`cudart64_12.dll`、`cublas64_12.dll`、
+`cublasLt64_12.dll`、`cusolver64_11.dll`、`cusparse64_12.dll`、
+`nvJitLink_120_0.dll`；Linux：對應的 `.so.12`／`libcusolver.so.11`）。下一版起這一組
+由 wheel 的 `nvidia-*-cu12` 相依套件提供，匯入時優先完整載入；只有該組不完整時，
+才退回 Windows 的 `CUDA_PATH`／`CUDA_PATH_V*`／`nvcc` 所在 toolkit，或 Linux 的
+預設 loader 路徑，不會混用兩個來源。
 
 ## Backend 與裝置選擇
 
@@ -89,7 +92,7 @@ checkpoint 只保存 `backend="auto"`，不保存任何量測結果，因此還�
 上重新判斷。完整設計與成本推導見
 [CPU auto-dispatch RFC](cpu-auto-dispatch-rfc.md)。
 
-`auto` 不會檢查輸入是 NumPy、CuPy、Torch 或 TensorFlow tensor。若要保留框架原生回傳型別，必須明確指定該 backend。一般跨框架轉換沒有零複製保證；唯一例外是明確選擇 `native_cuda` 的 device-update 路徑：CuPy／PyTorch 直接實作 DLPack consumer-stream negotiation，TensorFlow eager 則透過 legacy capsule adapter 在 export 前呼叫 `tf.experimental.async_wait()`（或要求已明確啟用同步 eager execution）。後者仍是零拷貝，但會有必要的 producer synchronization。
+`auto` 不會檢查輸入是 NumPy、CuPy、Torch 或 TensorFlow tensor。若要保留框架原生回傳型別，必須明確指定該 backend。一般跨框架轉換沒有零複製保證；唯一例外是明確選擇 `native_cuda` 的 device-update 與 device-predict 路徑：CuPy／PyTorch 直接實作 DLPack consumer-stream negotiation，TensorFlow eager 則透過 legacy capsule adapter 在 export 前呼叫 `tf.experimental.async_wait()`（或要求已明確啟用同步 eager execution）。後者仍是零拷貝，但會有必要的 producer synchronization。
 
 ## 輸入整合
 

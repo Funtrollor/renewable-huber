@@ -179,7 +179,7 @@ class RenewableHuberRegressor:
         backend = self._require_backend()
         self._validate_feature_names(X)
         X_array = self._validate_features(X, state.n_features_in, backend)
-        design = self._design_matrix(X_array)
+        design = self._design_matrix(X_array, backend=backend)
         capabilities = capabilities_of(backend)
         if capabilities.native_predict is not None:
             prediction = capabilities.native_predict(design, state)
@@ -695,11 +695,10 @@ class RenewableHuberRegressor:
         return weights, weight_sum
 
     def _design_matrix(self, X: Any, *, backend: ArrayBackend | None = None) -> Any:
-        # Only the update path passes ``backend``, so only it delegates the
-        # design matrix. predict() deliberately builds the expanded matrix on
-        # the host: the native CUDA engine's predict entry point requires the
-        # full n_parameters width, while its update accepts unexpanded features
-        # and appends the intercept on device.
+        # A backend that owns the design matrix (native CUDA) receives the raw
+        # features for both updates and predictions and appends the intercept
+        # on device; widening a CUDA DLPack tensor here would need an implicit
+        # device-to-host copy. Every other backend gets the expanded matrix.
         if backend is not None:
             capabilities = capabilities_of(backend)
             if capabilities.native_design_matrix is not None:

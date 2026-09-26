@@ -8,6 +8,41 @@ stabilised.
 
 ## [Unreleased]
 
+### Added
+
+- Native CUDA L1 (`penalty="l1"`): the LAMM proximal-gradient transition now
+  runs whole-batch on the GPU, mirroring the NumPy reference and the Rust CPU
+  engine, with transactional `previous_lambda` commits and L1 checkpoints that
+  resume across all three engines. This raises the CUDA C ABI to 2 and the
+  CUDA Python API to 4; older and newer components refuse each other instead
+  of treating L1 as `none`.
+- Native CUDA `predict` accepts CUDA DLPack tensors (CuPy, PyTorch, TensorFlow
+  eager) and reads them in place on the engine stream; raw feature matrices
+  are widened on device for both host and device input. Predictions are still
+  returned as NumPy arrays.
+- A `native_update_penalties` backend capability. The core refuses a penalty a
+  native engine does not advertise with `ValidationError` before the engine is
+  called.
+- A second, frozen golden corpus (`tests/golden/native_core_v2.json`) of four
+  converged L1 streams, replayed by the NumPy, Rust CPU and CUDA engines.
+- Linux x86-64 (`manylinux_2_28`) CUDA 12 plugin wheels, built by
+  `scripts/native/build_linux_cuda_wheel.sh` in both the release workflow and
+  a new no-GPU pull-request CI job.
+- CPython 3.13 support for the base package and both native wheels, across CI
+  and the release matrix (20 CPU wheels, 8 CUDA wheels).
+
+### Changed
+
+- `renewable-huber-native-cuda` now depends on NVIDIA's `nvidia-*-cu12` runtime
+  wheels (cudart, cuBLAS, cuSOLVER, cuSPARSE, nvJitLink) and loads that set at
+  import, falling back to a system CUDA 12 toolkit only when the set is
+  incomplete. `CUDA_PATH` is no longer required.
+- The C ABI 2 break renames `RhCudaUnpenalizedConfig` to `RhCudaUpdateConfig`
+  and `rh_cuda_engine_predict_host`/`RhCudaHostPrediction` to
+  `rh_cuda_engine_predict`/`RhCudaPrediction`; the library still exports
+  exactly 17 `rh_cuda_*` symbols.
+- The native CUDA shape sweep and profiler accept `penalty="l1"`.
+
 ## [0.6.1] - 2026-08-09
 
 This is the first published native-core release. The earlier `v0.6.0` tag did

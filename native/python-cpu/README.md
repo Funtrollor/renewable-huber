@@ -9,7 +9,7 @@ public estimator API, validation and portable checkpoint format.
 python -m pip install renewable-huber-native-cpu==0.6.1
 ```
 
-Published wheels support CPython 3.10–3.12 on Windows x86-64,
+Release wheels support CPython 3.10–3.13 (the published 0.6.1: 3.10–3.12) on Windows x86-64,
 manylinux2014 x86-64/aarch64 and macOS x86-64/Apple Silicon. Installing a
 wheel does not require Rust.
 

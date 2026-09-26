@@ -20,17 +20,26 @@
 
 CPU release matrix：
 
-- CPython 3.10、3.11、3.12。
+- CPython 3.10、3.11、3.12、3.13。
 - manylinux2014 x86-64 與 aarch64。
 - Windows x86-64。
 - macOS x86-64 與 Apple Silicon arm64。
 
-CUDA 12 release matrix 目前為 CPython 3.10–3.12、Windows x86-64。Release fat binary
-包含 SM 75、80、86、89、90、120 SASS，並只為最高的 SM 120 保留 PTX，因此建置
-runner 固定使用 CUDA Toolkit 12.9.1（最低需 12.8 才能編譯 SM 120）。使用者安裝已
-發布 wheel 時不需要 Rust、CMake、Visual Studio 或 `nvcc`，但 wheel 不封裝 NVIDIA
-DLL；執行時仍需相容 driver 與 CUDA 12 的 cudart、cuBLAS／cuBLASLt、cuSOLVER、
-cuSPARSE、nvJitLink runtime closure，且 toolkit `bin` 必須可由 `CUDA_PATH` 找到。
+CUDA 12 release matrix 為 CPython 3.10–3.13 × Windows x86-64 與 Linux x86-64
+（`manylinux_2_28`），共 8 個 wheels。Release fat binary 包含 SM 75、80、86、89、
+90、120 SASS，並只為最高的 SM 120 保留 PTX，因此建置固定使用 CUDA Toolkit 12.9
+（最低需 12.8 才能編譯 SM 120）。使用者安裝 wheel 時不需要 Rust、CMake、Visual
+Studio 或 `nvcc`。Wheel 不封裝 NVIDIA 函式庫；cudart、cuBLAS／cuBLASLt、cuSOLVER、
+cuSPARSE、nvJitLink runtime closure 以 `nvidia-*-cu12` 相依套件安裝，匯入時由
+`renewable_huber._cuda_runtime` 載入；該組不完整時才退回系統 toolkit。
+
+Linux CUDA wheels 在 `quay.io/pypa/manylinux_2_28_x86_64` container 內由
+`scripts/native/build_linux_cuda_wheel.sh` 建置，因此 wheel 宣告的 glibc 2.28 tag
+對 binary 成立。腳本以 `--auditwheel skip` 刻意不 vendor NVIDIA 函式庫，並在
+container 內用 `cuobjdump` 檢查 SASS／PTX，另拒絕宣告 runtime closure 以外的
+`NEEDED`。一般 PR CI 的 `native-cuda-linux-wheel` job 執行同一支腳本（縮小的
+架構清單）並在無 GPU runner 上乾淨安裝、匯入，因此 release 路徑在 tag 前就已被
+驗證。
 
 CUDA wheels 在固定的 GitHub-hosted `windows-2022` runner（Visual Studio 2022）
 安裝 CUDA 12.9 build-only toolchain 後編譯；不用 `windows-latest`，因為它已移至

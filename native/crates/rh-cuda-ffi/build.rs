@@ -45,6 +45,10 @@ fn main() {
         // dynamic dependencies supplied by the installed Toolkit/driver.
         .define("RH_CUDA_BUILD_SHARED", "OFF")
         .define("RH_CUDA_BUILD_TESTS", "OFF")
+        // GNUInstallDirs picks `lib64` on RHEL-family hosts such as the
+        // manylinux_2_28 build image and `lib` on Debian and Windows. Pin it so
+        // the search path below is right everywhere.
+        .define("CMAKE_INSTALL_LIBDIR", "lib")
         .define("CMAKE_CUDA_ARCHITECTURES", architectures)
         .build();
 

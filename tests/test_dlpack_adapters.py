@@ -27,7 +27,7 @@ def _native_cuda_ready() -> bool:
         return bool(
             _native_cuda.is_available()
             and _native_cuda.device_count()
-            and version.get("python_api_version") == 3
+            and version.get("python_api_version") == 4
         )
     except (ImportError, OSError, RuntimeError):
         return False
@@ -267,8 +267,8 @@ class TensorFlowDlpackAdapterTests(unittest.TestCase):
             is_available=lambda: True,
             device_count=lambda: 1,
             version=lambda: {
-                "abi_version": 1,
-                "python_api_version": 3,
+                "abi_version": 2,
+                "python_api_version": 4,
                 "initial_state": "canonical_empty",
                 "device_input": "dlpack",
             },
@@ -326,7 +326,7 @@ class TensorFlowDlpackAdapterTests(unittest.TestCase):
         self.assertIs(detached.storage, storage)
 
 
-@unittest.skipUnless(_cupy_native_ready(), "native CUDA API 3, CuPy, and a GPU are required")
+@unittest.skipUnless(_cupy_native_ready(), "native CUDA API 4, CuPy, and a GPU are required")
 class CuPyDlpackProtocolIntegrationTests(unittest.TestCase):
     def test_consumer_stream_is_forwarded_once_per_capsule_without_host_staging(self) -> None:
         import cupy as cp
@@ -381,7 +381,7 @@ class CuPyDlpackProtocolIntegrationTests(unittest.TestCase):
         self.assertEqual(calls["X"], calls["y"])
 
 
-@unittest.skipUnless(_torch_native_ready(), "native CUDA API 3 and CUDA PyTorch are required")
+@unittest.skipUnless(_torch_native_ready(), "native CUDA API 4 and CUDA PyTorch are required")
 class PyTorchDlpackIntegrationTests(unittest.TestCase):
     def test_cuda_tensor_matches_host_input_and_detaches_autograd(self) -> None:
         import torch
@@ -401,7 +401,7 @@ class PyTorchDlpackIntegrationTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _tensorflow_native_ready(), "native CUDA API 3 and eager CUDA TensorFlow are required"
+    _tensorflow_native_ready(), "native CUDA API 4 and eager CUDA TensorFlow are required"
 )
 class TensorFlowDlpackIntegrationTests(unittest.TestCase):
     def test_eager_cuda_tensor_matches_host_input_without_storage_copy(self) -> None:

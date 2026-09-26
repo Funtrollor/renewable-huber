@@ -31,7 +31,7 @@ mistaken for a fully passing suite.
 
 The PowerShell setup below remains supported for Windows-only work.
 
-Create an isolated environment with Python 3.10–3.12:
+Create an isolated environment with Python 3.10–3.13:
 
 ```powershell
 python -m venv .venv
@@ -111,20 +111,14 @@ if it changes the documented numerical contract.
 - Let CI pass on all required CPU platforms. Run GPU correctness, CUDA smoke,
   profiling, and performance gates locally on the fixed GPU host; GPU
   validation must not run in GitHub Actions for pull requests. Record the exact
-  commit, environment fingerprint, machine-readable gate output and artifact
-  SHA-256 so reviewers can tie evidence to the code under review.
+  commit, the environment (GPU, driver, CUDA runtime) and the machine-readable
+  gate output with the pull request.
 - Use Conventional Commit-style imperative subjects when practical, for example
   `perf: fuse CUDA renewal kernels`.
 
-For assisted development, Claude Code implements an accepted engineering plan
-and records its hand-off in `docs/agent-handoff.md`. Codex owns review,
-acceptance, commits, pushes and pull requests. The two agents must use separate
-worktrees when active concurrently.
-
 The `main` branch requires a pull request, an up-to-date branch, all cross-platform and optional
 CPU integration checks, package smoke tests, and resolved review conversations. Force pushes and
-branch deletion are disabled. The applied settings are recorded in
-`.github/branch-protection.json`.
+branch deletion are disabled. These rules live in the repository's branch protection settings.
 
 Unless explicitly marked otherwise, contributions intentionally submitted for inclusion are
 distributed under the Apache License, Version 2.0, as described in section 5 of that license.

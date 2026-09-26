@@ -26,6 +26,10 @@ pub(crate) mod abi {
     pub const RH_CUDA_STATUS_INTERNAL_ERROR: i32 = 8;
     pub const RH_CUDA_DTYPE_FLOAT32: i32 = 1;
     pub const RH_CUDA_DTYPE_FLOAT64: i32 = 2;
+    pub const RH_CUDA_PENALTY_NONE: i32 = 0;
+    pub const RH_CUDA_PENALTY_L1: i32 = 1;
+    pub const RH_CUDA_MEMORY_HOST: i32 = 0;
+    pub const RH_CUDA_MEMORY_DEVICE: i32 = 1;
 
     #[repr(C)]
     pub struct RhCudaEngine {
@@ -67,7 +71,7 @@ pub(crate) mod abi {
     }
 
     #[repr(C)]
-    pub struct RhCudaUnpenalizedConfig {
+    pub struct RhCudaUpdateConfig {
         pub abi_version: u32,
         pub struct_size: u32,
         pub n_features_in: i64,
@@ -76,6 +80,9 @@ pub(crate) mod abi {
         pub bandwidth_scale: f64,
         pub tolerance: f64,
         pub ridge: f64,
+        pub penalty: i32,
+        pub reserved0: i32,
+        pub lambda_scale: f64,
     }
 
     #[repr(C)]
@@ -103,13 +110,16 @@ pub(crate) mod abi {
     }
 
     #[repr(C)]
-    pub struct RhCudaHostPrediction {
+    pub struct RhCudaPrediction {
         pub abi_version: u32,
         pub struct_size: u32,
         pub x_design: *const c_void,
         pub prediction: *mut c_void,
         pub n_rows: i64,
         pub n_columns: i64,
+        pub n_features_in: i64,
+        pub input_location: i32,
+        pub reserved0: i32,
     }
 
     #[repr(C)]
@@ -177,13 +187,13 @@ pub(crate) mod ffi {
         pub fn rh_cuda_engine_update_host(
             engine: *mut RhCudaEngine,
             batch: *const RhCudaHostBatch,
-            config: *const RhCudaUnpenalizedConfig,
+            config: *const RhCudaUpdateConfig,
             diagnostics: *mut RhCudaDiagnostics,
         ) -> i32;
         pub fn rh_cuda_engine_update_host_with_state(
             engine: *mut RhCudaEngine,
             batch: *const RhCudaHostBatch,
-            config: *const RhCudaUnpenalizedConfig,
+            config: *const RhCudaUpdateConfig,
             diagnostics: *mut RhCudaDiagnostics,
             state: *mut RhCudaHostState,
         ) -> i32;
@@ -191,13 +201,13 @@ pub(crate) mod ffi {
         pub fn rh_cuda_engine_update_device_with_state(
             engine: *mut RhCudaEngine,
             batch: *const RhCudaDeviceBatch,
-            config: *const RhCudaUnpenalizedConfig,
+            config: *const RhCudaUpdateConfig,
             diagnostics: *mut RhCudaDiagnostics,
             state: *mut RhCudaHostState,
         ) -> i32;
-        pub fn rh_cuda_engine_predict_host(
+        pub fn rh_cuda_engine_predict(
             engine: *mut RhCudaEngine,
-            request: *const RhCudaHostPrediction,
+            request: *const RhCudaPrediction,
         ) -> i32;
         pub fn rh_cuda_engine_synchronize(engine: *mut RhCudaEngine) -> i32;
         pub fn rh_cuda_engine_features(
@@ -249,15 +259,18 @@ mod abi_layout {
         assert_eq!(offset_of!(RhCudaHostState, previous_lambda), 40);
         assert_eq!(offset_of!(RhCudaHostState, weight_sum), 48);
 
-        assert_eq!(size_of::<RhCudaUnpenalizedConfig>(), 56);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, abi_version), 0);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, struct_size), 4);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, n_features_in), 8);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, max_iter), 16);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, tau), 24);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, bandwidth_scale), 32);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, tolerance), 40);
-        assert_eq!(offset_of!(RhCudaUnpenalizedConfig, ridge), 48);
+        assert_eq!(size_of::<RhCudaUpdateConfig>(), 72);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, abi_version), 0);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, struct_size), 4);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, n_features_in), 8);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, max_iter), 16);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, tau), 24);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, bandwidth_scale), 32);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, tolerance), 40);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, ridge), 48);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, penalty), 56);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, reserved0), 60);
+        assert_eq!(offset_of!(RhCudaUpdateConfig, lambda_scale), 64);
 
         assert_eq!(size_of::<RhCudaHostBatch>(), 56);
         assert_eq!(offset_of!(RhCudaHostBatch, abi_version), 0);
@@ -279,13 +292,16 @@ mod abi_layout {
         assert_eq!(offset_of!(RhCudaDeviceBatch, n_columns), 40);
         assert_eq!(offset_of!(RhCudaDeviceBatch, batch_weight), 48);
 
-        assert_eq!(size_of::<RhCudaHostPrediction>(), 40);
-        assert_eq!(offset_of!(RhCudaHostPrediction, abi_version), 0);
-        assert_eq!(offset_of!(RhCudaHostPrediction, struct_size), 4);
-        assert_eq!(offset_of!(RhCudaHostPrediction, x_design), 8);
-        assert_eq!(offset_of!(RhCudaHostPrediction, prediction), 16);
-        assert_eq!(offset_of!(RhCudaHostPrediction, n_rows), 24);
-        assert_eq!(offset_of!(RhCudaHostPrediction, n_columns), 32);
+        assert_eq!(size_of::<RhCudaPrediction>(), 56);
+        assert_eq!(offset_of!(RhCudaPrediction, abi_version), 0);
+        assert_eq!(offset_of!(RhCudaPrediction, struct_size), 4);
+        assert_eq!(offset_of!(RhCudaPrediction, x_design), 8);
+        assert_eq!(offset_of!(RhCudaPrediction, prediction), 16);
+        assert_eq!(offset_of!(RhCudaPrediction, n_rows), 24);
+        assert_eq!(offset_of!(RhCudaPrediction, n_columns), 32);
+        assert_eq!(offset_of!(RhCudaPrediction, n_features_in), 40);
+        assert_eq!(offset_of!(RhCudaPrediction, input_location), 48);
+        assert_eq!(offset_of!(RhCudaPrediction, reserved0), 52);
 
         assert_eq!(size_of::<RhCudaDiagnostics>(), 48);
         assert_eq!(offset_of!(RhCudaDiagnostics, abi_version), 0);
@@ -317,12 +333,16 @@ mod abi_layout {
 
     #[test]
     fn constants_match_the_contract_manifest() {
-        assert_eq!(crate::ABI_VERSION, 1);
+        assert_eq!(crate::ABI_VERSION, 2);
         assert_eq!(size_of::<*const core::ffi::c_void>(), 8);
         assert_eq!(RH_CUDA_STATUS_SUCCESS, 0);
         assert_eq!(RH_CUDA_STATUS_INTERNAL_ERROR, 8);
         assert_eq!(RH_CUDA_DTYPE_FLOAT32, 1);
         assert_eq!(RH_CUDA_DTYPE_FLOAT64, 2);
+        assert_eq!(RH_CUDA_PENALTY_NONE, 0);
+        assert_eq!(RH_CUDA_PENALTY_L1, 1);
+        assert_eq!(RH_CUDA_MEMORY_HOST, 0);
+        assert_eq!(RH_CUDA_MEMORY_DEVICE, 1);
         assert_eq!(crate::types::ENGINE_FLAG_CUDA_GRAPHS, 1);
         assert_eq!(crate::types::ENGINE_FLAG_FAST_MATH, 2);
     }

@@ -56,6 +56,9 @@ struct RhCudaEngine {
     void* d_delta = nullptr;
     void* d_history_vector = nullptr;
     void* d_gradient = nullptr;
+    // sign(previous coefficients) on penalized coordinates, zero elsewhere.
+    // Formed once per L1 update from the committed state.
+    void* d_penalty_sign = nullptr;
     void* d_direction = nullptr;
     void* d_gram = nullptr;
     void* d_hessian = nullptr;
@@ -85,12 +88,21 @@ struct RhCudaEngine {
 
     rh_cuda::engine::ErrorBuffer last_error{};
 
-    // Defined out of line in workspace.cu so its 28-entry release list sits
-    // next to the allocation it mirrors.
+    // Defined out of line in workspace.cu so its release list sits next to
+    // the allocation it mirrors.
     ~RhCudaEngine() noexcept;
 };
 
 namespace rh_cuda::engine {
+
+/// Scalar slots in d_reduction_results / h_reduction_results.  Every slot one
+/// objective evaluation fills crosses to the host in a single transfer:
+///   0 weighted Huber loss      1 historical quadratic term
+///   2 ||beta - previous||      3 ||beta||
+///   4 gradient . (beta - previous)   (L1 majorization bound)
+///   5 sign(history) . (beta - history)   (L1 historical subgradient term)
+///   6 final L1 norm of the penalized coordinates
+constexpr int kReductionSlots = 8;
 
 template <typename T>
 T* typed(void* value) {
