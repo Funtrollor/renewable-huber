@@ -38,6 +38,19 @@ stabilised.
   the required `core` profile (`fail_under = 72`) in the CI quality job, and
   `proptest` property tests for the `rh-core` validation contracts and the
   `rh-cpu` numeric kernels.
+- First on-device verification of the native CUDA C ABI 2 / Python API 4
+  engine, on the fixed Windows GPU host (RTX 5070 Ti, SM 12.0, CUDA 12.9,
+  driver 616.64, Python 3.11) at `4114918`. The `core`, `native-cpu`, `cuda`
+  and `performance` profiles, both golden corpora, the C ABI smoke test, the
+  17-symbol export check and the clean CUDA wheel smoke all passed. The
+  PyTorch and TensorFlow CUDA DLPack integration tests skipped because neither
+  framework was installed.
+- Fixed-host native CUDA L1 baselines
+  (`benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run{1,2,3}.json`):
+  three standard-profile runs against CuPy under the same input transport.
+  Native CUDA L1 stays explicit opt-in; `backend="auto"` never selects native
+  CUDA. The results and the reasoning are in
+  `docs/native-penalty-completion-plan.md`.
 
 ### Changed
 

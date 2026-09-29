@@ -62,8 +62,10 @@ before timing and say `input_location="device"`. Native CUDA consumes those
 arrays through DLPack on its private stream and records
 `includes_input_transfer=false`; its internal device-to-device workspace copy
 when required, direct intercept expansion, and all solver work remain part of
-the timed operation. Device and host records are not interchangeable. Native
-CUDA still emits an explicit L1 skip.
+the timed operation. Device and host records are not interchangeable. Since
+C ABI 2 / Python API 4 the sweep also measures native CUDA with
+`penalty="l1"` instead of skipping it; see the L1 baseline below for the
+validation caveat.
 
 ```powershell
 # Fair cold end-to-end stream comparison.
@@ -93,6 +95,26 @@ approved CUDA baseline is
 It passes all 16 host-input and all 16 device-input CuPy comparisons using
 0.5-second samples. Both records use three warmups and nine measured samples;
 a result captured while another workload is active must not be promoted.
+
+Native CUDA L1 has a fixed-host baseline of three standard-profile runs on the
+same RTX 5070 Ti host, captured at `4114918` with C ABI 2 / Python API 4:
+[run 1](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run1.json),
+[run 2](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run2.json) and
+[run 3](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run3.json).
+They use the shape sweep's default 0.1-second samples, three warmups and nine
+measured samples. In 46 of 48 same-transport comparisons native CUDA is below
+0.90x CuPy in all three runs, two show no measurable difference, and none is
+repeatably slower; the
+[native penalty completion plan](native-penalty-completion-plan.md#n5-fixed-host-results)
+has the analysis. No threshold changes. One caveat: `_validate_timing_contract`
+in `scripts/benchmarks/performance_policy.py` still raises "native CUDA
+benchmark records may not claim L1 support" for any native CUDA case whose
+penalty is not `none`, so `validate_record` and
+`check_performance_regression.py` cannot load these records yet. A pending
+pull request makes that rule accept native CUDA L1 when the record's
+`native_cuda_abi` is 2 or later, or when its `supported_penalties` contains
+`l1`. The `penalty="none"` CUDA baseline above is unchanged, and the N5
+interleaved `none` A/B (`fca7b83` against `4114918`) is not yet accepted.
 
 ## Fixed-runner regression gate
 

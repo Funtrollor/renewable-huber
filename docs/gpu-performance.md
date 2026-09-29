@@ -102,3 +102,43 @@ P4 adds opt-in CUDA Graph replay and float32 TF32 tuning while preserving
 strict execution by default. See [P4 native CUDA tuning](native-core-p4.md) for
 the public flags, error contract, fallback rules, benchmark, and Nsight
 reproduction commands.
+
+## Native CUDA L1 against CuPy (N5)
+
+The first fixed-host L1 records were captured on 2026-09-29 at `4114918`
+on the Windows host: RTX 5070 Ti (SM 12.0), driver 616.64, CUDA 12.9,
+CPython 3.11.0, CuPy 14.2.0. The
+[GPU host runbook](gpu-host-runbook.md) §3b command ran three times:
+standard profile, `--backend gpu --penalty l1 --dtype both --lifecycle both
+--operation both --warmup 3 --repeats 9`.
+
+Each native CUDA case is compared with the CuPy case of the same shape,
+dtype, lifecycle, operation and input transport, using the ratio of the
+median times, native over CuPy:
+
+- 46 of the 48 comparisons are below 0.90 in all three runs, a repeatable
+  native advantage. The per-run ratios span 0.23–0.89, with a median of 0.34.
+- 2 comparisons show no measurable difference: host-input streaming cold
+  `fit`, float32 (1.055–1.071) and float64 (0.902–0.978).
+- None is repeatably slower.
+
+Every case converged. The largest native relative MAD was 9.4%. The float32
+`partial_fit` iteration counts differ between the engines (float64 counts
+match); the plan shows this is float32 rounding near `tol=1e-6`, not a
+defect.
+
+Native CUDA, L1 included, remains explicit opt-in; `backend="auto"` never
+selects it. The reasoning, the stage 1 correctness results and the not yet
+accepted `penalty="none"` A/B are in
+[N5 fixed-host results](native-penalty-completion-plan.md#n5-fixed-host-results).
+
+The three runs are the fixed-host L1 baseline:
+[run 1](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run1.json),
+[run 2](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run2.json),
+[run 3](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run3.json).
+Like the P3 baselines, accepted fixed-host records are committed under
+`benchmarks/baselines/`; everything else stays outside Git as described
+above. `validate_record` and `check_performance_regression.py` on `main`
+still reject native CUDA records whose penalty is not `none`, so these runs
+cannot yet be loaded by those tools. See the
+[native performance policy](native-performance-policy.md).
