@@ -52,7 +52,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 import numpy as np
 
@@ -80,8 +80,8 @@ __all__ = [
 
 #: The two engines compared.  Both consume and produce host NumPy arrays, which
 #: is what makes swapping between them mid-decision free of any conversion.
-NUMPY = "numpy"
-NATIVE_CPU = "native_cpu"
+NUMPY: Final = "numpy"
+NATIVE_CPU: Final = "native_cpu"
 ENGINES: tuple[str, str] = (NUMPY, NATIVE_CPU)
 
 
@@ -325,11 +325,14 @@ def _threadpool_context() -> tuple[tuple[tuple[str, str, str, int | None], ...],
         threads = pool.get("num_threads")
         if isinstance(threads, bool) or not isinstance(threads, int):
             threads = None
+        user_api = pool.get("user_api")
+        internal_api = pool.get("internal_api")
+        prefix = pool.get("prefix")
         snapshot.append(
             (
-                pool.get("user_api") if isinstance(pool.get("user_api"), str) else "",
-                pool.get("internal_api") if isinstance(pool.get("internal_api"), str) else "",
-                pool.get("prefix") if isinstance(pool.get("prefix"), str) else "",
+                user_api if isinstance(user_api, str) else "",
+                internal_api if isinstance(internal_api, str) else "",
+                prefix if isinstance(prefix, str) else "",
                 threads,
             )
         )
@@ -972,6 +975,12 @@ def _time_probe_pair(
     }
 
 
+def _triple(values: Any) -> tuple[float, float, float]:
+    """Return a length-3 NumPy vector as a tuple of Python floats."""
+
+    return (float(values[0]), float(values[1]), float(values[2]))
+
+
 def _fit_ratio_model(
     measurements: Sequence[ProbeMeasurement],
     *,
@@ -1015,9 +1024,12 @@ def _fit_ratio_model(
         else 0.0
     )
     return RatioModel(
-        coefficients=tuple(float(value) for value in coefficients),  # type: ignore[arg-type]
+        # The design has exactly three columns (intercept, log samples, log
+        # parameters), so both are indexed out explicitly to carry that length
+        # into the declared fixed-size tuple types.
+        coefficients=_triple(coefficients),
         centre=centre,
-        inverse_gram=tuple(tuple(float(value) for value in row) for row in inverse_gram),
+        inverse_gram=tuple(_triple(row) for row in inverse_gram),
         residual_scale=max(scale, policy.minimum_log_residual_scale),
         probe_count=len(measurements),
         log_samples_span=(float(log_samples.min()), float(log_samples.max())),

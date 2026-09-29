@@ -259,7 +259,8 @@ class NativeCudaBackend(NativeEngineBackend):
         if not device_input and sample_weight is not None:
             weights = np.ascontiguousarray(sample_weight, dtype=self.dtype)
         with self._engine_call():
-            update = self._engine.update_device if device_input else self._engine.update
+            engine = self._resident_engine()
+            update = engine.update_device if device_input else engine.update
             x_input = X if device_input else np.ascontiguousarray(X, dtype=self.dtype)
             y_input = y if device_input else np.ascontiguousarray(y, dtype=self.dtype)
             result = update(
@@ -309,12 +310,11 @@ class NativeCudaBackend(NativeEngineBackend):
             )
         self.restore_native_state(state)
         with self._engine_call():
+            engine = self._resident_engine()
             if device_input:
-                prediction = self._engine.predict_device(
-                    X, state.n_features_in, state.fit_intercept
-                )
+                prediction = engine.predict_device(X, state.n_features_in, state.fit_intercept)
             else:
-                prediction = self._engine.predict(
+                prediction = engine.predict(
                     np.ascontiguousarray(X, dtype=self.dtype),
                     state.n_features_in,
                     state.fit_intercept,

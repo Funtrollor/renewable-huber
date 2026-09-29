@@ -1,5 +1,7 @@
 # renewable-huber
 
+[English](https://github.com/Funtrollor/renewable-huber/blob/main/README.en.md) | 繁體中文
+
 [![CI](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml/badge.svg)](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/renewable-huber.svg)](https://pypi.org/project/renewable-huber/)
 [![Python versions](https://img.shields.io/pypi/pyversions/renewable-huber.svg)](https://pypi.org/project/renewable-huber/)
@@ -39,6 +41,8 @@ x86-64／aarch64 與 macOS x86-64／Apple Silicon；下一版的 release matrix 
 CPython 3.13。一般使用者不需要安裝 Rust 或在本機編譯 extension。
 
 ```python
+from renewable_huber import RenewableHuberRegressor
+
 native_model = RenewableHuberRegressor(
     backend="native_cpu",
     device="cpu",

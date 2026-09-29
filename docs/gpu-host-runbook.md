@@ -6,7 +6,7 @@ measurements from the
 [native penalty completion plan](native-penalty-completion-plan.md#n5--benchmark-documentation-and-release-readiness),
 and preparing the 0.7.0 release. It assumes a fresh clone on a Windows
 machine with an NVIDIA GPU (the committed baselines were taken on an
-RTX 5070 Ti, SM 12.0). Read [`AGENTS.md`](../AGENTS.md) first.
+RTX 5070 Ti, SM 12.0). Read [`AGENTS.md`](https://github.com/Funtrollor/renewable-huber/blob/main/AGENTS.md) first.
 
 The native CUDA engine is at C ABI 2 / Python API 4. As of `main` at
 `6a0b1b2`, the code has only been compiled, locally for SM 120 and in CI for

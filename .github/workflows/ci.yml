@@ -126,6 +126,15 @@ jobs:
         run: ruff check src tests scripts
       - name: Check formatting
         run: ruff format --check src tests scripts
+      - name: Type-check
+        # Settings live in [tool.mypy] in pyproject.toml.
+        run: mypy
+      - name: Measure core profile coverage
+        # The same required profile the baseline matrix runs, measured once
+        # here. `coverage report` enforces fail_under from pyproject.toml.
+        run: |
+          coverage run scripts/run_test_profile.py core
+          coverage report
       - name: Verify native-core golden corpora
         run: |
           python scripts/generate_native_golden.py --check

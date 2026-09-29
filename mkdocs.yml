@@ -1,0 +1,142 @@
+# MkDocs site for renewable-huber. Build locally with:
+#
+#   python -m pip install -e ".[docs]"
+#   mkdocs serve            # or: mkdocs build --strict
+#
+# Run both from the repository root: pymdownx.snippets resolves `base_path`
+# against the working directory, not against this file.
+
+site_name: renewable-huber
+site_description: Renewable Huber regression for robust streaming-data estimation.
+site_url: https://funtrollor.github.io/renewable-huber/
+repo_url: https://github.com/Funtrollor/renewable-huber
+repo_name: Funtrollor/renewable-huber
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; Renewable Huber contributors. Code licensed under Apache-2.0.
+
+# Links that leave docs/ (the benchmark baselines, AGENTS.md, LICENSE, NOTICE)
+# are written as absolute GitHub URLs in the Markdown itself instead of being
+# tolerated here: a relative `../` link cannot resolve on the built site, and
+# it also breaks when a page is read from the source distribution. MkDocs 1.6
+# reports a missing target at `warn` by default; the settings below also raise
+# unrecognised links, absolute paths and missing anchors from `info` to
+# `warn`, so `mkdocs build --strict` fails on any of them rather than
+# publishing a silently broken link. The same check covers the README.en.md
+# regions that pymdownx.snippets pulls into the user guide.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+# Files outside docs/ that pages include, so `mkdocs serve` reloads on edit.
+watch:
+  - README.en.md
+  - CONTRIBUTING.md
+  - CHANGELOG.md
+  - src/renewable_huber
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.action.edit
+    - content.code.copy
+    - navigation.footer
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - toc.follow
+
+plugins:
+  - search
+  # The API reference is read from source by static analysis (griffe); nothing
+  # is imported, so it builds without NumPy's optional peers or either native
+  # extension installed.
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            filters: ["!^_"]
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            show_source: false
+            signature_crossrefs: true
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      # Keep CJK headings in anchors; the default slugify strips them to "_1".
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - User guide:
+      - Installation: guide/installation.md
+      - Quick start: guide/quickstart.md
+      - Backends: guide/backends.md
+      - Checkpoints: guide/checkpoints.md
+  - Reference:
+      - API and state contract (中文): api.md
+      - Support matrix (中文): support-matrix.md
+      - Python API: reference/python-api.md
+  - Performance:
+      - CUDA performance paths: gpu-performance.md
+      - Native performance policy: native-performance-policy.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Architecture (中文): architecture.md
+      - Release process (中文): release-process.md
+      - Release checklist (中文): release-checklist.md
+      - GPU host runbook: gpu-host-runbook.md
+      - Changelog: development/changelog.md
+      - Design notes:
+          - Overview: development/design-notes.md
+          - Native-core RFC: native-core-rfc.md
+          - "Native-core P0: baseline": native-core-p0-baseline.md
+          - "Native-core P1: Rust CPU engine": native-core-p1.md
+          - "Native-core P2: CUDA engine": native-core-p2.md
+          - "Native-core P4: CUDA tuning": native-core-p4.md
+          - Native penalty completion plan: native-penalty-completion-plan.md
+          - CPU auto-dispatch RFC: cpu-auto-dispatch-rfc.md
+          - Maintainability refactor (中文): maintainability-refactor.md

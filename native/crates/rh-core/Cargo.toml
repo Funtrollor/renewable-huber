@@ -10,3 +10,6 @@ description = "Portable algorithm contracts for Renewable Huber native engines."
 [dependencies]
 num-traits.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

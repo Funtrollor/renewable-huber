@@ -37,3 +37,6 @@ scripts/wildfire/
 .ruff_cache/
 docs/references/
 docs/reports/
+
+# MkDocs build output
+/site/
