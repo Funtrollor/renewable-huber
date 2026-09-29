@@ -29,6 +29,7 @@ def benchmark_numpy(
     tol: float,
     minimum_sample_seconds: float = 0.0,
     max_sample_repetitions: int = 64,
+    sample_repetitions: int | None = None,
 ) -> dict[str, Any]:
     return _benchmark_engine(
         batches,
@@ -47,6 +48,7 @@ def benchmark_numpy(
         tol=tol,
         minimum_sample_seconds=minimum_sample_seconds,
         max_sample_repetitions=max_sample_repetitions,
+        sample_repetitions=sample_repetitions,
     )
 
 
@@ -63,6 +65,7 @@ def benchmark_native_cpu(
     tol: float,
     minimum_sample_seconds: float = 0.0,
     max_sample_repetitions: int = 64,
+    sample_repetitions: int | None = None,
 ) -> dict[str, Any]:
     """Measure the opt-in whole-batch Rust CPU engine."""
 
@@ -83,6 +86,7 @@ def benchmark_native_cpu(
         tol=tol,
         minimum_sample_seconds=minimum_sample_seconds,
         max_sample_repetitions=max_sample_repetitions,
+        sample_repetitions=sample_repetitions,
     )
 
 
@@ -99,6 +103,8 @@ def benchmark_cupy(
     tol: float,
     minimum_sample_seconds: float = 0.0,
     max_sample_repetitions: int = 64,
+    host_sample_repetitions: int | None = None,
+    device_sample_repetitions: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     import cupy as cp
 
@@ -123,6 +129,7 @@ def benchmark_cupy(
         synchronize=stream.synchronize,
         minimum_sample_seconds=minimum_sample_seconds,
         max_sample_repetitions=max_sample_repetitions,
+        sample_repetitions=host_sample_repetitions,
     )
     device_result = _benchmark_engine(
         device_batches,
@@ -142,6 +149,7 @@ def benchmark_cupy(
         synchronize=stream.synchronize,
         minimum_sample_seconds=minimum_sample_seconds,
         max_sample_repetitions=max_sample_repetitions,
+        sample_repetitions=device_sample_repetitions,
     )
     host_result["transfer_and_conversion_overhead_seconds"] = max(
         0.0, host_result["median_seconds"] - device_result["median_seconds"]
@@ -162,6 +170,8 @@ def benchmark_native_cuda(
     tol: float,
     minimum_sample_seconds: float = 0.0,
     max_sample_repetitions: int = 64,
+    host_sample_repetitions: int | None = None,
+    device_sample_repetitions: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Measure native CUDA with equivalent host and DLPack device contracts."""
 
@@ -187,6 +197,7 @@ def benchmark_native_cuda(
         tol=tol,
         minimum_sample_seconds=minimum_sample_seconds,
         max_sample_repetitions=max_sample_repetitions,
+        sample_repetitions=host_sample_repetitions,
     )
     device_result = _benchmark_engine(
         device_batches,
@@ -206,6 +217,7 @@ def benchmark_native_cuda(
         synchronize=stream.synchronize,
         minimum_sample_seconds=minimum_sample_seconds,
         max_sample_repetitions=max_sample_repetitions,
+        sample_repetitions=device_sample_repetitions,
     )
     host_result["transfer_and_conversion_overhead_seconds"] = max(
         0.0, host_result["median_seconds"] - device_result["median_seconds"]

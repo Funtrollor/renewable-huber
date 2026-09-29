@@ -28,10 +28,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Running this file directly puts ``scripts/benchmarks`` on the path, not the
 # repository root, so the package below would not resolve. ``src`` is added for
 # the same reason the rest of the benchmark scripts add it: these run straight
-# from a checkout.
-for _entry in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
-    if _entry not in sys.path:
-        sys.path.insert(0, _entry)
+# from a checkout. ``put_source_on_path`` picks which checkout's ``src``: this
+# one, unless an interleaved A/B points the harness at another source tree.
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.benchmarks.shape_sweep.source_root import put_source_on_path  # noqa: E402
+
+put_source_on_path()
 
 from scripts.benchmarks.shape_sweep.cli import (  # noqa: E402
     _add_throughput,
