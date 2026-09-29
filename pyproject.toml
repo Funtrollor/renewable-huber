@@ -114,8 +114,13 @@ select = ["E", "F", "I", "UP"]
 # backend signatures rather than finding bugs. Third-party libraries that are
 # optional extras, and the separately built native extensions, are exempted
 # per module below; nothing is ignored globally.
+#
+# python_version is 3.12, the CI quality job's interpreter, not the 3.10 floor:
+# NumPy 2.5+ ships stubs written with PEP 695 `type` statements, which mypy
+# refuses to parse for an older target. 3.10 syntax is enforced by ruff's
+# target-version and 3.10 runtime behaviour by the baseline matrix.
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 files = ["src/renewable_huber"]
 mypy_path = "src"
 check_untyped_defs = true
