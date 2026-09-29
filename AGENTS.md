@@ -120,6 +120,11 @@ report; these are the ones worth memorising.
   reads the required names out of the consumers' own import statements and
   checks them against `__all__` and the module attributes. Extra exports are
   fine; a missing one is not.
+- **The native-version exemption is interleaved-only and opt-in.**
+  `run_interleaved_benchmark.py --allow-native-version-change` drops only
+  `abi_version`/`python_api_version` from the fingerprint and records it in
+  `gate.json`; `check_performance_regression.py` must keep rejecting an ABI
+  change against a stored baseline. Guarded by `NativeVersionChangeGateTests`.
 - **`NativeCpuBackend` must keep inheriting NumPy's array handling and must
   not gain a `native_design_matrix`.** `backend="auto"` on CPU validates and
   prepares a batch on `NumPyBackend`, learns its shape, and only then may swap

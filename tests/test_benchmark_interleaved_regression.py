@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
+import json
+import sys
+import tempfile
 import unittest
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+from unittest import mock
 
+from scripts.benchmarks import run_interleaved_benchmark
 from scripts.benchmarks.interleaved_regression import (
+    GATE_SCHEMA_VERSION,
     compare_interleaved_records,
     merge_round_records,
+    report,
 )
 
 
@@ -73,16 +85,76 @@ def _record(native_seconds: float, numpy_seconds: float = 2.0) -> dict[str, obje
     }
 
 
+#: The N5 A/B: one RTX 5070 Ti host, identical driver and runtime, native CUDA
+#: ABI 1 / Python API 3 at the baseline and ABI 2 / API 4 at the candidate.
+_GPU_ENVIRONMENT = {
+    "gpu": "NVIDIA GeForce RTX 5070 Ti",
+    "gpu_compute_capability": "12.0",
+    "cuda_runtime": 12090,
+    "cupy": "14.1.1",
+}
+_NATIVE_CUDA_ABI_1 = {
+    "abi_version": 1,
+    "python_api_version": 3,
+    "driver_version": 13040,
+    "runtime_version": 12090,
+    "device_input": "dlpack",
+}
+_NATIVE_CUDA_ABI_2 = {
+    **_NATIVE_CUDA_ABI_1,
+    "abi_version": 2,
+    "python_api_version": 4,
+    "supported_penalties": ["none", "l1"],
+}
+_CUDA_ENGINES = frozenset({"native_cuda_host_input"})
+_CPU_ENGINES = frozenset({"rust_native_cpu"})
+
+
+def _cuda_record(
+    native_seconds: float,
+    native_cuda_abi: dict[str, Any] = _NATIVE_CUDA_ABI_1,
+    cupy_seconds: float = 2.0,
+) -> dict[str, Any]:
+    record: dict[str, Any] = _record(native_seconds)
+    record["environment"].update(copy.deepcopy(_GPU_ENVIRONMENT))
+    record["environment"]["native_cuda_abi"] = copy.deepcopy(native_cuda_abi)
+    record["cases"] = [
+        _case("cupy_cuda_host_input", cupy_seconds),
+        _case("native_cuda_host_input", native_seconds),
+    ]
+    return record
+
+
+def _merge(
+    values: list[float],
+    variant: str,
+    factory: Callable[[float], dict[str, Any]] = _record,
+) -> dict[str, Any]:
+    records = [factory(value) for value in values]
+    offset = 0 if variant == "baseline" else 1
+    return merge_round_records(
+        copy.deepcopy(records),
+        variant=variant,
+        pair_id="pair",
+        execution_order=[(index + offset) % 2 for index in range(len(records))],
+    )
+
+
+def _abi_change() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Merged records whose only fingerprint difference is the native CUDA ABI/API."""
+
+    baseline = _merge([1.0] * 9, "baseline", lambda value: _cuda_record(value))
+    candidate = _merge(
+        [0.95] * 9,
+        "candidate",
+        lambda value: _cuda_record(value, _NATIVE_CUDA_ABI_2),
+    )
+    return baseline, candidate
+
+
 class InterleavedRegressionTests(unittest.TestCase):
     def _merged(self, values: list[float], variant: str) -> dict[str, object]:
-        records = [_record(value) for value in values]
-        offset = 0 if variant == "baseline" else 1
-        return merge_round_records(
-            copy.deepcopy(records),
-            variant=variant,
-            pair_id="pair",
-            execution_order=[(index + offset) % 2 for index in range(len(records))],
-        )
+        return _merge(values, variant)
 
     def test_merge_preserves_round_order_and_recomputes_summaries(self) -> None:
         merged = self._merged([1.0, 0.9, 1.1], "baseline")
@@ -147,6 +219,230 @@ class InterleavedRegressionTests(unittest.TestCase):
                 pair_id="pair",
                 execution_order=[0, 1],
             )
+
+
+class NativeVersionChangeTests(unittest.TestCase):
+    """``allow_native_version_change`` exempts the interface versions and nothing else."""
+
+    def test_native_abi_change_is_rejected_without_the_option(self) -> None:
+        baseline, candidate = _abi_change()
+        for options in ({}, {"allow_native_version_change": False}):
+            with self.subTest(options=options):
+                checks = compare_interleaved_records(
+                    baseline, candidate, engines=_CUDA_ENGINES, **options
+                )
+
+                self.assertEqual(len(checks), 1)
+                self.assertFalse(checks[0].passed)
+                self.assertEqual(checks[0].reasons, ("hardware or runtime fingerprint differs",))
+
+    def test_native_abi_change_alone_passes_with_the_option(self) -> None:
+        baseline, candidate = _abi_change()
+
+        checks = compare_interleaved_records(
+            baseline, candidate, engines=_CUDA_ENGINES, allow_native_version_change=True
+        )
+
+        self.assertEqual(len(checks), 1)
+        self.assertTrue(checks[0].passed, checks[0].reasons)
+        self.assertAlmostEqual(checks[0].paired_median_slowdown or 0.0, 0.95)
+
+    def test_option_still_rejects_driver_runtime_and_gpu_changes(self) -> None:
+        for section, field, value in (
+            ("native_cuda_abi", "driver_version", 13020),
+            ("native_cuda_abi", "runtime_version", 12080),
+            (None, "cuda_runtime", 12080),
+            (None, "gpu", "NVIDIA GeForce RTX 4090"),
+            (None, "gpu_compute_capability", "8.9"),
+            (None, "cupy", "13.6.0"),
+        ):
+            with self.subTest(field=field):
+                baseline, candidate = _abi_change()
+                environment = candidate["environment"]
+                (environment if section is None else environment[section])[field] = value
+
+                checks = compare_interleaved_records(
+                    baseline, candidate, engines=_CUDA_ENGINES, allow_native_version_change=True
+                )
+
+                self.assertFalse(checks[0].passed)
+                self.assertIn("hardware or runtime fingerprint differs", checks[0].reasons)
+
+    def test_native_cpu_interface_versions_follow_the_same_option(self) -> None:
+        baseline = _merge([1.0] * 9, "baseline")
+        candidate = _merge([0.95] * 9, "candidate")
+        candidate["environment"]["native_cpu"].update(abi_version=2, python_api_version=3)
+
+        rejected = compare_interleaved_records(baseline, candidate, engines=_CPU_ENGINES)
+        accepted = compare_interleaved_records(
+            baseline, candidate, engines=_CPU_ENGINES, allow_native_version_change=True
+        )
+        candidate["environment"]["native_cpu"]["parallel_threads"] = 2
+        provider_change = compare_interleaved_records(
+            baseline, candidate, engines=_CPU_ENGINES, allow_native_version_change=True
+        )
+
+        self.assertFalse(rejected[0].passed)
+        self.assertTrue(accepted[0].passed, accepted[0].reasons)
+        self.assertFalse(provider_change[0].passed)
+
+    def test_gate_records_the_option_and_both_sides_native_versions(self) -> None:
+        baseline, candidate = _abi_change()
+        for allowed in (False, True):
+            with self.subTest(allow_native_version_change=allowed):
+                checks = compare_interleaved_records(
+                    baseline,
+                    candidate,
+                    engines=_CUDA_ENGINES,
+                    allow_native_version_change=allowed,
+                )
+
+                gate = report(
+                    checks,
+                    baseline=baseline,
+                    candidate=candidate,
+                    allow_native_version_change=allowed,
+                )
+
+                self.assertEqual(GATE_SCHEMA_VERSION, 2)
+                self.assertEqual(gate["schema_version"], GATE_SCHEMA_VERSION)
+                self.assertIs(gate["allow_native_version_change"], allowed)
+                self.assertIs(gate["passed"], allowed)
+                self.assertEqual(
+                    gate["native_versions"],
+                    {
+                        "native_cuda_abi": {
+                            "baseline": {"abi_version": 1, "python_api_version": 3},
+                            "candidate": {"abi_version": 2, "python_api_version": 4},
+                            "changed": True,
+                        }
+                    },
+                )
+                json.dumps(gate, allow_nan=False)
+
+    def test_gate_lists_only_the_gated_native_families(self) -> None:
+        baseline = _merge([1.0] * 9, "baseline")
+        candidate = _merge([0.95] * 9, "candidate")
+        checks = compare_interleaved_records(baseline, candidate, engines=_CPU_ENGINES)
+
+        gate = report(
+            checks,
+            baseline=baseline,
+            candidate=candidate,
+            allow_native_version_change=False,
+        )
+
+        self.assertIs(gate["allow_native_version_change"], False)
+        self.assertEqual(
+            gate["native_versions"],
+            {
+                "native_cpu": {
+                    "baseline": {"abi_version": 1, "python_api_version": 2},
+                    "candidate": {"abi_version": 1, "python_api_version": 2},
+                    "changed": False,
+                }
+            },
+        )
+
+    def test_gate_records_missing_native_metadata_as_null(self) -> None:
+        baseline, candidate = _abi_change()
+        del candidate["environment"]["native_cuda_abi"]
+        checks = compare_interleaved_records(
+            baseline, candidate, engines=_CUDA_ENGINES, allow_native_version_change=True
+        )
+
+        gate = report(
+            checks,
+            baseline=baseline,
+            candidate=candidate,
+            allow_native_version_change=True,
+        )
+
+        self.assertFalse(gate["passed"])
+        self.assertEqual(
+            gate["native_versions"]["native_cuda_abi"]["candidate"],
+            {"abi_version": None, "python_api_version": None},
+        )
+
+
+class InterleavedCliTests(unittest.TestCase):
+    REQUIRED = (
+        "--baseline-python",
+        "python",
+        "--baseline-repo",
+        "baseline",
+        "--candidate-python",
+        "python",
+        "--candidate-repo",
+        "candidate",
+        "--output-dir",
+        "out",
+    )
+
+    def test_parser_exposes_the_option_defaulting_to_false(self) -> None:
+        parser = run_interleaved_benchmark.build_parser()
+
+        self.assertIs(parser.parse_args(self.REQUIRED).allow_native_version_change, False)
+        self.assertIs(
+            parser.parse_args(
+                [*self.REQUIRED, "--allow-native-version-change"]
+            ).allow_native_version_change,
+            True,
+        )
+
+    def _run_main(self, root: Path, *extra: str) -> tuple[int, dict[str, Any]]:
+        rounds = {
+            "baseline": _cuda_record(1.0, _NATIVE_CUDA_ABI_1),
+            "candidate": _cuda_record(0.95, _NATIVE_CUDA_ABI_2),
+        }
+
+        def fake_round(**kwargs: Any) -> dict[str, Any]:
+            return copy.deepcopy(rounds[kwargs["repo"].name])
+
+        output = root / "out"
+        argv = [
+            "run_interleaved_benchmark.py",
+            "--baseline-python",
+            str(root / "python"),
+            "--baseline-repo",
+            str(root / "baseline"),
+            "--candidate-python",
+            str(root / "python"),
+            "--candidate-repo",
+            str(root / "candidate"),
+            "--output-dir",
+            str(output),
+            "--pair-id",
+            "pair",
+            "--backend",
+            "native_cuda",
+            *extra,
+        ]
+        with (
+            mock.patch.object(run_interleaved_benchmark, "_run_round", side_effect=fake_round),
+            mock.patch.object(sys, "argv", argv),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            status = run_interleaved_benchmark.main()
+        return status, json.loads((output / "gate.json").read_text(encoding="utf-8"))
+
+    def test_main_writes_the_option_and_native_versions_to_gate_json(self) -> None:
+        expected_versions = {
+            "native_cuda_abi": {
+                "baseline": {"abi_version": 1, "python_api_version": 3},
+                "candidate": {"abi_version": 2, "python_api_version": 4},
+                "changed": True,
+            }
+        }
+        for extra, allowed in (((), False), (("--allow-native-version-change",), True)):
+            with self.subTest(allowed=allowed), tempfile.TemporaryDirectory() as directory:
+                status, gate = self._run_main(Path(directory), *extra)
+
+                self.assertEqual(status, 0 if allowed else 1)
+                self.assertEqual(gate["schema_version"], GATE_SCHEMA_VERSION)
+                self.assertIs(gate["allow_native_version_change"], allowed)
+                self.assertIs(gate["passed"], allowed)
+                self.assertEqual(gate["native_versions"], expected_versions)
 
 
 if __name__ == "__main__":

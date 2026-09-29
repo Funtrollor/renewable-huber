@@ -9,9 +9,28 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 try:
-    from .performance_policy import GPU_ENGINES, MeasurementKey, compare_records, measurement_key
+    from .performance_policy import (
+        GPU_ENGINES,
+        NATIVE_METADATA_SECTIONS,
+        MeasurementKey,
+        compare_records,
+        measurement_key,
+        native_versions,
+    )
 except ImportError:  # pragma: no cover - direct script imports use the sibling directory.
-    from performance_policy import GPU_ENGINES, MeasurementKey, compare_records, measurement_key
+    from performance_policy import (
+        GPU_ENGINES,
+        NATIVE_METADATA_SECTIONS,
+        MeasurementKey,
+        compare_records,
+        measurement_key,
+        native_versions,
+    )
+
+#: Version 2 added ``allow_native_version_change`` and ``native_versions``: a
+#: passing v2 gate may compare across a native ABI/API change, which a v1 gate
+#: never could, so a reader must be able to tell the two apart.
+GATE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,8 +134,14 @@ def compare_interleaved_records(
     gpu_max_relative_mad: float = 0.10,
     max_iteration_delta: int = 1,
     max_competitor_slowdown: float = 1.0,
+    allow_native_version_change: bool = False,
 ) -> list[PairedRegressionCheck]:
-    """Require both the existing policy and an aligned paired slowdown gate."""
+    """Require both the existing policy and an aligned paired slowdown gate.
+
+    ``allow_native_version_change`` lets an A/B whose two builds report a
+    different native ``abi_version``/``python_api_version`` be compared; every
+    other hardware and runtime fingerprint field must still match.
+    """
 
     baseline_capture = baseline.get("interleaved_capture")
     candidate_capture = candidate.get("interleaved_capture")
@@ -153,6 +178,7 @@ def compare_interleaved_records(
         require_competitor_parity=True,
         max_competitor_slowdown=max_competitor_slowdown,
         require_same_hardware=True,
+        allow_native_version_change=allow_native_version_change,
     )
     baseline_cases = _index(baseline)
     candidate_cases = _index(candidate)
@@ -197,11 +223,48 @@ def compare_interleaved_records(
     return paired
 
 
-def report(checks: list[PairedRegressionCheck]) -> dict[str, Any]:
+def native_version_evidence(
+    checks: list[PairedRegressionCheck],
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Each side's native interface versions, per native family that was gated.
+
+    Keyed by the ``environment`` section the versions were read from
+    (``native_cpu`` or ``native_cuda_abi``), so the gate itself shows whether
+    it compared, say, native CUDA ABI 1 against ABI 2.
+    """
+
+    evidence: dict[str, dict[str, Any]] = {}
+    for engine in sorted({check.key.engine for check in checks}):
+        section = NATIVE_METADATA_SECTIONS.get(engine)
+        if section is None or section in evidence:
+            continue
+        baseline_versions = native_versions(baseline, engine)
+        candidate_versions = native_versions(candidate, engine)
+        evidence[section] = {
+            "baseline": baseline_versions,
+            "candidate": candidate_versions,
+            "changed": baseline_versions != candidate_versions,
+        }
+    return evidence
+
+
+def report(
+    checks: list[PairedRegressionCheck],
+    *,
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    allow_native_version_change: bool,
+) -> dict[str, Any]:
+    """Build ``gate.json``; the option and native versions are always recorded."""
+
     return {
         "schema": "renewable-huber-interleaved-regression-gate",
-        "schema_version": 1,
+        "schema_version": GATE_SCHEMA_VERSION,
         "passed": bool(checks) and all(check.passed for check in checks),
         "checked_cases": len(checks),
+        "allow_native_version_change": bool(allow_native_version_change),
+        "native_versions": native_version_evidence(checks, baseline, candidate),
         "checks": [{**asdict(check), "key": asdict(check.key)} for check in checks],
     }
