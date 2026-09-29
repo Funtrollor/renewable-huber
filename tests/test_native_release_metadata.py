@@ -130,13 +130,19 @@ class NativeReleaseMetadataTests(unittest.TestCase):
         # workflow would let the release path rot unobserved.
         workflows = Path(__file__).parents[1] / ".github" / "workflows"
         script = "bash scripts/native/build_linux_cuda_wheel.sh"
-        image = "quay.io/pypa/manylinux_2_28_x86_64"
+        images = set()
         for name in ("ci.yml", "release.yml"):
             with self.subTest(workflow=name):
                 workflow = (workflows / name).read_text(encoding="utf-8")
                 self.assertIn(script, workflow)
-                self.assertIn(image, workflow)
                 self.assertIn("--native-dir dist-native-cuda --import-only", workflow)
+                # Pinned by digest like every workflow action: a moved tag must
+                # not be able to change what the release compiles with.
+                found = re.findall(r"quay\.io/pypa/manylinux_2_28_x86_64(\S*)", workflow)
+                self.assertEqual(len(found), 1)
+                self.assertRegex(found[0], r"\A@sha256:[0-9a-f]{64}\Z")
+                images.add(found[0])
+        self.assertEqual(len(images), 1, "CI and release must build in the same image")
         release = (workflows / "release.yml").read_text(encoding="utf-8")
         self.assertIn("native-cuda-linux-x86_64-py${{ matrix.python-version }}", release)
         self.assertIn(
