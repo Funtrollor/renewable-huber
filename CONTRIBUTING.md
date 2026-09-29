@@ -101,6 +101,24 @@ Backend-specific changes must include parity tests against NumPy. Performance ch
 correctness tests and reproducible before/after benchmark output; a faster result is not accepted
 if it changes the documented numerical contract.
 
+## Documentation site
+
+The English documentation site is built with MkDocs Material from
+`mkdocs.yml` and `docs/`. Preview it locally from the repository root:
+
+```bash
+python -m pip install -e ".[docs]" && mkdocs serve
+mkdocs build --strict    # what CI runs
+```
+
+Pull requests run `mkdocs build --strict` (`.github/workflows/docs.yml`), which
+fails on a broken link or anchor. The home page and user guide include marked
+regions of `README.en.md`, so edit the README there rather than copying text
+into `docs/`, and keep relative links out of those regions. Links from `docs/`
+to files outside it use absolute GitHub URLs. Existing documents keep their
+language and file names, because the READMEs, `AGENTS.md`, the changelog and
+scripts link to them.
+
 ## Pull requests
 
 - Branch from the latest `main` and keep the change focused.
