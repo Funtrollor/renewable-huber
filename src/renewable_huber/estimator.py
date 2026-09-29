@@ -52,6 +52,14 @@ class RenewableHuberRegressor:
     historical raw observations.
     """
 
+    # Private fitted state. ``reset`` sets every one of these, so ``None`` means
+    # "no batch consumed yet"; declared here so the type checker sees the
+    # non-``None`` types the update path assigns.
+    _backend: ArrayBackend | None
+    _state: RenewableHuberState | None
+    _diagnostics: UpdateDiagnostics | None
+    _auto_cpu_pending: bool
+
     def __init__(
         self,
         *,
@@ -382,7 +390,7 @@ class RenewableHuberRegressor:
         leave the estimator exactly as it was.
         """
 
-        state = getattr(self, "_state", None)
+        state: RenewableHuberState | None = getattr(self, "_state", None)
         first_batch = state is None
         if state is not None:
             self._validate_feature_names(X)
@@ -392,7 +400,7 @@ class RenewableHuberRegressor:
         )
 
         feature_names = None
-        if first_batch:
+        if state is None:  # the first batch of a stream
             feature_names = self._feature_names(X)
             state = RenewableHuberState.empty(
                 X_array.shape[1],
@@ -577,7 +585,7 @@ class RenewableHuberRegressor:
             raise RuntimeError("an initialized backend is required for input validation")
         RenewableHuberRegressor._reject_sparse(X)
         if hasattr(X, "to_numpy"):
-            X = X.to_numpy()  # type: ignore[union-attr]
+            X = X.to_numpy()
         RenewableHuberRegressor._reject_complex(X, "X")
         try:
             X_array = backend.asarray(X)
@@ -621,7 +629,7 @@ class RenewableHuberRegressor:
     def _validate_target(y: ArrayLike, expected_samples: int, backend: ArrayBackend) -> Any:
         RenewableHuberRegressor._reject_sparse(y)
         if hasattr(y, "to_numpy"):
-            y = y.to_numpy()  # type: ignore[union-attr]
+            y = y.to_numpy()
         RenewableHuberRegressor._reject_complex(y, "y")
         try:
             y_array = backend.reshape(backend.asarray(y), (-1,))
@@ -653,7 +661,7 @@ class RenewableHuberRegressor:
             return None, float(expected_samples)
         RenewableHuberRegressor._reject_sparse(sample_weight)
         if hasattr(sample_weight, "to_numpy"):
-            sample_weight = sample_weight.to_numpy()  # type: ignore[union-attr]
+            sample_weight = sample_weight.to_numpy()
         RenewableHuberRegressor._reject_complex(sample_weight, "sample_weight")
         try:
             weights = backend.reshape(backend.asarray(sample_weight), (-1,))

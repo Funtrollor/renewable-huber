@@ -94,7 +94,7 @@ class NativeCpuBackend(NativeEngineBackend):
             None if sample_weight is None else np.ascontiguousarray(sample_weight, dtype=self.dtype)
         )
         with self._engine_call():
-            result = self._engine.update(
+            result = self._resident_engine().update(
                 np.ascontiguousarray(X, dtype=self.dtype),
                 np.ascontiguousarray(y, dtype=self.dtype),
                 weights,
@@ -116,5 +116,5 @@ class NativeCpuBackend(NativeEngineBackend):
 
         self.restore_native_state(state)
         with self._engine_call():
-            prediction = self._engine.predict(np.ascontiguousarray(X, dtype=self.dtype))
+            prediction = self._resident_engine().predict(np.ascontiguousarray(X, dtype=self.dtype))
         return np.asarray(prediction, dtype=self.dtype)

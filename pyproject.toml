@@ -32,7 +32,13 @@ gpu-cupy = ["cupy-cuda12x>=13"]
 gpu-torch = ["torch>=2.2"]
 gpu-tensorflow = ["tensorflow>=2.16"]
 native-build = ["maturin>=1.8,<2"]
-dev = ["build>=1.2", "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.8"]
+dev = [
+  "build>=1.2",
+  "mypy>=2.0",
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.8",
+]
 # MkDocs site (mkdocs.yml). mkdocstrings reads src/ statically, so building the
 # site needs neither native extension; ruff only formats rendered signatures.
 docs = [
@@ -99,3 +105,36 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+# Type checking level: every default mypy check plus `check_untyped_defs`, the
+# redundancy warnings and explicit-Optional enforcement. Deliberately *not*
+# `--strict`: that would additionally demand annotations on every function and
+# forbid `Any` leaking from NumPy/array-API values, which here means rewriting
+# backend signatures rather than finding bugs. Third-party libraries that are
+# optional extras, and the separately built native extensions, are exempted
+# per module below; nothing is ignored globally.
+[tool.mypy]
+python_version = "3.10"
+files = ["src/renewable_huber"]
+mypy_path = "src"
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+show_error_codes = true
+enable_error_code = ["ignore-without-code"]
+
+[[tool.mypy.overrides]]
+module = [
+  "_renewable_huber_native_cpu",
+  "_renewable_huber_native_cuda",
+  "cupy",
+  "cupyx",
+  "sklearn.*",
+  "tensorflow",
+  "threadpoolctl",
+  "torch",
+]
+ignore_missing_imports = true
