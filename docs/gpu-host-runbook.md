@@ -8,10 +8,12 @@ and preparing the 0.7.0 release. It assumes a fresh clone on a Windows
 machine with an NVIDIA GPU (the committed baselines were taken on an
 RTX 5070 Ti, SM 12.0). Read [`AGENTS.md`](https://github.com/Funtrollor/renewable-huber/blob/main/AGENTS.md) first.
 
-The native CUDA engine is at C ABI 2 / Python API 4. As of `main` at
-`6a0b1b2`, the code has only been compiled, locally for SM 120 and in CI for
-SM 75 and 120. Nothing has run on a GPU yet. That makes stage 1 below a real
-first run, not a formality.
+The native CUDA engine is at C ABI 2 / Python API 4. Stage 1 below first ran
+on a GPU on 2026-09-29 at `4114918`, and every command passed. Stage 2 ran
+the same day. The results, including what is still open, are in
+[N5 fixed-host results](native-penalty-completion-plan.md#n5-fixed-host-results).
+Wherever that run showed this page disagreeing with what the scripts
+actually require, the page now follows the scripts and says why.
 
 ## 0. Prerequisites
 
@@ -19,40 +21,54 @@ first run, not a formality.
 |---|---|---|
 | NVIDIA driver | supports CUDA 12.9 | `nvidia-smi` shows "CUDA Version" ≥ 12.9 |
 | CUDA Toolkit | 12.9 (SM 120 needs ≥ 12.8) | `nvcc --version` |
-| Visual Studio 2022 Build Tools | "Desktop development with C++" (MSVC x64) | `vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64` |
+| Visual Studio 2022 Build Tools | "Desktop development with C++" (MSVC x64) | `vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64` (`vswhere.exe` is in `${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer`, not on `PATH`; without `-products *` it does not list Build Tools) |
 | Rust | stable, `x86_64-pc-windows-msvc` | `rustc --version`, `cargo --version` |
-| Python | 3.12 x64 (any of 3.10–3.13 works) | `py -3.12 --version` |
+| Python | 3.10–3.12 x64; the N5 run used 3.11.0 (see below) | `py -3.11 --version` |
 | CMake, Ninja | on `PATH` | `cmake --version`, `ninja --version` |
 | Git, GitHub CLI | `gh auth login` done | `gh auth status` |
 
 `.gitattributes` pins every text file to LF, so the golden corpus and the
 shell scripts are byte-identical to Linux regardless of `core.autocrlf`.
 
+The candidate supports CPython 3.10–3.13, but the §3a A/B needs the **same**
+interpreter version in both venvs (the gate compares the Python version as
+part of the fingerprint), and its baseline `fca7b83` declares
+`requires-python = ">=3.10,<3.13"`. Use one of 3.10–3.12 for everything on
+this host. The commands below use 3.11, which the N5 run used; substitute the
+version you have.
+
 ## 1. Environment
 
 In PowerShell, from the repository root:
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,sklearn,pandas,gpu-cupy]" "maturin>=1.8,<2"
 
 # Both scripts import the VS x64 toolchain into their own process, build a
-# wheel and install it into the interpreter given by -Python.
-.\scripts\native\build_native_cpu.ps1  -Python .\.venv\Scripts\python.exe
-.\scripts\native\build_native_cuda.ps1 -Python .\.venv\Scripts\python.exe
+# wheel and install it into the interpreter given by -Python. They
+# Push-Location into native\python-* before running that interpreter, so the
+# path must be absolute; a relative .\.venv\... no longer resolves there.
+$venvPy = (Resolve-Path .\.venv\Scripts\python.exe).Path
+.\scripts\native\build_native_cpu.ps1  -Python $venvPy
+.\scripts\native\build_native_cuda.ps1 -Python $venvPy
 ```
 
 `build_native_cuda.ps1` builds for `RH_CUDA_ARCHITECTURES`, which defaults to
 `native` (the local GPU). The CMake and `ctest` commands below need the
-compiler on `PATH`. Run them in an x64 developer shell:
+compiler on `PATH`. Run them in an x64 developer shell. VS 2022 Build Tools
+installs under `${env:ProgramFiles(x86)}` by default, so locate it with
+`vswhere` the way the build scripts do, and pass `-SkipAutomaticLocation`:
+without it, `Launch-VsDevShell.ps1` changes the current directory and the
+relative `native/cuda` and `build/...` paths below stop resolving.
 
 ```powershell
-& "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+    -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+    -property installationPath
+& "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
 ```
-
-Use the `Community` or `Professional` directory instead of `BuildTools` if
-that is what is installed.
 
 ## 2. Stage 1: correctness on the device (release blocker)
 
@@ -73,7 +89,9 @@ $py = ".\.venv\Scripts\python.exe"
 cmake -S native/cuda -B build/static -G Ninja -DCMAKE_BUILD_TYPE=Release `
       -DRH_CUDA_BUILD_SHARED=OFF -DRH_CUDA_BUILD_TESTS=ON -DCMAKE_CUDA_ARCHITECTURES=native
 cmake --build build/static
-ctest --test-dir build/static --output-on-failure
+# --verbose shows "rh_cuda_smoke passed", which the binary prints only after
+# every named case has passed: positive evidence, not just an exit code.
+ctest --test-dir build/static --output-on-failure --verbose
 
 # Export surface: exactly 17 rh_cuda_* symbols.
 cmake -S native/cuda -B build/shared -G Ninja -DCMAKE_BUILD_TYPE=Release `
@@ -86,6 +104,12 @@ cmake --build build/shared
 & $py -m build --wheel --outdir build/base-wheel
 & $py scripts/native/smoke_test_cuda_wheels.py --base-dir build/base-wheel --native-dir build/native-cuda-wheel
 ```
+
+Two skips are expected in both `core` and `cuda`, and only these two:
+`PyTorchDlpackIntegrationTests` and `TensorFlowDlpackIntegrationTests` in
+`tests/test_dlpack_adapters.py`. They need CUDA builds of PyTorch and
+TensorFlow, which the extras above do not install. A skip means those two
+DLPack paths were not exercised on the device, so say so with the evidence.
 
 If anything fails, find the root cause in the CUDA/FFI code and fix it with a
 regression test. Never skip a test, loosen a tolerance to hide a numeric
@@ -103,9 +127,11 @@ Record the environment with the evidence:
 ## 3. Stage 2: N5 measurements
 
 Measurements need the GPU to themselves. Do not run tests, builds, or a second
-benchmark at the same time. Drift of about 2–19% between runs of the same
-binary is normal on this class of host. Never claim a difference within about
-±10%.
+benchmark at the same time. Desktop programs that render on the GPU count as
+well: close wallpaper engines, overlays and other AI or GPU-accelerated apps
+before measuring, and record which GPU clients `nvidia-smi` still lists
+before each run. Drift of about 2–19% between runs of the same binary is
+normal on this class of host. Never claim a difference within about ±10%.
 
 ### 3a. `penalty="none"` must not have regressed
 
@@ -116,22 +142,44 @@ This is an interleaved A/B of the pre-L1 engine against the current one:
 
 Each side needs its own clone and its own venv, with the native CUDA
 extension built from that clone's own sources. ABI 1 Python code cannot load
-an ABI 2 extension, or the reverse.
+an ABI 2 extension, or the reverse. Create the baseline venv with the same
+Python version as the candidate's (see §0), and pin NumPy, SciPy and CuPy to
+the candidate's versions: the gate fingerprints the Python, NumPy and CuPy
+versions, and an unpinned install picks whatever is newest that day.
 
 ```powershell
+$pins = & .\.venv\Scripts\python.exe -c "import importlib.metadata as m; print(' '.join(f'{p}=={m.version(p)}' for p in ('numpy', 'scipy', 'cupy-cuda12x')))"
 git worktree add ..\rh-baseline fca7b83
 Push-Location ..\rh-baseline
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev,gpu-cupy]" "maturin>=1.8,<2"
-.\scripts\native\build_native_cuda.ps1 -Python .\.venv\Scripts\python.exe
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,gpu-cupy]" "maturin>=1.8,<2" $pins.Split(' ')
+.\scripts\native\build_native_cuda.ps1 -Python (Resolve-Path .\.venv\Scripts\python.exe).Path
 Pop-Location
 
 .\.venv\Scripts\python.exe scripts/benchmarks/run_interleaved_benchmark.py `
   --baseline-python ..\rh-baseline\.venv\Scripts\python.exe --baseline-repo ..\rh-baseline `
   --candidate-python .\.venv\Scripts\python.exe --candidate-repo . `
-  --output-dir artifacts/n5-none-ab --profile standard --backend native_cuda `
-  --penalty none --dtype both --lifecycle cold --operation partial-fit --rounds 9
+  --output-dir artifacts/n5-none-ab --profile standard --backend gpu `
+  --penalty none --dtype both --lifecycle cold --operation partial-fit --rounds 9 `
+  --max-sample-repetitions 1
 ```
+
+Why these arguments:
+
+- **`--backend gpu`, not `native_cuda`.** The interleaved gate hard-codes
+  `require_competitor_parity=True`, so every native case needs its matched
+  CuPy case under the same transport. With `--backend native_cuda` there is
+  none, and every check fails with "candidate lacks matched ... competitor
+  case". As a consequence the gate also enforces native/CuPy ≤ 1.0
+  (`--max-competitor-slowdown`).
+- **`--max-sample-repetitions 1`.** Each round sizes its sample block from a
+  single calibration run. With the default cap of 64 that calibration picks
+  different `sample_repetitions` in different rounds, and after the last
+  round `merge_round_records` refuses to merge them ("sample repetition
+  calibration changed between interleaved rounds"), so no gate report is
+  written. In the N5 run, a cap of 1 was the only one that held a single
+  repetition count for every standard-profile case. The cost is that short
+  cases become single-operation samples with a higher relative MAD.
 
 The plan's acceptance criteria:
 
@@ -142,7 +190,18 @@ The plan's acceptance criteria:
 - the candidate slowdown is at most 1.15x.
 
 These are the script's GPU defaults. Also repeat the run once with
-`--lifecycle steady`.
+`--lifecycle steady`, giving it its own output directory, for example
+`--output-dir artifacts/n5-none-ab-steady`, so it does not overwrite the cold
+run's records.
+
+**Known limitation.** On `main`, an A/B across a native ABI change cannot
+produce `passed=true`. The gate's hardware and runtime fingerprint includes
+`native_cuda_abi.abi_version` and `python_api_version`, so every native case
+reports `hardware or runtime fingerprint differs` whatever its timings. The
+N5 run hit exactly this (ABI 1 / API 3 against ABI 2 / API 4). The maintainer
+has decided to add an interleaved-only `--allow-native-version-change` option
+in a separate pull request, followed by a recapture on a quiet GPU. That
+option is not on `main` yet; do not add it to the commands above until it is.
 
 ### 3b. L1: native CUDA against CuPy under the same transport
 
@@ -160,15 +219,31 @@ repeatable. Compare native CUDA against CuPy per case, with transport, dtype,
 lifecycle, operation, and shape all held equal.
 
 L1 on native CUDA stays explicit opt-in. `backend="auto"` never picks it.
-That remains true unless the same-transport native result beats CuPy
-repeatably, and the decision goes in the plan either way.
+The N5 run met the "repeatable same-transport advantage" condition and the
+plan records that, but the decision stayed opt-in: automatic CUDA selection is
+outside the plan's scope and needs its own RFC. See
+[N5 fixed-host results](native-penalty-completion-plan.md#n5-fixed-host-results).
 
 ### 3c. Record the evidence
 
 `artifacts/` is ignored, so copy the accepted records into
-`benchmarks/baselines/`. Follow the existing naming, for example
-`p5-windows-rtx5070ti-native-cuda-l1.json` and
-`p5-windows-rtx5070ti-native-cuda-none-ab.json`. Then update these together:
+`benchmarks/baselines/`. Follow the existing naming. The L1 baseline is the
+three runs, `p5-windows-rtx5070ti-native-cuda-l1-run1.json` through
+`-run3.json`; an accepted `none` A/B would follow the same pattern, for
+example `p5-windows-rtx5070ti-native-cuda-none-ab-*.json`. Record the SHA-256
+of every record in the plan, including records that stay on the host because
+they were not accepted. The shape sweep writes CRLF on Windows and
+`.gitattributes` stores LF, so the committed file's hash differs from the
+host copy's; record both.
+
+`validate_record` in `scripts/benchmarks/performance_policy.py` still rejects
+any native CUDA record whose penalty is not `none` ("native CUDA benchmark
+records may not claim L1 support"), so the committed L1 runs cannot yet be
+loaded by it or by `check_performance_regression.py`. A pending pull request
+changes that rule; until it merges, an L1 comparison has to read the JSON
+records directly, as the N5 analysis did.
+
+Then update these together:
 
 - `docs/native-penalty-completion-plan.md`: the status line and the "Still
   open" list;

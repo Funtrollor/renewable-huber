@@ -63,6 +63,14 @@ stabilised.
   `rh_cuda_engine_predict`/`RhCudaPrediction`; the library still exports
   exactly 17 `rh_cuda_*` symbols.
 - The native CUDA shape sweep and profiler accept `penalty="l1"`.
+- The GPU-host runbook (`docs/gpu-host-runbook.md`) now matches what the
+  scripts require, as found on its first run: `--backend gpu` and
+  `--max-sample-repetitions 1` for the interleaved `penalty="none"` A/B, a
+  separate output directory for the steady run, the same Python 3.10–3.12
+  version and pinned NumPy/SciPy/CuPy on both sides, absolute `-Python` paths
+  for the native build scripts, a `vswhere`-located developer shell with
+  `-SkipAutomaticLocation`, the two expected DLPack integration skips, and a
+  note that an A/B across a native ABI change cannot pass the gate on `main`.
 
 ## [0.6.1] - 2026-08-09
 
