@@ -30,6 +30,14 @@ stabilised.
   a new no-GPU pull-request CI job.
 - CPython 3.13 support for the base package and both native wheels, across CI
   and the release matrix (20 CPU wheels, 8 CUDA wheels).
+- An English README (`README.en.md`) and a MkDocs Material documentation site
+  (`docs` extra, `mkdocs.yml`) with a generated Python API reference. A new
+  Docs workflow builds it with `--strict` on every pull request and deploys it
+  to GitHub Pages only when run by hand.
+- Development tooling: mypy over `src/renewable_huber` and branch coverage of
+  the required `core` profile (`fail_under = 72`) in the CI quality job, and
+  `proptest` property tests for the `rh-core` validation contracts and the
+  `rh-cpu` numeric kernels.
 
 ### Changed
 
