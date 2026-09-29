@@ -20,6 +20,8 @@ mod solver;
 mod workspace;
 
 #[cfg(test)]
+mod proptests;
+#[cfg(test)]
 mod tests;
 
 // Micro-batches are latency-bound: crossing the Python boundary and joining a
