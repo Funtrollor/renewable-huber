@@ -33,6 +33,14 @@ gpu-torch = ["torch>=2.2"]
 gpu-tensorflow = ["tensorflow>=2.16"]
 native-build = ["maturin>=1.8,<2"]
 dev = ["build>=1.2", "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.8"]
+# MkDocs site (mkdocs.yml). mkdocstrings reads src/ statically, so building the
+# site needs neither native extension; ruff only formats rendered signatures.
+docs = [
+  "mkdocs>=1.6,<2",
+  "mkdocs-material>=9.5,<10",
+  "mkdocstrings[python]>=1.0,<2",
+  "ruff>=0.8",
+]
 
 [project.urls]
 Changelog = "https://github.com/Funtrollor/renewable-huber/blob/main/CHANGELOG.md"
@@ -75,6 +83,10 @@ exclude = [
   "/scripts/**",
   "/docs/references/**",
   "/docs/reports/**",
+  # Site-only pages assembled from README.en.md and other files by the MkDocs
+  # snippets extension; they are unreadable on their own. docs/*/ pages are
+  # already outside the non-recursive "/docs/*.md" include.
+  "/docs/index.md",
 ]
 
 [tool.pytest.ini_options]

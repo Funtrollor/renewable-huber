@@ -2,19 +2,36 @@
 
 English | [繁體中文](README.md)
 
+<!--
+Each region between a pair of start/end snippet markers below is
+included verbatim in the MkDocs site (docs/index.md and docs/guide/*.md), so
+editing one updates both. Keep relative links out of those regions: they
+resolve against the including page there, and `mkdocs build --strict` fails.
+-->
+
 [![CI](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml/badge.svg)](https://github.com/Funtrollor/renewable-huber/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/renewable-huber.svg)](https://pypi.org/project/renewable-huber/)
 [![Python versions](https://img.shields.io/pypi/pyversions/renewable-huber.svg)](https://pypi.org/project/renewable-huber/)
 [![GitHub Release](https://img.shields.io/github/v/release/Funtrollor/renewable-huber)](https://github.com/Funtrollor/renewable-huber/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-D22128.svg)](LICENSE)
 
+<!-- --8<-- [start:intro] -->
 `renewable-huber` is a Renewable Huber Regression package for streaming data. It implements robust linear regression based on the Huber loss, and while processing batches it retains only the coefficients and an accumulated information matrix, never every historical observation.
 
 The latest version is **0.6.1**, published on [PyPI](https://pypi.org/project/renewable-huber/), but the package is still in **pre-alpha** development. It provides RHE and L1-penalised RPSHE updates on NumPy/CPU, Rust/Rayon native CPU, CuPy/CUDA, Rust/CUDA native, PyTorch and TensorFlow (CPU/CUDA), resumable `.npz` checkpoints, and integration with pandas and scikit-learn Pipeline/model-selection tools. Run `renewable-huber --version` to see the installed version.
+<!-- --8<-- [end:intro] -->
 
-`backend="auto"` follows predictable device rules: it chooses CuPy only when `device="cuda"` is set explicitly and otherwise stays on the CPU. On the CPU, `auto` still defaults to NumPy; it switches to `native_cpu` only when the batch is large enough and a runtime measurement on this machine shows that the Rust native CPU engine is clearly faster. The decision rests entirely on live measurements of **the current host and the current execution environment**: it never reads a CPU model string and never writes a cache file. Measurements live only in memory and are valid only for the execution environment in which they were taken: they are discarded as soon as the CPU affinity mask (not just the core count), the `*_NUM_THREADS` settings, or the effective BLAS/OpenMP thread-pool sizes observable through optional `threadpoolctl` change, and a child process after `fork` also clears them and measures again. Within one execution environment the same shape always gets the same answer, regardless of what other estimators asked before. Any failure along the way (a missing extension, an engine that cannot be constructed, insufficient measurements, or any ordinary exception raised by a native engine that `auto` selected) quietly falls back to NumPy. For details and cost bounds, see the [CPU auto-dispatch RFC](docs/cpu-auto-dispatch-rfc.md).
+<!-- --8<-- [start:auto-dispatch] -->
+`backend="auto"` follows predictable device rules: it chooses CuPy only when `device="cuda"` is set explicitly and otherwise stays on the CPU. On the CPU, `auto` still defaults to NumPy; it switches to `native_cpu` only when the batch is large enough and a runtime measurement on this machine shows that the Rust native CPU engine is clearly faster. The decision rests entirely on live measurements of **the current host and the current execution environment**: it never reads a CPU model string and never writes a cache file. Measurements live only in memory and are valid only for the execution environment in which they were taken: they are discarded as soon as the CPU affinity mask (not just the core count), the `*_NUM_THREADS` settings, or the effective BLAS/OpenMP thread-pool sizes observable through optional `threadpoolctl` change, and a child process after `fork` also clears them and measures again. Within one execution environment the same shape always gets the same answer, regardless of what other estimators asked before. Any failure along the way (a missing extension, an engine that cannot be constructed, insufficient measurements, or any ordinary exception raised by a native engine that `auto` selected) quietly falls back to NumPy.
+<!-- --8<-- [end:auto-dispatch] -->
 
-`auto` does not guess a backend from PyTorch or TensorFlow tensors passed in; set `backend="torch"` or `backend="tensorflow"` explicitly when you need those frameworks. Explicitly setting `backend="numpy"` or `backend="native_cpu"` never triggers the measurement above. For the full support scope, see the [support matrix](docs/support-matrix.md).
+For details and cost bounds, see the [CPU auto-dispatch RFC](docs/cpu-auto-dispatch-rfc.md).
+
+<!-- --8<-- [start:auto-frameworks] -->
+`auto` does not guess a backend from PyTorch or TensorFlow tensors passed in; set `backend="torch"` or `backend="tensorflow"` explicitly when you need those frameworks. Explicitly setting `backend="numpy"` or `backend="native_cpu"` never triggers the measurement above.
+<!-- --8<-- [end:auto-frameworks] -->
+
+For the full support scope, see the [support matrix](docs/support-matrix.md).
 
 ## Installation
 
@@ -27,6 +44,7 @@ renewable-huber --version
 
 ### Optional Rust CPU core
 
+<!-- --8<-- [start:native-cpu-install] -->
 The native CPU core is distributed separately from the pure-Python base package. Once
 `renewable-huber-native-cpu` is installed or built locally, you can select it
 explicitly, or let CPU `auto` select it when its conservative measurement passes.
@@ -40,7 +58,9 @@ python -m pip install renewable-huber-native-cpu==0.6.1
 The 0.6.1 release wheels cover CPython 3.10–3.12, Windows x86-64, Linux
 x86-64/aarch64 and macOS x86-64/Apple Silicon; the next release's matrix also adds
 CPython 3.13. Regular users do not need to install Rust or compile the extension locally.
+<!-- --8<-- [end:native-cpu-install] -->
 
+<!-- --8<-- [start:native-cpu-usage] -->
 ```python
 from renewable_huber import RenewableHuberRegressor
 
@@ -59,6 +79,7 @@ estimator. After fitting, `native_model.n_jobs_` reports the actual number of wo
 If an outer layer already parallelises several models with
 joblib/`GridSearchCV(n_jobs=...)`, set the inner estimator to
 `n_jobs=1` so that nested thread pools do not compete for the CPU.
+<!-- --8<-- [end:native-cpu-usage] -->
 
 It supports `penalty="none"` and `penalty="l1"`, with C-contiguous NumPy
 `float32`/`float64` input. `backend="auto"` on the CPU may choose this engine, but only
@@ -67,6 +88,7 @@ still set `backend="native_cpu"` explicitly. For build, correctness and benchmar
 [Native-core P1](docs/native-core-p1.md); for the dispatch rules see the
 [CPU auto-dispatch RFC](docs/cpu-auto-dispatch-rfc.md).
 
+<!-- --8<-- [start:extras] -->
 Install the extra that matches your use case:
 
 | Use case | Install command |
@@ -76,6 +98,7 @@ Install the extra that matches your use case:
 | CuPy / CUDA 12 | `python -m pip install "renewable-huber[gpu-cupy]"` |
 | PyTorch | `python -m pip install "renewable-huber[gpu-torch]"` |
 | TensorFlow | `python -m pip install "renewable-huber[gpu-tensorflow]"` |
+<!-- --8<-- [end:extras] -->
 
 The GPU extras install only the corresponding framework; they do not install the NVIDIA driver or
 the CUDA runtime for you. First check compatibility between the framework, operating system,
@@ -89,6 +112,7 @@ python -m pip install -e ".[dev]"
 
 ## Quick start
 
+<!-- --8<-- [start:quickstart] -->
 ```python
 import numpy as np
 from renewable_huber import RenewableHuberRegressor
@@ -105,7 +129,9 @@ model.save("checkpoints/model.npz")
 restored = RenewableHuberRegressor.load("checkpoints/model.npz")
 assert np.allclose(prediction, restored.predict(X_test))
 ```
+<!-- --8<-- [end:quickstart] -->
 
+<!-- --8<-- [start:cupy] -->
 To run on a GPU, install the CUDA 12 CuPy extra and keep batches and state on CUDA:
 
 ```python
@@ -115,7 +141,9 @@ gpu_model = RenewableHuberRegressor(backend="cupy", device="cuda", dtype="float3
 gpu_model.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
 gpu_prediction = gpu_model.predict(cp.asarray(X_test))  # cupy.ndarray, not copied back to the CPU
 ```
+<!-- --8<-- [end:cupy] -->
 
+<!-- --8<-- [start:native-cuda-install] -->
 The CUDA 12 plugin wheel can be installed directly. The released 0.6.1 provides Windows x86-64,
 CPython 3.10–3.12; from the next release onwards it also provides Linux x86-64
 (`manylinux_2_28`) and covers CPython 3.13:
@@ -132,7 +160,9 @@ from NVIDIA's official `nvidia-*-cu12` wheels, and that set is loaded first at i
 only when the set is incomplete does it fall back to the system toolkit (`CUDA_PATH` on Windows,
 the default loader path on Linux). The released 0.6.1 still needs a CUDA 12 runtime that can be
 found through `CUDA_PATH`. Both need a compatible NVIDIA driver.
+<!-- --8<-- [end:native-cuda-install] -->
 
+<!-- --8<-- [start:native-cuda-usage] -->
 With the separate native CUDA extension installed, you can explicitly select the Rust/CUDA
 whole-batch engine, which consumes CuPy, PyTorch CUDA or TensorFlow eager GPU batches directly
 through DLPack with no host staging at any point:
@@ -168,6 +198,9 @@ performs the necessary producer synchronization, but still does not copy storage
 place on its own stream (appending the intercept column on the device when needed), only the
 `n_rows` predictions come back to the host, and the return type remains `numpy.ndarray`.
 
+<!-- --8<-- [end:native-cuda-usage] -->
+
+<!-- --8<-- [start:torch-tensorflow] -->
 PyTorch can use native `torch.Tensor` objects on the CPU or on an explicitly specified CUDA device:
 
 ```python
@@ -194,7 +227,9 @@ tensorflow_model.partial_fit(
 )
 tensorflow_prediction = tensorflow_model.predict(tf.convert_to_tensor(X_test))  # tf.Tensor
 ```
+<!-- --8<-- [end:torch-tensorflow] -->
 
+<!-- --8<-- [start:inputs] -->
 The scikit-learn adapter works directly with Pipeline, clone and GridSearchCV:
 
 ```python
@@ -215,7 +250,9 @@ weighted_r2 = model.score(X_test, y_test, sample_weight=test_weights)
 ```
 
 Weights have frequency-weight semantics: an integer weight is equivalent to repeating the observation, and an all-zero batch is rejected. A SciPy sparse matrix is never densified behind your back; assess the memory cost and call `X.toarray()` explicitly.
+<!-- --8<-- [end:inputs] -->
 
+<!-- --8<-- [start:checkpoint-migration] -->
 A checkpoint restores its original backend by default, and can also be migrated explicitly to the CPU or to another dtype:
 
 ```python
@@ -226,10 +263,13 @@ cpu_model = RenewableHuberRegressor.load(
     dtype="float64",
 )
 ```
+<!-- --8<-- [end:checkpoint-migration] -->
 
+<!-- --8<-- [start:streaming-notes] -->
 `fit(X, y)` resets the model and then processes a single batch; a genuine streaming workflow should call `partial_fit(X_batch, y_batch)` repeatedly.
 
 PyTorch input is `detach`ed first, and this package is not an autograd layer; the TensorFlow backend supports eager execution only and cannot be placed directly inside a `tf.function`. Streaming updates use the previous batch's coefficients and information matrix, so the way batches are split and the order of the data are part of the computation; results are not guaranteed to be bit-identical to a whole-data `fit` or to a different permutation.
+<!-- --8<-- [end:streaming-notes] -->
 
 ## Project layout
 
