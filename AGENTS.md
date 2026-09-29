@@ -125,6 +125,17 @@ report; these are the ones worth memorising.
   `abi_version`/`python_api_version` from the fingerprint and records it in
   `gate.json`; `check_performance_regression.py` must keep rejecting an ABI
   change against a stored baseline. Guarded by `NativeVersionChangeGateTests`.
+- **A frozen-plan A/B measures the variant's code, never the harness's.**
+  `run_interleaved_benchmark.py --freeze-sample-repetitions` runs the
+  candidate's sweep against both checkouts through
+  `RENEWABLE_HUBER_BENCHMARK_SOURCE_ROOT`. Every sweep module that imports
+  `renewable_huber` must go through `shape_sweep/source_root.py`'s
+  `put_source_on_path()`; a bare `sys.path.insert` of the harness `src` would
+  shadow the baseline and the A/B would compare the candidate with itself,
+  passing every gate. The sweep refuses to run when `renewable_huber` resolves
+  outside the selected tree, and records `git_revision` (measured tree) and
+  `benchmark_harness_git_revision` separately. Guarded by
+  `tests/test_benchmark_sampling_plan.py::SourceRootTests`.
 - **`NativeCpuBackend` must keep inheriting NumPy's array handling and must
   not gain a `native_design_matrix`.** `backend="auto"` on CPU validates and
   prepares a batch on `NumPyBackend`, learns its shape, and only then may swap
@@ -290,7 +301,12 @@ The CUDA benchmark harness on this host drifts 2%–19% between runs of the *sam
 binary* (`wide float32` is worst). Five runs of A followed by five of B compares
 two thermal states, not two binaries. Use
 `scripts/benchmarks/run_interleaved_benchmark.py`, which alternates A/B and B/A
-and gates aligned paired ratios. **Do not draw conclusions below about ±10%.**
+and gates aligned paired ratios. Pass `--freeze-sample-repetitions`: each case's
+sample block is calibrated once and reused by every round of both variants, so
+a sample averages about `--minimum-sample-seconds` of work instead of one short
+call (the old `--max-sample-repetitions 1` workaround), which is what keeps
+relative MAD under the gate on a desktop that is in use.
+**Do not draw conclusions below about ±10%.**
 
 ## Corrections to the audit report
 

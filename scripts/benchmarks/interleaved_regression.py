@@ -92,7 +92,7 @@ def merge_round_records(
         if len(sample_repetitions) != 1:
             raise ValueError(
                 "sample repetition calibration changed between interleaved rounds; "
-                "lower --max-sample-repetitions or recapture"
+                "rerun with --freeze-sample-repetitions"
             )
         seconds = [float(value) for result in results for value in result["seconds"]]
         iterations = [float(value) for result in results for value in result["iterations"]]
@@ -151,6 +151,8 @@ def compare_interleaved_records(
         raise ValueError("baseline and candidate interleaved pair IDs differ")
     if baseline_capture.get("round_indexes") != candidate_capture.get("round_indexes"):
         raise ValueError("baseline and candidate round indexes differ")
+    if baseline_capture.get("sample_repetitions") != candidate_capture.get("sample_repetitions"):
+        raise ValueError("baseline and candidate used different sample repetition policies")
     baseline_order = baseline_capture.get("execution_order")
     candidate_order = candidate_capture.get("execution_order")
     if not isinstance(baseline_order, list) or not isinstance(candidate_order, list):
@@ -266,5 +268,7 @@ def report(
         "checked_cases": len(checks),
         "allow_native_version_change": bool(allow_native_version_change),
         "native_versions": native_version_evidence(checks, baseline, candidate),
+        # How sample blocks were sized; absent for records merged by hand.
+        "sample_repetitions": baseline.get("interleaved_capture", {}).get("sample_repetitions"),
         "checks": [{**asdict(check), "key": asdict(check.key)} for check in checks],
     }

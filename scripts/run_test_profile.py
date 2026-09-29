@@ -202,6 +202,7 @@ _LEAF_PROFILES: tuple[Profile, ...] = (
         modules=(
             "tests.test_benchmark_interleaved_regression",
             "tests.test_benchmark_performance_policy",
+            "tests.test_benchmark_sampling_plan",
         ),
         requirements=("numpy",),
     ),
