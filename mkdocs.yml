@@ -128,6 +128,7 @@ nav:
       - Architecture (中文): architecture.md
       - Release process (中文): release-process.md
       - Release checklist (中文): release-checklist.md
+      - GPU host runbook: gpu-host-runbook.md
       - Changelog: development/changelog.md
       - Design notes:
           - Overview: development/design-notes.md
