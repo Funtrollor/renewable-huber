@@ -100,7 +100,7 @@ throughput. See the [native performance policy](native-performance-policy.md)
 for fair comparison and promotion rules.
 
 The checked-in Windows/CPython 3.11 baseline at commit `4ea5ff7` is
-[`benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json`](../benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json).
+[`benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p1-windows-ryzen9900x-shape-sweep.json).
 The table reports `NumPy median / native median`; values above 1 mean the
 native engine is faster. It is a schema-v1 historical record, not a hard
 schema-v2 dispatch or regression baseline.
@@ -127,7 +127,7 @@ loop reuses the accepted candidate residual.
 ## Optimized schema-v2 baseline
 
 The current fixed-runner record is
-[`p3-windows-ryzen9900x-native-cpu-v2.json`](../benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json).
+[`p3-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json).
 It uses identical cold lifecycles for both engines, three warmups, nine
 measured samples, 0.25 seconds of fixed block work per sample, NumPy 2.4.6,
 and a 24-thread Rayon pool. It covers all four standard shapes, both dtypes,

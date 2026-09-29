@@ -85,11 +85,11 @@ estimator per repeat. They remain useful for investigation but cannot be used
 as a schema-v2 pass/fail baseline.
 
 The approved CPU schema-v2 baseline is
-[`p3-windows-ryzen9900x-native-cpu-v2.json`](../benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json).
+[`p3-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json).
 Its strict native/reference gate passes all 32 standard combinations across
 shape, penalty, dtype, and public operation using 0.25-second samples. The
 approved CUDA baseline is
-[`p3-windows-rtx5070ti-native-cuda-v2.json`](../benchmarks/baselines/p3-windows-rtx5070ti-native-cuda-v2.json).
+[`p3-windows-rtx5070ti-native-cuda-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-rtx5070ti-native-cuda-v2.json).
 It passes all 16 host-input and all 16 device-input CuPy comparisons using
 0.5-second samples. Both records use three warmups and nine measured samples;
 a result captured while another workload is active must not be promoted.

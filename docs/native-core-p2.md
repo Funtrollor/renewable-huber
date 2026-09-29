@@ -177,8 +177,8 @@ Capture native whole-update Nsight Systems and Nsight Compute reports:
 
 ## P2 measured baseline
 
-The committed [shape sweep](../benchmarks/baselines/p2-windows-rtx5070ti-shape-sweep.json)
-and [Nsight Systems summary](../benchmarks/baselines/p2-windows-rtx5070ti-nsys-summary.json)
+The committed [shape sweep](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p2-windows-rtx5070ti-shape-sweep.json)
+and [Nsight Systems summary](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p2-windows-rtx5070ti-nsys-summary.json)
 were captured on an RTX 5070 Ti with CUDA Runtime 12.9. For three steady-state
 `float32` repeats, native host input measured:
 
@@ -230,7 +230,7 @@ comparisons. Host speedup ranged from 1.04x to 1.96x (median 1.35x); DLPack
 device speedup ranged from 1.06x to 2.04x (median 1.53x). Maximum Native
 relative MAD was 3.62% for host input and 3.28% for device input, below the
 unchanged 10% ceiling. The fixed-runner record is
-[`p3-windows-rtx5070ti-native-cuda-v2.json`](../benchmarks/baselines/p3-windows-rtx5070ti-native-cuda-v2.json).
+[`p3-windows-rtx5070ti-native-cuda-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-rtx5070ti-native-cuda-v2.json).
 
 The original single-call capture rejected two cold latency pairs because
 Windows/WDDM relative MAD exceeded 10%. The runner now uses fixed block
