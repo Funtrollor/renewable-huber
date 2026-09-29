@@ -55,6 +55,9 @@ Run the checks relevant to the change before opening a pull request:
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m ruff check src tests scripts
 .venv/bin/python -m ruff format --check src tests scripts
+.venv/bin/python -m mypy                      # settings in [tool.mypy]
+.venv/bin/python -m coverage run scripts/run_test_profile.py core
+.venv/bin/python -m coverage report           # enforces fail_under
 .venv/bin/python scripts/native/validate_release_artifacts.py --source-only
 .venv/bin/python scripts/generate_native_golden.py --check
 .venv/bin/python -m build
@@ -68,6 +71,14 @@ g++ -std=c++17 -fsyntax-only -I native/cuda/include native/cuda/src/abi_contract
   cargo test --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets
 )
 ```
+
+`fail_under` in `[tool.coverage.report]` is the `core` profile's line+branch
+coverage in a clean `pip install ".[dev]"` environment (73.2% when set), rounded
+down, less one point; CI measures it the same way in the `quality` job. An
+installed native extension or optional framework tends to raise the local
+figure. The Rust property tests in `rh-core/tests/properties.rs` and
+`rh-cpu/src/proptests.rs` run a modest number of cases; set `PROPTEST_CASES`
+for a longer local soak (in `--release` if it includes the large-batch cases).
 
 `discover` remains supported and is the quickest local pass. It is tolerant by
 design: a suite whose dependency or device is missing reports success as a set

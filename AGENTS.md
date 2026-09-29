@@ -235,6 +235,9 @@ report; these are the ones worth memorising.
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python -m ruff check src tests scripts
 .venv/bin/python -m ruff format --check src tests scripts
+.venv/bin/python -m mypy                                    # [tool.mypy]
+.venv/bin/python -m coverage run scripts/run_test_profile.py core
+.venv/bin/python -m coverage report                         # fail_under
 
 # Named profiles. `discover` above is tolerant: a missing dependency or device
 # turns into skips and still reports success. A *required* profile probes its
@@ -255,6 +258,8 @@ cargo check  --locked --workspace --all-targets
 # NOT --workspace: PyO3 extension-module crates cannot link as standalone test
 # binaries on Linux (unresolved CPython symbols). ci.yml scopes it the same way.
 cargo test   --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets
+# Includes the proptest suites; PROPTEST_CASES=N (with --release) for a soak.
+# proptest stays on ~1.9: later releases need a newer Rust than the 1.83 MSRV.
 ```
 
 CUDA (needs `nvcc`; `export PATH=/usr/local/cuda/bin:$PATH`):
