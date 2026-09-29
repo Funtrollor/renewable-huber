@@ -47,7 +47,7 @@ def _run_round(
     return _load(output)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-python", required=True, type=Path)
     parser.add_argument("--baseline-repo", required=True, type=Path)
@@ -78,6 +78,21 @@ def main() -> int:
     parser.add_argument("--cpu-max-relative-mad", type=float, default=0.05)
     parser.add_argument("--gpu-max-relative-mad", type=float, default=0.10)
     parser.add_argument("--max-competitor-slowdown", type=float, default=1.0)
+    parser.add_argument(
+        "--allow-native-version-change",
+        action="store_true",
+        help=(
+            "Compare builds whose native extensions report a different abi_version or "
+            "python_api_version (an A/B across a native interface change). Only those two "
+            "fields are exempt: driver, runtime, GPU and every other fingerprint field must "
+            "still match. Recorded in gate.json with both sides' versions."
+        ),
+    )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
     if args.rounds < 3 or args.warmup < 0 or args.minimum_sample_seconds < 0:
         parser.error("rounds must be at least 3; warmup and sample duration must be non-negative")
@@ -162,12 +177,21 @@ def main() -> int:
         cpu_max_relative_mad=args.cpu_max_relative_mad,
         gpu_max_relative_mad=args.gpu_max_relative_mad,
         max_competitor_slowdown=args.max_competitor_slowdown,
+        allow_native_version_change=args.allow_native_version_change,
     )
-    gate = report(checks)
+    gate = report(
+        checks,
+        baseline=merged["baseline"],
+        candidate=merged["candidate"],
+        allow_native_version_change=args.allow_native_version_change,
+    )
     (output_dir / "gate.json").write_text(
         json.dumps(gate, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    print(f"allow_native_version_change={gate['allow_native_version_change']}")
+    for section, versions in gate["native_versions"].items():
+        print(f"{section}: baseline={versions['baseline']} candidate={versions['candidate']}")
     for check in checks:
         status = "PASS" if check.passed else "FAIL"
         paired_value = (
