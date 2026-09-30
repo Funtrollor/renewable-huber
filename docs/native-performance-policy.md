@@ -64,8 +64,9 @@ arrays through DLPack on its private stream and records
 when required, direct intercept expansion, and all solver work remain part of
 the timed operation. Device and host records are not interchangeable. Since
 C ABI 2 / Python API 4 the sweep also measures native CUDA with
-`penalty="l1"` instead of skipping it; see the L1 baseline below for the
-validation caveat.
+`penalty="l1"` instead of skipping it. `validate_record` accepts such a case only
+when the record's `native_cuda_abi` shows `abi_version` 2 or later or lists
+`l1` in `supported_penalties`; an ABI 1 record that claims L1 is rejected.
 
 ```powershell
 # Fair cold end-to-end stream comparison.
@@ -96,25 +97,29 @@ It passes all 16 host-input and all 16 device-input CuPy comparisons using
 0.5-second samples. Both records use three warmups and nine measured samples;
 a result captured while another workload is active must not be promoted.
 
-Native CUDA L1 has a fixed-host baseline of three standard-profile runs on the
-same RTX 5070 Ti host, captured at `4114918` with C ABI 2 / Python API 4:
-[run 1](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run1.json),
-[run 2](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run2.json) and
-[run 3](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run3.json).
-They use the shape sweep's default 0.1-second samples, three warmups and nine
-measured samples. In 46 of 48 same-transport comparisons native CUDA is below
-0.90x CuPy in all three runs, two show no measurable difference, and none is
-repeatably slower; the
+Two N5 fixed-host baselines were added for native CUDA at C ABI 2 / Python
+API 4 on the same RTX 5070 Ti host. No threshold changed for either. The
 [native penalty completion plan](native-penalty-completion-plan.md#n5-fixed-host-results)
-has the analysis. No threshold changes. One caveat: `_validate_timing_contract`
-in `scripts/benchmarks/performance_policy.py` still raises "native CUDA
-benchmark records may not claim L1 support" for any native CUDA case whose
-penalty is not `none`, so `validate_record` and
-`check_performance_regression.py` cannot load these records yet. A pending
-pull request makes that rule accept native CUDA L1 when the record's
-`native_cuda_abi` is 2 or later, or when its `supported_penalties` contains
-`l1`. The `penalty="none"` CUDA baseline above is unchanged, and the N5
-interleaved `none` A/B (`fca7b83` against `4114918`) is not yet accepted.
+has the analysis and every hash.
+
+- **`penalty="none"` interleaved A/B**, `fca7b83` against `10fc363`, captured
+  cold and steady with the frozen-plan protocol described below. Both gates
+  passed on all 16 native cases, and every difference is inside ±10%. The
+  records are
+  `p5-windows-rtx5070ti-native-cuda-none-ab-{cold,steady}-{baseline,candidate,gate,sample-repetitions-plan}.json`,
+  for example the
+  [cold gate report](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-none-ab-cold-gate.json).
+- **L1**: three standard-profile runs at `4114918`,
+  [run 1](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run1.json),
+  [run 2](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run2.json) and
+  [run 3](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run3.json).
+  They use the shape sweep's default 0.1-second samples, three warmups and
+  nine measured samples. In 46 of 48 same-transport comparisons native CUDA is
+  below 0.90x CuPy in all three runs; two show no measurable difference, and
+  none is repeatably slower.
+
+`validate_record` accepts all four A/B baseline and candidate records and all
+three L1 runs.
 
 ## Fixed-runner regression gate
 
@@ -134,18 +139,46 @@ python scripts/benchmarks/run_interleaved_benchmark.py `
   --candidate-python C:\bench\candidate\Scripts\python.exe `
   --candidate-repo . `
   --output-dir artifacts/interleaved `
-  --rounds 9 --profile smoke --backend all --penalty none --dtype both
+  --rounds 9 --profile smoke --backend all --penalty none --dtype both `
+  --freeze-sample-repetitions
 ```
 
 The runner writes every one-sample round, two merged schema-v2 records, and a
 machine-readable gate report. It requires the existing fixed-runner checks and
 also gates the median of the nine aligned `candidate / baseline` ratios.
 GPU capture is local-only: build isolated baseline and candidate CPU/CUDA
-extensions on the fixed Ryzen/RTX host and run this command there. The gate
-fails if calibration chooses different `sample_repetitions` for different
-rounds of one binary; use a conservative cap so short WDDM calls retain one
-fixed sampling contract. Record the tested commit and environment alongside
-the JSON report, but do not commit generated artifacts.
+extensions on the fixed Ryzen/RTX host and run this command there. Record the
+tested commit and environment alongside the JSON report. Do not commit round or
+calibration files; accepted fixed-host records go to `benchmarks/baselines/`
+as the [GPU host runbook](gpu-host-runbook.md) describes.
+
+Two options exist only in the interleaved runner:
+
+- `--freeze-sample-repetitions` calibrates every case once for both variants
+  before the first timed round. It writes `sample-repetitions-plan.json`
+  (each case gets the larger of the two calibrated block sizes, still capped
+  by `--max-sample-repetitions`) and applies that plan to every round of both
+  variants. Without it, each round sizes its own blocks, and
+  `merge_round_records` refuses to merge rounds whose `sample_repetitions`
+  differ. The only other way through was `--max-sample-repetitions 1`, which
+  on a desktop GPU in use pushed relative MAD past the gate. In this mode both
+  variants run the candidate's sweep harness against their own source tree
+  (`RENEWABLE_HUBER_BENCHMARK_SOURCE_ROOT`). Records keep `git_revision` (the
+  measured tree) apart from `benchmark_harness_git_revision`. `gate.json` and
+  each merged record's `interleaved_capture` state
+  `sample_repetitions: {policy, plan_sha256, harness}`; `policy` is
+  `frozen_plan` for this mode and `per_round_calibration` otherwise. The gate
+  refuses variants whose policies differ.
+- `--allow-native-version-change` permits an A/B across a native interface
+  change. It drops only `abi_version` and `python_api_version` from the
+  hardware and runtime fingerprint; driver and runtime versions, GPU, CuPy,
+  Python, CPU, BLAS and threading must still match.
+
+`gate.json` schema version 2 always records `allow_native_version_change` and,
+for each gated native family, both sides' `abi_version`/`python_api_version`
+and whether they `changed`. `check_performance_regression.py` has no
+native-version option and keeps rejecting an interface change against a
+stored baseline.
 
 For a diagnostic record that was not captured by the interleaved runner, the
 older non-paired checker remains available:
