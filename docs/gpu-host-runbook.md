@@ -10,7 +10,8 @@ RTX 5070 Ti, SM 12.0). Read [`AGENTS.md`](https://github.com/Funtrollor/renewabl
 
 The native CUDA engine is at C ABI 2 / Python API 4. Stage 1 below first ran
 on a GPU on 2026-09-29 at `4114918`, and every command passed. Stage 2 ran
-the same day. The results, including what is still open, are in
+the same day; its §3a A/B was accepted on a frozen-plan recapture at
+`10fc363` on 2026-09-30. The results, including what is still open, are in
 [N5 fixed-host results](native-penalty-completion-plan.md#n5-fixed-host-results).
 Wherever that run showed this page disagreeing with what the scripts
 actually require, the page now follows the scripts and says why.
@@ -126,12 +127,14 @@ Record the environment with the evidence:
 
 ## 3. Stage 2: N5 measurements
 
-Measurements need the GPU to themselves. Do not run tests, builds, or a second
-benchmark at the same time. Desktop programs that render on the GPU count as
-well: close wallpaper engines, overlays and other AI or GPU-accelerated apps
-before measuring, and record which GPU clients `nvidia-smi` still lists
-before each run. Drift of about 2–19% between runs of the same binary is
-normal on this class of host. Never claim a difference within about ±10%.
+Measurements need the GPU to themselves as far as work goes: do not run tests,
+builds, or a second benchmark at the same time. The maintainer uses this
+computer during measurements, so desktop programs that render on the GPU may
+keep running; closing them is not required. Instead, record which GPU clients
+`nvidia-smi --query-compute-apps=pid,process_name --format=csv` lists before
+and after each run, and keep that list with the evidence. Drift of about
+2–19% between runs of the same binary is normal on this class of host. Never
+claim a difference within about ±10%.
 
 ### 3a. `penalty="none"` must not have regressed
 
@@ -161,7 +164,7 @@ Pop-Location
   --candidate-python .\.venv\Scripts\python.exe --candidate-repo . `
   --output-dir artifacts/n5-none-ab --profile standard --backend gpu `
   --penalty none --dtype both --lifecycle cold --operation partial-fit --rounds 9 `
-  --max-sample-repetitions 1
+  --allow-native-version-change --freeze-sample-repetitions
 ```
 
 Why these arguments:
@@ -170,16 +173,41 @@ Why these arguments:
   `require_competitor_parity=True`, so every native case needs its matched
   CuPy case under the same transport. With `--backend native_cuda` there is
   none, and every check fails with "candidate lacks matched ... competitor
-  case". As a consequence the gate also enforces native/CuPy ≤ 1.0
+  case". A consequence is that the gate also enforces native/CuPy ≤ 1.0
   (`--max-competitor-slowdown`).
-- **`--max-sample-repetitions 1`.** Each round sizes its sample block from a
-  single calibration run. With the default cap of 64 that calibration picks
-  different `sample_repetitions` in different rounds, and after the last
-  round `merge_round_records` refuses to merge them ("sample repetition
-  calibration changed between interleaved rounds"), so no gate report is
-  written. In the N5 run, a cap of 1 was the only one that held a single
-  repetition count for every standard-profile case. The cost is that short
-  cases become single-operation samples with a higher relative MAD.
+- **`--allow-native-version-change`.** This option is required for an A/B
+  across a native ABI change such as this one (ABI 1 / API 3 against ABI 2 /
+  API 4). The gate's hardware and runtime fingerprint includes the native
+  `abi_version` and `python_api_version`, so without the option every native
+  case fails with `hardware or runtime fingerprint differs` whatever its
+  timings. The option drops exactly those two fields; driver, runtime, GPU,
+  CuPy, Python and every other fingerprint field must still match. It exists
+  only in the interleaved runner, and `gate.json` (schema version 2) records it
+  as `allow_native_version_change` together with both sides' versions under
+  `native_versions`. `check_performance_regression.py` has no such option and
+  still rejects an ABI change against a stored baseline.
+- **`--freeze-sample-repetitions`.** Before the first timed round, the runner
+  runs one calibration sweep for each variant. It writes a plan that gives
+  every case the larger of the two calibrated sample block sizes, which the
+  sweep's `--max-sample-repetitions` (default 64) still caps. Every round of
+  both variants then uses that plan, so a sample averages about
+  `--minimum-sample-seconds` of work and the block size cannot drift between
+  rounds. An older baseline checkout cannot read a plan, so in this mode both
+  variants run the **candidate's** sweep harness against their own source tree
+  (through `RENEWABLE_HUBER_BENCHMARK_SOURCE_ROOT`). The baseline records then
+  carry `git_revision` of the baseline tree and
+  `benchmark_harness_git_revision` of the candidate. The runner writes
+  `calibration/`, `sample-repetitions-plan.json`, `rounds/`, `baseline.json`,
+  `candidate.json` and `gate.json` into the output directory.
+
+History: without a frozen plan, each round sized its own sample blocks from
+its own warmup. On this host the sizes differed between rounds, and
+`merge_round_records` refused to merge them ("sample repetition calibration
+changed between interleaved rounds"), so no gate report was written. The
+first workaround, `--max-sample-repetitions 1`, merged, but it made every
+sample a single short GPU call. On a desktop in use that pushed relative MAD
+over 10% in three of the 32 N5 cases. Both attempts are recorded in the plan
+as superseded.
 
 The plan's acceptance criteria:
 
@@ -189,19 +217,22 @@ The plan's acceptance criteria:
 - relative MAD is at most 10%;
 - the candidate slowdown is at most 1.15x.
 
-These are the script's GPU defaults. Also repeat the run once with
-`--lifecycle steady`, giving it its own output directory, for example
-`--output-dir artifacts/n5-none-ab-steady`, so it does not overwrite the cold
-run's records.
+These are the script's GPU defaults; do not relax them. If a case misses the
+MAD limit, recapture, and raise `--rounds` or `--minimum-sample-seconds` if
+needed. Also repeat the run once with `--lifecycle steady`, giving it its own
+output directory, for example `--output-dir artifacts/n5-none-ab-steady`, so
+it does not overwrite the cold run's records.
 
-**Known limitation.** On `main`, an A/B across a native ABI change cannot
-produce `passed=true`. The gate's hardware and runtime fingerprint includes
-`native_cuda_abi.abi_version` and `python_api_version`, so every native case
-reports `hardware or runtime fingerprint differs` whatever its timings. The
-N5 run hit exactly this (ABI 1 / API 3 against ABI 2 / API 4). The maintainer
-has decided to add an interleaved-only `--allow-native-version-change` option
-in a separate pull request, followed by a recapture on a quiet GPU. That
-option is not on `main` yet; do not add it to the commands above until it is.
+Before accepting a run, check its `gate.json`:
+
+- `passed` is `true` and no check lists a reason;
+- `allow_native_version_change` is `true`, and `native_versions` shows the
+  expected change (here `native_cuda_abi` from ABI 1 / API 3 to ABI 2 /
+  API 4);
+- `sample_repetitions.policy` reads `frozen_plan`, with `harness` set to
+  `candidate`. A different policy means the plan was not used;
+- `sample_repetitions.plan_sha256` equals the SHA-256 of
+  `sample-repetitions-plan.json` in the same directory.
 
 ### 3b. L1: native CUDA against CuPy under the same transport
 
@@ -227,21 +258,30 @@ outside the plan's scope and needs its own RFC. See
 ### 3c. Record the evidence
 
 `artifacts/` is ignored, so copy the accepted records into
-`benchmarks/baselines/`. Follow the existing naming. The L1 baseline is the
-three runs, `p5-windows-rtx5070ti-native-cuda-l1-run1.json` through
-`-run3.json`; an accepted `none` A/B would follow the same pattern, for
-example `p5-windows-rtx5070ti-native-cuda-none-ab-*.json`. Record the SHA-256
-of every record in the plan, including records that stay on the host because
-they were not accepted. The shape sweep writes CRLF on Windows and
-`.gitattributes` stores LF, so the committed file's hash differs from the
-host copy's; record both.
+`benchmarks/baselines/`, following the existing naming:
 
-`validate_record` in `scripts/benchmarks/performance_policy.py` still rejects
-any native CUDA record whose penalty is not `none` ("native CUDA benchmark
-records may not claim L1 support"), so the committed L1 runs cannot yet be
-loaded by it or by `check_performance_regression.py`. A pending pull request
-changes that rule; until it merges, an L1 comparison has to read the JSON
-records directly, as the N5 analysis did.
+- L1 baseline: the three runs, `p5-windows-rtx5070ti-native-cuda-l1-run1.json`
+  through `-run3.json`.
+- Accepted `none` A/B: for each lifecycle (`cold`, `steady`), the output
+  directory's `baseline.json`, `candidate.json`, `gate.json` and
+  `sample-repetitions-plan.json`. Name them
+  `p5-windows-rtx5070ti-native-cuda-none-ab-<lifecycle>-baseline.json`,
+  `-candidate.json`, `-gate.json` and `-sample-repetitions-plan.json`. Keep
+  `calibration/` and `rounds/` on the host.
+
+Record the SHA-256 of every record in the plan, including records that stay on
+the host because they were not accepted. The shape sweep and the interleaved
+runner write their JSON with CRLF on Windows, and `.gitattributes` stores LF,
+so a committed record's hash differs from the host copy's; record both. The
+plan files are the exception: they are written as bytes with LF, so the
+committed file keeps its hash, and that hash must still equal
+`sample_repetitions.plan_sha256` in `gate.json`.
+
+`validate_record` in `scripts/benchmarks/performance_policy.py` accepts native
+CUDA L1 records whose recorded `native_cuda_abi` shows ABI 2 or later or lists
+`l1` in `supported_penalties` (it rejects ABI 1 records that claim L1). Run it
+on every committed baseline and candidate record before opening the pull
+request.
 
 Then update these together:
 
