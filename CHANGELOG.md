@@ -8,6 +8,13 @@ stabilised.
 
 ## [Unreleased]
 
+### Changed
+
+- The `Documentation` project URL of all three distributions points to the
+  MkDocs site at <https://funtrollor.github.io/renewable-huber/> instead of
+  the GitHub README and the raw native-core notes. PyPI shows it from the next
+  published release; 0.7.0's metadata keeps the old links.
+
 ## [0.7.0] - 2026-10-03
 
 This minor release breaks the native CUDA interface: C ABI 2 and Python API 4

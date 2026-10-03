@@ -36,7 +36,7 @@ classifiers = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/Funtrollor/renewable-huber/blob/main/docs/native-core-p2.md"
+Documentation = "https://funtrollor.github.io/renewable-huber/native-core-p2/"
 Issues = "https://github.com/Funtrollor/renewable-huber/issues"
 Source = "https://github.com/Funtrollor/renewable-huber"
 
