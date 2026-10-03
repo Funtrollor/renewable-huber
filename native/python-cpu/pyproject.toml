@@ -4,14 +4,14 @@ build-backend = "maturin"
 
 [project]
 name = "renewable-huber-native-cpu"
-version = "0.6.1"
+version = "0.7.0"
 description = "Optional Rust CPU engine for renewable-huber."
 requires-python = ">=3.10,<3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 authors = [{ name = "Renewable Huber contributors" }]
-dependencies = ["renewable-huber==0.6.1"]
+dependencies = ["renewable-huber==0.7.0"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Programming Language :: Python :: 3",
