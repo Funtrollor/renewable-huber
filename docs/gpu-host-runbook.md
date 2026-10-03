@@ -106,11 +106,35 @@ cmake --build build/shared
 & $py scripts/native/smoke_test_cuda_wheels.py --base-dir build/base-wheel --native-dir build/native-cuda-wheel
 ```
 
-Two skips are expected in both `core` and `cuda`, and only these two:
 `PyTorchDlpackIntegrationTests` and `TensorFlowDlpackIntegrationTests` in
-`tests/test_dlpack_adapters.py`. They need CUDA builds of PyTorch and
-TensorFlow, which the extras above do not install. A skip means those two
-DLPack paths were not exercised on the device, so say so with the evidence.
+`tests/test_dlpack_adapters.py` need CUDA builds of PyTorch and TensorFlow,
+which the extras above do not install:
+
+- **PyTorch must run on this host before a release.** Install a CUDA 12.9
+  build into the same venv, then rerun the `cuda` profile; the PyTorch test
+  must pass, not skip:
+
+  ```powershell
+  & $py -m pip install torch --index-url https://download.pytorch.org/whl/cu129
+  & $py -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_capability())"
+  & $py -c "from renewable_huber import _native_cuda; print(_native_cuda.version()['runtime_version'])"
+  & $py scripts/run_test_profile.py cuda --verbose
+  ```
+
+  PyTorch carries its own CUDA runtime: on Windows as DLLs inside
+  `torch\lib`, on Linux as `nvidia-*-cu12` dependencies, and a complete
+  `nvidia-*-cu12` set is what `renewable_huber._cuda_runtime` prefers over the
+  system toolkit. Match the PyTorch build to the toolkit (`cu129` for CUDA
+  12.9), check that the native extension still reports runtime 12090, and
+  record `torch.__version__`, `torch.version.cuda` and `pip list` with the
+  evidence.
+- **TensorFlow stays unverified on this host.** TensorFlow has not supported
+  the GPU on native Windows since 2.11, so its test skips here by design. Its
+  CUDA DLPack path needs a WSL2 or Linux GPU host, and the support matrix
+  says so until it runs there.
+
+Without PyTorch both tests skip, in `core` and in `cuda`; with it, only the
+TensorFlow test skips. Any other skip in a required profile is a failure.
 
 If anything fails, find the root cause in the CUDA/FFI code and fix it with a
 regression test. Never skip a test, loosen a tolerance to hide a numeric
@@ -218,8 +242,11 @@ The plan's acceptance criteria:
 - the candidate slowdown is at most 1.15x.
 
 These are the script's GPU defaults; do not relax them. If a case misses the
-MAD limit, recapture, and raise `--rounds` or `--minimum-sample-seconds` if
-needed. Also repeat the run once with `--lifecycle steady`, giving it its own
+MAD limit, recapture with a larger `--minimum-sample-seconds` (default 0.25):
+a longer sample averages out more desktop interference. A case whose plan
+entry already sits at `--max-sample-repetitions` (default 64) needs that cap
+raised as well, or the longer target has no effect on it. More `--rounds`
+does not lower MAD; it only estimates the same dispersion more precisely. Also repeat the run once with `--lifecycle steady`, giving it its own
 output directory, for example `--output-dir artifacts/n5-none-ab-steady`, so
 it does not overwrite the cold run's records.
 

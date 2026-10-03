@@ -2,8 +2,9 @@
 
 Every unsupported combination is written into ``skipped`` with an explicit
 reason. Silence is not an acceptable way to report that a case did not run:
-a consumer comparing two records must be able to see that native CUDA declined
-an L1 case rather than infer it from an absence.
+a consumer comparing two records must be able to see that, for example, a
+steady-state ``fit`` was declined (``fit`` resets the estimator) rather than
+infer it from an absence.
 """
 
 from __future__ import annotations
