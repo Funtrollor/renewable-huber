@@ -6,15 +6,17 @@
 | --- | --- | --- |
 | `renewable-huber` | 公開 Python API 與 NumPy backend | 否 |
 | `renewable-huber-native-cpu` | Rust／Rayon CPU extension | 否；從對應平台 wheel 安裝 |
-| `renewable-huber-native-cuda` | Rust/CUDA 12 extension | 否；目前發布 Windows x86-64 wheel |
+| `renewable-huber-native-cuda` | Rust/CUDA 12 extension | 否；發布 Windows x86-64 與 Linux x86-64（`manylinux_2_28`）wheels |
 
 三個 distribution 在同一次 release 使用相同版本。Native wheel 會以精確相依條件
 `renewable-huber==X.Y.Z` 鎖定 base package，避免 Python API、checkpoint 或 native ABI
 不相容的組合被 pip 解析在一起。`scripts/native/validate_release_artifacts.py` 會在 CI
 同時驗證來源 metadata 與最終 wheels。
 
-`v0.6.0` tag 曾用於未完成的發布流程，沒有成為正式 PyPI release。Tag 保持不可變；
-本次完整 native release 使用 `v0.6.1`，release notes 以 `v0.5.1` 為使用者升級基線。
+`v0.6.0` tag 曾用於未完成的發布流程，沒有成為正式 PyPI release。既有 tag 一律不可變，
+不移動、不重用。本次發布使用 `v0.7.0`；GitHub Release notes 從上一個正式 release
+`v0.6.1` 開始產生（`release.yml` 的 `--notes-start-tag`），每次發布都要把它改成上一個
+正式 release 的 tag。
 
 ## Wheel 支援範圍
 
@@ -70,18 +72,23 @@ macOS CPU wheels 使用 `macos-15-intel`（x86-64）與 `macos-15`（Apple Silic
    ```
 
 5. 在 GitHub 對 `main` 手動執行 `release.yml`。這是 build-only rehearsal：建置並
-   驗證完整 20 個 artifacts，但不建立 GitHub Release，也不發布到 PyPI/TestPyPI。
+   驗證完整 30 個 artifacts（base wheel 與 sdist、20 個 CPU wheels、8 個 CUDA
+   wheels），但不建立 GitHub Release，也不發布到 PyPI/TestPyPI。
 6. 從已通過一般 CI 與 build-only rehearsal 的**精確 `main` tip** 建立 `vX.Y.Z`
    annotated tag；若維護環境已有可信任簽章金鑰，則改用 signed tag。Release
    workflow 會拒絕版本不一致或不是目前 `main` tip 的 tag。
-7. Workflow 建置 base wheel/sdist、15 個 CPU wheels、3 個 CUDA wheels，並執行
+7. Workflow 建置 base wheel/sdist、20 個 CPU wheels（4 個 CPython × 5 個
+   OS/architecture targets）、8 個 CUDA wheels（4 個 CPython × Windows x86-64 與
+   Linux x86-64 `manylinux_2_28`），並執行
    Twine、metadata、artifact-set、CUDA SASS/PTX 實體檢查，以及無 GPU 的 clean
    install/import ABI capability smoke；GPU correctness 與效能不在 GitHub Actions
    執行，採用第 3 步的本機證據。
 8. 完整 artifact set 通過後才建立 GitHub Release。人工核准 PyPI 前，下載實際
    CUDA artifacts 至固定 GPU 主機，對 artifact hash 執行最後 smoke。
 9. 三個 PyPI publish jobs 分別等待對應 GitHub Environment 的人工核准，再透過
-   Trusted Publishing/OIDC 發布；不儲存長效 API token。
+   Trusted Publishing/OIDC 發布；不儲存長效 API token。Native wheels 精確依賴同版
+   base，因此 `pypi-native-cpu` 與 `pypi-native-cuda` 兩個 jobs 要等 `pypi`（base）
+   發布成功後才會開始等待核准。
 
 Release tag 範例：
 
@@ -118,14 +125,14 @@ publisher（或既有 project publisher）的 owner、repository、workflow 與 
 CPU 使用者：
 
 ```bash
-python -m pip install renewable-huber-native-cpu==0.6.1
+python -m pip install renewable-huber-native-cpu==0.7.0
 python -c "from renewable_huber import RenewableHuberRegressor; print(RenewableHuberRegressor(backend='native_cpu', n_jobs=-1))"
 ```
 
 CUDA 12 使用者：
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.6.1
+python -m pip install renewable-huber-native-cuda==0.7.0
 python -c "from renewable_huber import _native_cuda; print(_native_cuda.version()); print(_native_cuda.is_available())"
 ```
 

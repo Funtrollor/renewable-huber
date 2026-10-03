@@ -336,7 +336,11 @@ this is a minor release. Follow the "Release gate" in
 - Move `Unreleased` in `CHANGELOG.md` to `0.7.0`.
 - Update the version and date in the README, `CITATION.cff`, the API, the
   architecture doc, the support matrix, and `SECURITY.md`.
-- Replace the checklist's hard-coded `0.6.1` item.
+- Point the checklist's release-version item at the new version (`0.7.0`).
+  Existing tags are never moved or reused.
+- In `release-process.md`, update the current-release paragraph, the
+  artifact counts and the post-install commands, and point `--notes-start-tag`
+  in `release.yml` at the previous published release.
 
 Run `scripts/native/validate_release_artifacts.py --source-only` before
 opening the pull request.
