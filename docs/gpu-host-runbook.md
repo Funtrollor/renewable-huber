@@ -11,7 +11,9 @@ RTX 5070 Ti, SM 12.0). Read [`AGENTS.md`](https://github.com/Funtrollor/renewabl
 The native CUDA engine is at C ABI 2 / Python API 4. Stage 1 below first ran
 on a GPU on 2026-09-29 at `4114918`, and every command passed. Stage 2 ran
 the same day; its §3a A/B was accepted on a frozen-plan recapture at
-`10fc363` on 2026-09-30. The results, including what is still open, are in
+`10fc363` on 2026-09-30. The PyTorch CUDA DLPack test, which stage 1 skipped,
+passed on the device on 2026-10-03 at `33cb075`. The results, including what
+is still open, are in
 [N5 fixed-host results](native-penalty-completion-plan.md#n5-fixed-host-results).
 Wherever that run showed this page disagreeing with what the scripts
 actually require, the page now follows the scripts and says why.
@@ -127,7 +129,10 @@ which the extras above do not install:
   system toolkit. Match the PyTorch build to the toolkit (`cu129` for CUDA
   12.9), check that the native extension still reports runtime 12090, and
   record `torch.__version__`, `torch.version.cuda` and `pip list` with the
-  evidence.
+  evidence. For 0.7.0 this ran on 2026-10-03 at `33cb075` with `torch`
+  2.9.0+cu129: the PyTorch test passed, the extension still reported runtime
+  12090, and only the TensorFlow test skipped. The evidence is in
+  [PyTorch CUDA DLPack on the device](native-penalty-completion-plan.md#pytorch-cuda-dlpack-on-the-device).
 - **TensorFlow stays unverified on this host.** TensorFlow has not supported
   the GPU on native Windows since 2.11, so its test skips here by design. Its
   CUDA DLPack path needs a WSL2 or Linux GPU host, and the support matrix

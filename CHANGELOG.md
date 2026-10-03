@@ -45,6 +45,12 @@ stabilised.
   17-symbol export check and the clean CUDA wheel smoke all passed. The
   PyTorch and TensorFlow CUDA DLPack integration tests skipped because neither
   framework was installed.
+- On-device verification of PyTorch CUDA DLPack input to native CUDA, on the
+  same host at `33cb075` with `torch` 2.9.0+cu129: `PyTorchDlpackIntegrationTests`
+  passed in the `cuda` profile, and the native extension still reported
+  CUDA runtime 12090. TensorFlow eager CUDA DLPack remains unverified on a
+  device, because TensorFlow has no GPU support on native Windows since 2.11;
+  the support matrix says so.
 - Fixed-host native CUDA L1 baselines
   (`benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run{1,2,3}.json`):
   three standard-profile runs against CuPy under the same input transport.
