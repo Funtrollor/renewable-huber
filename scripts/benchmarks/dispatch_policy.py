@@ -109,8 +109,10 @@ def _recommend_host_input(
     native_candidates: list[tuple[str, float]] = []
     if capabilities.native_cpu and "rust_native_cpu" in timings:
         native_candidates.append(("native_cpu", timings["rust_native_cpu"]))
-    # P2 only accepts host NumPy input and does not implement L1.  Do not let
-    # a stale or synthetic calibration bypass either product restriction.
+    # Native CUDA implements L1 since ABI 2, but it stays explicit opt-in for
+    # L1 (docs/native-penalty-completion-plan.md, "L1 decision"): float32 L1
+    # trajectories differ between engines, so silently switching would change
+    # the diagnostics users see. Do not let a calibration recommend it.
     if (
         capabilities.native_cuda
         and workload.penalty == "none"

@@ -14,6 +14,9 @@
 - [ ] 固定硬體上的 CPU 與 CUDA performance gates 無效能或正確性回歸。
 - [ ] 本機固定 CUDA 12 主機的 GPU correctness、C ABI smoke、shape sweep 與
       interleaved performance gate 已通過，並記錄 commit、環境與 JSON 證據。
+- [ ] 固定主機已安裝 CUDA 版 PyTorch，`cuda` profile 的
+      `PyTorchDlpackIntegrationTests` 實際通過而非 skip；TensorFlow CUDA DLPack
+      若仍未在 WSL2／Linux GPU 主機驗證，支援矩陣須維持「尚未在裝置上驗證」。
 - [ ] `python scripts/native/validate_release_artifacts.py --source-only` 通過。
 - [ ] `release.yml` 的手動 build-only run 在精確 release candidate SHA 成功；不建立
       GitHub Release，也不寫入任何 package index。

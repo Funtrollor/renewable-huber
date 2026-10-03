@@ -541,17 +541,17 @@ Resolved since the first run:
 
 Still open:
 
-- **PyTorch and TensorFlow CUDA DLPack.** Their integration tests skipped in
-  stage 1 because neither framework was installed, so neither path has run on
-  a device yet.
-- **The offline dispatch advisor excludes native CUDA from L1.**
-  `scripts/benchmarks/dispatch_policy.py` only considers native CUDA when
-  `penalty == "none"`, for host and device input alike. Its comment still
-  says the engine "does not implement L1". This is consistent with the
-  opt-in decision above, and runtime selection is unaffected because
-  `backend="auto"` never picks native CUDA. But the stated reason is out of
-  date. Left unchanged here.
-- **A stale docstring.** `scripts/benchmarks/shape_sweep/cli.py` still says
-  a consumer must be able to see "that native CUDA declined an L1 case". Since
-  ABI 2 the sweep measures native CUDA L1 and emits no such skip. Left
-  unchanged here.
+- **PyTorch CUDA DLPack** must pass on the fixed host before 0.7.0: install a
+  CUDA 12.9 PyTorch build into the venv and rerun the `cuda` profile
+  (`docs/gpu-host-runbook.md`, stage 1). Stage 1 skipped it because PyTorch
+  was not installed.
+- **TensorFlow CUDA DLPack** is released as unverified on a device. TensorFlow
+  has no GPU support on native Windows since 2.11, so the Windows host cannot
+  run it; it needs a WSL2 or Linux GPU host. The support matrix says so.
+
+Resolved after the evidence PR: the offline dispatch advisor
+(`scripts/benchmarks/dispatch_policy.py`) still recommends native CUDA only
+for `penalty == "none"`, which matches the opt-in decision above, and its
+comment now gives that reason instead of the pre-ABI 2 "does not implement
+L1"; the shape-sweep CLI docstring no longer names a native CUDA L1 skip that
+ABI 2 removed.
