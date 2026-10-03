@@ -102,3 +102,70 @@ P4 adds opt-in CUDA Graph replay and float32 TF32 tuning while preserving
 strict execution by default. See [P4 native CUDA tuning](native-core-p4.md) for
 the public flags, error contract, fallback rules, benchmark, and Nsight
 reproduction commands.
+
+## N5 fixed-host results for native CUDA
+
+All N5 records were captured on the Windows host with an RTX 5070 Ti
+(SM 12.0), driver 616.64, CUDA 12.9, CPython 3.11.0 and CuPy 14.2.0. The
+[native penalty completion plan](native-penalty-completion-plan.md#n5-fixed-host-results)
+has the full results, the environment and every record's SHA-256.
+
+### `penalty="none"`: no regression across the ABI 2 change
+
+The [GPU host runbook](gpu-host-runbook.md) §3a interleaved A/B compared
+`fca7b83` (C ABI 1 / Python API 3) with `10fc363` (ABI 2 / API 4) on
+2026-09-30. It used `--backend gpu --rounds 9 --allow-native-version-change
+--freeze-sample-repetitions`, once cold and once steady. Both gates passed:
+
+- all 16 native cases in each lifecycle met every criterion;
+- relative MAD was at most 8.3% (cold) and 8.5% (steady);
+- median iterations were identical;
+- paired candidate/baseline medians were 0.937–1.056 (cold) and 0.925–1.038
+  (steady);
+- native/CuPy was at most 0.862.
+
+Every difference is inside ±10%, so there is no measurable difference. The
+accepted records are committed as
+`benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-none-ab-{cold,steady}-{baseline,candidate,gate,sample-repetitions-plan}.json`;
+for example, the
+[cold gate report](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-none-ab-cold-gate.json)
+and the
+[steady gate report](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-none-ab-steady-gate.json).
+
+### L1: native CUDA against CuPy
+
+The runbook §3b command ran three times on 2026-09-29 at `4114918`: standard
+profile, `--backend gpu --penalty l1 --dtype both --lifecycle both
+--operation both --warmup 3 --repeats 9`.
+
+Each native CUDA case is compared with the CuPy case of the same shape,
+dtype, lifecycle, operation and input transport, using the ratio of the
+median times, native over CuPy:
+
+- 46 of the 48 comparisons are below 0.90 in all three runs, a repeatable
+  native advantage. The per-run ratios span 0.23–0.89, with a median of 0.34.
+- 2 comparisons show no measurable difference: host-input streaming cold
+  `fit`, float32 (1.055–1.071) and float64 (0.902–0.978).
+- None is repeatably slower.
+
+Every case converged, and the largest native relative MAD was 9.4%. The
+float32 `partial_fit` iteration counts differ between the engines (the
+float64 counts match). The plan shows this is float32 rounding near
+`tol=1e-6`, not a defect.
+
+The three runs are the fixed-host L1 baseline:
+[run 1](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run1.json),
+[run 2](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run2.json),
+[run 3](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run3.json).
+`validate_record` accepts them, because they record native CUDA ABI 2 with
+`l1` in `supported_penalties`.
+
+### Selection
+
+Native CUDA, L1 included, remains explicit opt-in; `backend="auto"` never
+selects it. The plan gives the reasoning.
+
+Like the P3 baselines, accepted fixed-host records are committed under
+`benchmarks/baselines/`. Everything else, including the A/B round and
+calibration files and the superseded attempts, stays outside Git as described
+above. See also the [native performance policy](native-performance-policy.md).

@@ -38,6 +38,39 @@ stabilised.
   the required `core` profile (`fail_under = 72`) in the CI quality job, and
   `proptest` property tests for the `rh-core` validation contracts and the
   `rh-cpu` numeric kernels.
+- First on-device verification of the native CUDA C ABI 2 / Python API 4
+  engine, on the fixed Windows GPU host (RTX 5070 Ti, SM 12.0, CUDA 12.9,
+  driver 616.64, Python 3.11) at `4114918`. The `core`, `native-cpu`, `cuda`
+  and `performance` profiles, both golden corpora, the C ABI smoke test, the
+  17-symbol export check and the clean CUDA wheel smoke all passed. The
+  PyTorch and TensorFlow CUDA DLPack integration tests skipped because neither
+  framework was installed.
+- Fixed-host native CUDA L1 baselines
+  (`benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run{1,2,3}.json`):
+  three standard-profile runs against CuPy under the same input transport.
+  Native CUDA L1 stays explicit opt-in; `backend="auto"` never selects native
+  CUDA. The results and the reasoning are in
+  `docs/native-penalty-completion-plan.md`.
+- An accepted interleaved `penalty="none"` A/B of native CUDA across the
+  ABI 2 change: `fca7b83` (ABI 1 / API 3) against `10fc363` (ABI 2 / API 4)
+  on the same host, cold and steady. Both gates passed on all 16 native cases,
+  and every difference was inside ±10%, which is no measurable difference.
+  The records, gate reports and sample-repetition plans are
+  `benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-none-ab-{cold,steady}-*.json`.
+- `run_interleaved_benchmark.py --allow-native-version-change`, for an A/B
+  between builds whose native extensions report a different `abi_version` or
+  `python_api_version`. Only those two fields leave the hardware and runtime
+  fingerprint. `check_performance_regression.py` has no such option and still
+  rejects an interface change.
+- `run_interleaved_benchmark.py --freeze-sample-repetitions`. It calibrates
+  every case once for both variants, writes `sample-repetitions-plan.json`
+  (each case gets the larger block size, still capped by
+  `--max-sample-repetitions`), and uses that plan in every round. Rounds
+  therefore merge without the `--max-sample-repetitions 1` workaround. In this
+  mode both variants run the candidate's sweep harness against their own
+  source tree through `RENEWABLE_HUBER_BENCHMARK_SOURCE_ROOT`, and records keep
+  `git_revision` apart from `benchmark_harness_git_revision`. The shape sweep
+  gains the matching `--sample-repetitions-plan` option.
 
 ### Changed
 
@@ -50,6 +83,29 @@ stabilised.
   `rh_cuda_engine_predict`/`RhCudaPrediction`; the library still exports
   exactly 17 `rh_cuda_*` symbols.
 - The native CUDA shape sweep and profiler accept `penalty="l1"`.
+- The interleaved gate report (`gate.json`) is at schema version 2. It always
+  records `allow_native_version_change` and, for each gated native family,
+  both sides' `abi_version`/`python_api_version` and whether they changed. It
+  also records how sample blocks were sized, as
+  `sample_repetitions: {policy, plan_sha256, harness}`, where `policy` is
+  `frozen_plan` or `per_round_calibration`. Each merged record's
+  `interleaved_capture` carries the same field.
+- `validate_record` accepts native CUDA `penalty="l1"` benchmark records when
+  the recorded `native_cuda_abi` shows `abi_version` 2 or later or lists `l1`
+  in `supported_penalties`. ABI 1 records that claim L1 are still rejected.
+- The GPU-host runbook (`docs/gpu-host-runbook.md`) now matches what the
+  scripts require:
+  - the interleaved `penalty="none"` A/B runs with `--backend gpu
+    --allow-native-version-change --freeze-sample-repetitions`, gives the
+    steady run a separate output directory, and is accepted only when
+    `gate.json` shows `sample_repetitions.policy` `frozen_plan`;
+  - both venvs use the same Python 3.10–3.12 version and pinned
+    NumPy/SciPy/CuPy;
+  - the native build scripts get absolute `-Python` paths, and the developer
+    shell is located with `vswhere` and started with `-SkipAutomaticLocation`;
+  - the two expected DLPack integration skips are documented;
+  - GPU clients are recorded before and after each run instead of being
+    closed.
 
 ## [0.6.1] - 2026-08-09
 
