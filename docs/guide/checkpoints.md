@@ -43,8 +43,7 @@ incompatible CUDA setting forward.
   column names. Version 1 checkpoints still load, and treat every row as unit
   weight.
 - L1 checkpoints resume across the NumPy, Rust CPU and native CUDA engines
-  (native CUDA L1 is in the source tree; the released 0.6.1 CUDA engine
-  supports only `penalty="none"`).
+  (native CUDA runs L1 from 0.7.0, C ABI 2 / Python API 4).
 - Continuing with the same backend, dtype and batch order is the reproducible
   workflow. A different backend or dtype agrees within numerical tolerance,
   not bit for bit.

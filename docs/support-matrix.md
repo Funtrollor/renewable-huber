@@ -1,4 +1,4 @@
-# v0.6.1 支援矩陣
+# v0.7.0 支援矩陣
 
 本頁描述目前程式碼的公開契約，不代表所有框架或硬體組合都經過同等程度的 CI 驗證。所有 backend 僅接受 `float32` 或 `float64`；套件不會暗中啟用 float16、bfloat16 或 Tensor Core reduced precision。
 
@@ -7,9 +7,9 @@
 | Backend | CPU | GPU | dtype | 作業系統範圍 | 安裝 extra | `predict` 回傳型別 | 主要限制 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `numpy` | 是 | 否 | `float32`, `float64` | Linux、Windows、macOS；三者均進行基線 CI | 無（基礎安裝） | `numpy.ndarray` | `device="cuda"` 會直接報錯；效能取決於 NumPy 連結的 BLAS/LAPACK。 |
-| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.13（0.6.1：3.10–3.12）；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.6.1` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。可由 `auto` 在 CPU 上選取，但僅在批次夠大且本機執行期量測支持時；要固定使用請明確指定。安裝 wheel 不需本機 Rust toolchain。 |
+| `native_cpu` | 是 | 否 | `float32`, `float64` | CPython 3.10–3.13；Windows x86-64、manylinux2014 x86-64/aarch64、macOS x86-64/arm64 wheels | `renewable-huber-native-cpu==0.7.0` | `numpy.ndarray` | 接受 dense NumPy；adapter 最多建立一次 contiguous copy。可由 `auto` 在 CPU 上選取，但僅在批次夠大且本機執行期量測支持時；要固定使用請明確指定。安裝 wheel 不需本機 Rust toolchain。 |
 | `cupy` | 否 | NVIDIA CUDA | `float32`, `float64` | 具 CUDA 12 相容 CuPy wheel 的 Linux／Windows；GPU correctness 與效能在固定本機主機驗證 | `gpu-cupy` | `cupy.ndarray` | 需要可用 NVIDIA GPU、driver 與 CuPy；無 macOS CUDA；首次 NVRTC/cuBLAS 載入有 warm-up 成本。 |
-| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.13 × Windows x86-64 與 Linux x86-64（`manylinux_2_28`）CUDA 12 wheels（0.6.1：Windows、3.10–3.12）；本機固定 GPU 驗證 | `renewable-huber-native-cuda` | `numpy.ndarray` | C ABI 2／Python API 4。Opt-in whole-batch engine；`penalty="none"` 與 `penalty="l1"`（0.6.1 只有 `none`），兩者已於 `4114918` 在固定主機裝置上驗證（Windows、RTX 5070 Ti SM 12.0、CUDA 12.9、driver 616.64、Python 3.11）。L1 同樣須明確指定，`backend="auto"` 不會選取 native CUDA。更新與 `predict` 都可接收 host NumPy，或同裝置、完全相同 dtype、C-contiguous 的 CuPy／PyTorch／TensorFlow eager DLPack input，就地讀取、絕不經 host staging；`predict` 一律回傳 NumPy。TensorFlow eager 的 CUDA DLPack 路徑尚未在裝置上驗證：原生 Windows 的 TensorFlow 自 2.11 起不支援 GPU，需待 WSL2／Linux GPU 主機驗證。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不打包 NVIDIA 函式庫，改以 `nvidia-*-cu12` 相依套件安裝 CUDA 12 runtime closure（0.6.1 仍需 `CUDA_PATH`）；需要相容 driver，不需本機 nvcc。 |
+| `native_cuda` | 否 | NVIDIA CUDA | `float32`, `float64` | CPython 3.10–3.13 × Windows x86-64 與 Linux x86-64（`manylinux_2_28`）CUDA 12 wheels；本機固定 GPU 驗證 | `renewable-huber-native-cuda==0.7.0` | `numpy.ndarray` | C ABI 2／Python API 4。Opt-in whole-batch engine；`penalty="none"` 與 `penalty="l1"`，兩者已於 `4114918` 在固定主機裝置上驗證（Windows、RTX 5070 Ti SM 12.0、CUDA 12.9、driver 616.64、Python 3.11）。L1 同樣須明確指定，`backend="auto"` 不會選取 native CUDA。更新與 `predict` 都可接收 host NumPy，或同裝置、完全相同 dtype、C-contiguous 的 CuPy／PyTorch／TensorFlow eager DLPack input，就地讀取、絕不經 host staging；`predict` 一律回傳 NumPy。PyTorch CUDA tensor 經 DLPack 進入 native CUDA 的更新路徑已於 2026-10-03 在 `33cb075` 以 PyTorch 2.9.0+cu129 於同一固定主機驗證（`PyTorchDlpackIntegrationTests` 實際通過，native runtime 仍為 12090）。TensorFlow eager 的 CUDA DLPack 路徑尚未在裝置上驗證：原生 Windows 的 TensorFlow 自 2.11 起不支援 GPU，需待 WSL2／Linux GPU 主機驗證。`cuda_graphs` 可安全回退；`cuda_fast_math` 僅限 float32/TF32 且預設關閉。Wheel 不打包 NVIDIA 函式庫，改以 `nvidia-*-cu12` 相依套件安裝 CUDA 12 runtime closure，不需設定 `CUDA_PATH`；需要相容 driver，不需本機 nvcc。 |
 | `torch` | 是 | NVIDIA CUDA | `float32`, `float64` | CPU：Linux／Windows／macOS；CUDA：依 PyTorch wheel 支援的 Linux／Windows | `gpu-torch` | `torch.Tensor` | `device="auto"` 使用 CPU；輸入會 detach、移至指定裝置並轉 dtype，不提供 autograd layer，也不支援 MPS device。 |
 | `tensorflow` | 是 | TensorFlow 可見的 CUDA GPU | `float32`, `float64` | 依 TensorFlow wheel；CPU backend CI 在 Linux，CUDA 通常為 Linux／WSL2 環境 | `gpu-tensorflow` | `tensorflow.Tensor` | 僅 eager execution，不可直接在 `tf.function` 內使用；`device="auto"` 使用 CPU；不支援 Metal/MPS device。 |
 
@@ -29,7 +29,7 @@ TF32，不適用 float64。fitted estimator 以 `cuda_features_` 回報實際狀
 Native CUDA wheel 不封裝 NVIDIA runtime。執行時需要 cudart、cuBLAS／cuBLASLt、
 cuSOLVER、cuSPARSE 與 nvJitLink（Windows：`cudart64_12.dll`、`cublas64_12.dll`、
 `cublasLt64_12.dll`、`cusolver64_11.dll`、`cusparse64_12.dll`、
-`nvJitLink_120_0.dll`；Linux：對應的 `.so.12`／`libcusolver.so.11`）。下一版起這一組
+`nvJitLink_120_0.dll`；Linux：對應的 `.so.12`／`libcusolver.so.11`）。這一組
 由 wheel 的 `nvidia-*-cu12` 相依套件提供，匯入時優先完整載入；只有該組不完整時，
 才退回 Windows 的 `CUDA_PATH`／`CUDA_PATH_V*`／`nvcc` 所在 toolkit，或 Linux 的
 預設 loader 路徑，不會混用兩個來源。
@@ -96,13 +96,13 @@ checkpoint 只保存 `backend="auto"`，不保存任何量測結果，因此還�
 
 ## 輸入整合
 
-| 輸入／整合 | v0.6.1 狀態 | 限制 |
+| 輸入／整合 | v0.7.0 狀態 | 限制 |
 | --- | --- | --- |
 | NumPy array／一般 array-like | 支援 | `X` 必須為非空二維有限數值，`y` 會 reshape 成一維且長度必須相同。 |
 | pandas DataFrame／Series | 支援 `.to_numpy()` 轉換；可安裝 `pandas` extra | 若 DataFrame 欄名全為字串，第一次訓練會記錄欄名，後續 DataFrame 批次與預測會驗證名稱及順序。未命名 array 仍按位置處理。GPU backend 會先經 NumPy，再複製到裝置。 |
 | PyTorch tensor | 明確選擇 `backend="torch"` 時原生支援 | 輸入會 detach；不保留梯度圖。 |
 | TensorFlow tensor | 明確選擇 `backend="tensorflow"` 時原生支援 | 只支援 eager tensor。 |
-| CuPy／PyTorch／TensorFlow CUDA tensor | 明確選擇 `backend="native_cuda"` 時可零拷貝更新 | 三個 batch input 必須全在同一 CUDA device、dtype 完全相同且 C-contiguous；PyTorch 會以共享 storage 的 `detach()` view 移除 autograd；TensorFlow 只支援 eager GPU tensor。 |
+| CuPy／PyTorch／TensorFlow CUDA tensor | 明確選擇 `backend="native_cuda"` 時可零拷貝更新 | 三個 batch input 必須全在同一 CUDA device、dtype 完全相同且 C-contiguous；PyTorch 會以共享 storage 的 `detach()` view 移除 autograd；TensorFlow 只支援 eager GPU tensor。CuPy 與 PyTorch 路徑已在固定 GPU 主機的裝置上驗證；TensorFlow eager 路徑尚未在裝置上驗證。 |
 | SciPy sparse | 明確拒絕 | 不會隱式 densify；呼叫端必須評估記憶體後明確使用 `X.toarray()`。 |
 | pandas sparse | 經 pandas `.to_numpy()` 轉為 dense | 轉換可能配置完整 dense array，大型資料應先評估記憶體。 |
 | `sample_weight` | `fit`、`partial_fit`、`score` 支援 | 必須是一維、有限、非負且至少一個正值；採 frequency-weight 語意，整數權重等價於重複該列。 |

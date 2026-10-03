@@ -8,6 +8,12 @@ stabilised.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-03
+
+This minor release breaks the native CUDA interface: C ABI 2 and Python API 4
+replace C ABI 1 and Python API 3, and the two generations refuse each other.
+The public estimator API and checkpoint format 2 are unchanged.
+
 ### Added
 
 - Native CUDA L1 (`penalty="l1"`): the LAMM proximal-gradient transition now
@@ -45,6 +51,12 @@ stabilised.
   17-symbol export check and the clean CUDA wheel smoke all passed. The
   PyTorch and TensorFlow CUDA DLPack integration tests skipped because neither
   framework was installed.
+- On-device verification of PyTorch CUDA DLPack input to native CUDA, on the
+  same host at `33cb075` with `torch` 2.9.0+cu129: `PyTorchDlpackIntegrationTests`
+  passed in the `cuda` profile, and the native extension still reported
+  CUDA runtime 12090. TensorFlow eager CUDA DLPack remains unverified on a
+  device, because TensorFlow has no GPU support on native Windows since 2.11;
+  the support matrix says so.
 - Fixed-host native CUDA L1 baselines
   (`benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run{1,2,3}.json`):
   three standard-profile runs against CuPy under the same input transport.
@@ -265,7 +277,8 @@ retained as an immutable historical record rather than moved or reused.
 
 - Documented private vulnerability reporting and supported-version policy.
 
-[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.1...v0.6.1
 [0.5.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Funtrollor/renewable-huber/releases/tag/v0.5.0

@@ -1,8 +1,6 @@
 # Installation
 
-Requires Python 3.10–3.13 (the released 0.6.1 supports 3.10–3.12; 3.13 is
-available from the next release onwards). The base installation depends only
-on NumPy:
+Requires Python 3.10–3.13. The base installation depends only on NumPy:
 
 ```bash
 python -m pip install renewable-huber

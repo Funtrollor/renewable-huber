@@ -133,4 +133,4 @@ SciPy sparse matrix 會以清楚的 `TypeError` 拒絕，不會隱式轉 dense�
 
 ## 版本界線
 
-v0.6.1 正式支援 NumPy CPU、Rust native CPU、CuPy CUDA、Rust native CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。完整安裝方式、回傳型別、作業系統與限制請見[支援矩陣](support-matrix.md)。安裝 `sklearn` extra 後，可使用 `renewable_huber.integrations.sklearn.SklearnRenewableHuberRegressor` 進入 Pipeline、clone、GridSearchCV 與 cross-validation 工作流；完整 estimator contract 由 CI 執行 `check_estimator`。
+v0.7.0 正式支援 NumPy CPU、Rust native CPU、CuPy CUDA、Rust native CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。完整安裝方式、回傳型別、作業系統與限制請見[支援矩陣](support-matrix.md)。安裝 `sklearn` extra 後，可使用 `renewable_huber.integrations.sklearn.SklearnRenewableHuberRegressor` 進入 Pipeline、clone、GridSearchCV 與 cross-validation 工作流；完整 estimator contract 由 CI 執行 `check_estimator`。

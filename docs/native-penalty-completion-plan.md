@@ -3,8 +3,9 @@
 - Status: N0–N4 implemented and passed on the fixed GPU host (stage 1,
   2026-09-29, `4114918`). N5: the `penalty="none"` A/B is **accepted**
   (frozen-plan recapture at `10fc363`, 2026-09-30) and the native CUDA L1
-  baseline is recorded (see "N5 fixed-host results" and "Still open" at the
-  end)
+  baseline is recorded; PyTorch CUDA DLPack passed on the device on
+  2026-10-03 at `33cb075` (see "N5 fixed-host results" and "Still open" at
+  the end)
 - Baseline: `v0.6.1` / CUDA C ABI 1 / CUDA Python API 3
 - Scope: complete the existing public penalties, `none` and `l1`
 - Out of scope: adding L2, elastic-net, reduced precision, or automatic CUDA selection
@@ -270,7 +271,40 @@ Every stage 1 command passed:
 The two skips in `core` and in `cuda` are the PyTorch and TensorFlow CUDA
 DLPack integration tests in `tests/test_dlpack_adapters.py`. Neither framework
 is installed by the runbook's extras, so those two device paths were not
-exercised.
+exercised. The PyTorch path has since run on the device; see
+[PyTorch CUDA DLPack on the device](#pytorch-cuda-dlpack-on-the-device).
+
+### PyTorch CUDA DLPack on the device
+
+On 2026-10-03 at `33cb075`, on the same host and venv as stage 1 (Windows 11,
+CPython 3.11.0, driver 616.64, CUDA 12.9 / `nvcc` 12.9.41), a CUDA 12.9
+PyTorch build was installed and the `cuda` profile rerun, as the runbook's
+stage 1 now requires before a release:
+
+| Check | Result |
+|---|---|
+| `pip install torch --index-url https://download.pytorch.org/whl/cu129` | exit 0, `torch` 2.9.0+cu129. It added only filelock 3.32.3, fsspec 2026.7.0, Jinja2 3.1.6, MarkupSafe 3.0.3, mpmath 1.3.0, networkx 3.6.1 and sympy 1.14.0; `pip freeze` before and after shows no existing package changed |
+| `torch.__version__`, `torch.version.cuda` | `2.9.0+cu129`, `12.9` |
+| `torch.cuda.get_device_capability()`, `is_available()` | `(12, 0)`, `True`, NVIDIA GeForce RTX 5070 Ti |
+| native CUDA `version()["runtime_version"]` | 12090 on its own, and still 12090 (driver 13040, ABI 2, API 4) when `torch` is imported first |
+| `run_test_profile.py cuda --verbose` | exit 0, Ran 40, OK (skipped=1) |
+
+`PyTorchDlpackIntegrationTests.test_cuda_tensor_matches_host_input_and_detaches_autograd`
+passed: a native CUDA float32 `fit` on PyTorch CUDA tensors that require
+gradients matches the same `fit` on host NumPy input. The one skip is
+`TensorFlowDlpackIntegrationTests.test_eager_cuda_tensor_matches_host_input_without_storage_copy`
+("native CUDA API 4 and eager CUDA TensorFlow are required"), which is expected
+on native Windows.
+
+PyTorch for Windows ships its CUDA runtime as DLLs in `torch\lib` and installs
+no `nvidia-*-cu12` wheels, so `renewable_huber._cuda_runtime` finds no
+complete `nvidia-*-cu12` set in this venv and falls back to the system CUDA
+12.9 toolkit. The runbook's check is that the extension still reports runtime
+12090 with or without `torch` imported first, and it does. `pip check` in this
+venv lists the native CUDA wheel's `nvidia-*-cu12` requirements as missing.
+That predates PyTorch: the development build script installs the wheel with
+`--no-deps`. The clean-venv wheel smoke in stage 1 is what exercises the
+`nvidia-*-cu12` runtime.
 
 ### Stage 2 §3a: `penalty="none"` A/B, accepted
 
@@ -537,14 +571,15 @@ Resolved since the first run:
 - the §3a acceptance, by #50 (`--allow-native-version-change`), #51
   (`--freeze-sample-repetitions`) and the accepted recapture above;
 - consuming the L1 baseline, by #50's conditional native CUDA L1 rule in
-  `validate_record`.
+  `validate_record`;
+- **PyTorch CUDA DLPack**, which stage 1 skipped because PyTorch was not
+  installed: with `torch` 2.9.0+cu129 in the venv, `PyTorchDlpackIntegrationTests`
+  passed in the `cuda` profile on 2026-10-03 at `33cb075`, and the native
+  extension still reported runtime 12090. See
+  [PyTorch CUDA DLPack on the device](#pytorch-cuda-dlpack-on-the-device).
 
 Still open:
 
-- **PyTorch CUDA DLPack** must pass on the fixed host before 0.7.0: install a
-  CUDA 12.9 PyTorch build into the venv and rerun the `cuda` profile
-  (`docs/gpu-host-runbook.md`, stage 1). Stage 1 skipped it because PyTorch
-  was not installed.
 - **TensorFlow CUDA DLPack** is released as unverified on a device. TensorFlow
   has no GPU support on native Windows since 2.11, so the Windows host cannot
   run it; it needs a WSL2 or Linux GPU host. The support matrix says so.
