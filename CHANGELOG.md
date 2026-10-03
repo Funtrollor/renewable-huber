@@ -8,6 +8,12 @@ stabilised.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-03
+
+This minor release breaks the native CUDA interface: C ABI 2 and Python API 4
+replace C ABI 1 and Python API 3, and the two generations refuse each other.
+The public estimator API and checkpoint format 2 are unchanged.
+
 ### Added
 
 - Native CUDA L1 (`penalty="l1"`): the LAMM proximal-gradient transition now
@@ -271,7 +277,8 @@ retained as an immutable historical record rather than moved or reused.
 
 - Documented private vulnerability reporting and supported-version policy.
 
-[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.1...v0.6.1
 [0.5.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Funtrollor/renewable-huber/releases/tag/v0.5.0
