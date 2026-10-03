@@ -2,15 +2,14 @@
 
 Optional Rust/CUDA 12 engine for
 [`renewable-huber`](https://github.com/Funtrollor/renewable-huber). Version
-0.6.1 requires exactly `renewable-huber==0.6.1`.
+0.7.0 requires exactly `renewable-huber==0.7.0`.
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.6.1
+python -m pip install renewable-huber-native-cuda==0.7.0
 ```
 
 Release wheels cover CPython 3.10–3.13 on Windows x86-64 and Linux x86-64
-(`manylinux_2_28`); the published 0.6.1 covers CPython 3.10–3.12 on Windows
-x86-64 only. The wheel does not bundle NVIDIA libraries. Instead it depends on
+(`manylinux_2_28`). The wheel does not bundle NVIDIA libraries. Instead it depends on
 NVIDIA's own `nvidia-cuda-runtime-cu12`, `nvidia-cublas-cu12`,
 `nvidia-cusolver-cu12`, `nvidia-cusparse-cu12` and `nvidia-nvjitlink-cu12`
 wheels, and loads that complete set at import. When the set is incomplete it

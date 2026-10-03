@@ -18,7 +18,7 @@ resolve against the including page there, and `mkdocs build --strict` fails.
 <!-- --8<-- [start:intro] -->
 `renewable-huber` is a Renewable Huber Regression package for streaming data. It implements robust linear regression based on the Huber loss, and while processing batches it retains only the coefficients and an accumulated information matrix, never every historical observation.
 
-The latest version is **0.6.1**, published on [PyPI](https://pypi.org/project/renewable-huber/), but the package is still in **pre-alpha** development. It provides RHE and L1-penalised RPSHE updates on NumPy/CPU, Rust/Rayon native CPU, CuPy/CUDA, Rust/CUDA native, PyTorch and TensorFlow (CPU/CUDA), resumable `.npz` checkpoints, and integration with pandas and scikit-learn Pipeline/model-selection tools. Run `renewable-huber --version` to see the installed version.
+The latest version is **0.7.0**, published on [PyPI](https://pypi.org/project/renewable-huber/), but the package is still in **pre-alpha** development. It provides RHE and L1-penalised RPSHE updates on NumPy/CPU, Rust/Rayon native CPU, CuPy/CUDA, Rust/CUDA native, PyTorch and TensorFlow (CPU/CUDA), resumable `.npz` checkpoints, and integration with pandas and scikit-learn Pipeline/model-selection tools. Run `renewable-huber --version` to see the installed version.
 <!-- --8<-- [end:intro] -->
 
 <!-- --8<-- [start:auto-dispatch] -->
@@ -35,7 +35,7 @@ For the full support scope, see the [support matrix](docs/support-matrix.md).
 
 ## Installation
 
-Requires Python 3.10–3.13 (the released 0.6.1 supports 3.10–3.12; 3.13 is available from the next release onwards). The base installation depends only on NumPy:
+Requires Python 3.10–3.13. The base installation depends only on NumPy:
 
 ```powershell
 python -m pip install renewable-huber
@@ -52,12 +52,12 @@ explicitly, or let CPU `auto` select it when its conservative measurement passes
 Install the matching native wheel directly; it depends on exactly the same version of the base package:
 
 ```powershell
-python -m pip install renewable-huber-native-cpu==0.6.1
+python -m pip install renewable-huber-native-cpu==0.7.0
 ```
 
-The 0.6.1 release wheels cover CPython 3.10–3.12, Windows x86-64, Linux
-x86-64/aarch64 and macOS x86-64/Apple Silicon; the next release's matrix also adds
-CPython 3.13. Regular users do not need to install Rust or compile the extension locally.
+The 0.7.0 release wheels cover CPython 3.10–3.13, Windows x86-64, Linux
+x86-64/aarch64 and macOS x86-64/Apple Silicon. Regular users do not need to install Rust or
+compile the extension locally.
 <!-- --8<-- [end:native-cpu-install] -->
 
 <!-- --8<-- [start:native-cpu-usage] -->
@@ -144,22 +144,20 @@ gpu_prediction = gpu_model.predict(cp.asarray(X_test))  # cupy.ndarray, not copi
 <!-- --8<-- [end:cupy] -->
 
 <!-- --8<-- [start:native-cuda-install] -->
-The CUDA 12 plugin wheel can be installed directly. The released 0.6.1 provides Windows x86-64,
-CPython 3.10–3.12; from the next release onwards it also provides Linux x86-64
-(`manylinux_2_28`) and covers CPython 3.13:
+The CUDA 12 plugin wheel can be installed directly. 0.7.0 provides Windows x86-64 and Linux
+x86-64 (`manylinux_2_28`) wheels for CPython 3.10–3.13:
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.6.1
+python -m pip install renewable-huber-native-cuda==0.7.0
 ```
 
 The wheel already contains the native extension compiled for the supported GPU architectures, so
 Rust, CMake, Visual Studio and a local `nvcc` are not needed. The wheel itself does not bundle the
-NVIDIA libraries. From the next release onwards, the CUDA 12 runtime closure (`cudart`,
-cuBLAS/cuBLASLt, cuSOLVER, cuSPARSE and nvJitLink) is installed automatically as dependencies
-from NVIDIA's official `nvidia-*-cu12` wheels, and that set is loaded first at import time;
-only when the set is incomplete does it fall back to the system toolkit (`CUDA_PATH` on Windows,
-the default loader path on Linux). The released 0.6.1 still needs a CUDA 12 runtime that can be
-found through `CUDA_PATH`. Both need a compatible NVIDIA driver.
+NVIDIA libraries: the CUDA 12 runtime closure (`cudart`, cuBLAS/cuBLASLt, cuSOLVER, cuSPARSE and
+nvJitLink) is installed automatically as dependencies from NVIDIA's official `nvidia-*-cu12`
+wheels, and that set is loaded first at import time. Only when the set is incomplete does it fall
+back to the system toolkit (`CUDA_PATH` on Windows, the default loader path on Linux), so
+`CUDA_PATH` does not need to be set. A compatible NVIDIA driver is still required.
 <!-- --8<-- [end:native-cuda-install] -->
 
 <!-- --8<-- [start:native-cuda-usage] -->
@@ -180,10 +178,9 @@ native_gpu.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
 gpu_prediction = native_gpu.predict(cp.asarray(X_test))  # reads device X in place, returns NumPy
 ```
 
-The native CUDA engine in the source tree (C ABI 2/Python API 4) supports `penalty="none"` and
+The 0.7.0 native CUDA engine (C ABI 2/Python API 4) supports `penalty="none"` and
 `penalty="l1"`; L1 uses the same LAMM proximal-gradient update as NumPy and Rust CPU, and
-checkpoints can be resumed across all three engines. The released 0.6.1 (ABI 1/API 3) supports
-only `penalty="none"`.
+checkpoints can be resumed across all three engines.
 
 The native CUDA Python API also offers opt-in `cuda_graphs=True`, and a `float32`-only
 `cuda_fast_math=True` (TF32) high-speed mode. Both are off by default; when a CUDA Graph

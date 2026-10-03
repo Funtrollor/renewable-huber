@@ -1,8 +1,8 @@
 # Native core P2: CUDA whole-batch engine
 
-> This document preserves the P2 delivery history. The current 0.6.1 Python
-> payload API is version 3 after P4 added capability metadata; the C ABI remains
-> version 1.
+> This document preserves the P2 delivery history. In 0.6.1 the Python payload
+> API was version 3, after P4 added capability metadata, and the C ABI was
+> version 1. 0.7.0 raised them to C ABI 2 and payload API 4.
 
 P2 moves the complete unpenalized Renewable Huber Newton update behind one
 PyO3 call. The existing Python estimator still owns input validation, pandas
