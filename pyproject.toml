@@ -51,7 +51,7 @@ docs = [
 
 [project.urls]
 Changelog = "https://github.com/Funtrollor/renewable-huber/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/Funtrollor/renewable-huber#readme"
+Documentation = "https://funtrollor.github.io/renewable-huber/"
 Issues = "https://github.com/Funtrollor/renewable-huber/issues"
 Source = "https://github.com/Funtrollor/renewable-huber"
 
