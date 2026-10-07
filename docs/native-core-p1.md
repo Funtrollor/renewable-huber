@@ -27,9 +27,10 @@ on NumPy. An explicit
 `backend="native_cpu"` request raises `BackendUnavailableError` if the native
 wheel is absent or its ABI/API versions do not match.
 
-The first published compatible base release is `renewable-huber` 0.6.1. The
-native wheel declares exactly `renewable-huber==0.6.1`, so plugin and public
-API/checkpoint contracts cannot drift independently.
+The first published compatible base release was `renewable-huber` 0.6.1.
+Every native wheel declares an exact dependency on the base release of the
+same version (`renewable-huber==X.Y.Z`, `==0.7.0` for 0.7.0), so plugin and
+public API/checkpoint contracts cannot drift independently.
 
 ## P1 numerical scope
 
