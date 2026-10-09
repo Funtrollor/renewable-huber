@@ -18,7 +18,7 @@ resolve against the including page there, and `mkdocs build --strict` fails.
 <!-- --8<-- [start:intro] -->
 `renewable-huber` is a Renewable Huber Regression package for streaming data. It implements robust linear regression based on the Huber loss, and while processing batches it retains only the coefficients and an accumulated information matrix, never every historical observation.
 
-The latest version is **0.7.0**, published on [PyPI](https://pypi.org/project/renewable-huber/), but the package is still in **pre-alpha** development. It provides RHE and L1-penalised RPSHE updates on NumPy/CPU, Rust/Rayon native CPU, CuPy/CUDA, Rust/CUDA native, PyTorch and TensorFlow (CPU/CUDA), resumable `.npz` checkpoints, and integration with pandas and scikit-learn Pipeline/model-selection tools. Run `renewable-huber --version` to see the installed version.
+The latest version is **0.7.1**, published on [PyPI](https://pypi.org/project/renewable-huber/), but the package is still in **pre-alpha** development. It provides RHE and L1-penalised RPSHE updates on NumPy/CPU, Rust/Rayon native CPU, CuPy/CUDA, Rust/CUDA native, PyTorch and TensorFlow (CPU/CUDA), resumable `.npz` checkpoints, and integration with pandas and scikit-learn Pipeline/model-selection tools. Run `renewable-huber --version` to see the installed version.
 <!-- --8<-- [end:intro] -->
 
 <!-- --8<-- [start:auto-dispatch] -->
@@ -52,10 +52,10 @@ explicitly, or let CPU `auto` select it when its conservative measurement passes
 Install the matching native wheel directly; it depends on exactly the same version of the base package:
 
 ```powershell
-python -m pip install renewable-huber-native-cpu==0.7.0
+python -m pip install renewable-huber-native-cpu==0.7.1
 ```
 
-The 0.7.0 release wheels cover CPython 3.10–3.13, Windows x86-64, Linux
+The 0.7.1 release wheels cover CPython 3.10–3.13, Windows x86-64, Linux
 x86-64/aarch64 and macOS x86-64/Apple Silicon. Regular users do not need to install Rust or
 compile the extension locally.
 <!-- --8<-- [end:native-cpu-install] -->
@@ -144,11 +144,11 @@ gpu_prediction = gpu_model.predict(cp.asarray(X_test))  # cupy.ndarray, not copi
 <!-- --8<-- [end:cupy] -->
 
 <!-- --8<-- [start:native-cuda-install] -->
-The CUDA 12 plugin wheel can be installed directly. 0.7.0 provides Windows x86-64 and Linux
+The CUDA 12 plugin wheel can be installed directly. 0.7.1 provides Windows x86-64 and Linux
 x86-64 (`manylinux_2_28`) wheels for CPython 3.10–3.13:
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.7.0
+python -m pip install renewable-huber-native-cuda==0.7.1
 ```
 
 The wheel already contains the native extension compiled for the supported GPU architectures, so
@@ -178,7 +178,7 @@ native_gpu.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
 gpu_prediction = native_gpu.predict(cp.asarray(X_test))  # reads device X in place, returns NumPy
 ```
 
-The 0.7.0 native CUDA engine (C ABI 2/Python API 4) supports `penalty="none"` and
+The 0.7.1 native CUDA engine (C ABI 2/Python API 4) supports `penalty="none"` and
 `penalty="l1"`; L1 uses the same LAMM proximal-gradient update as NumPy and Rust CPU, and
 checkpoints can be resumed across all three engines.
 
@@ -285,7 +285,7 @@ data/                    # local research data, never packaged or uploaded to Py
 ## Native performance baselines
 
 In the schema-v2 cold baseline on a fixed Ryzen 9 9900X with a 24-thread Rayon pool, Rust CPU
-is **1.17×–15.65×** (median 1.68×) relative to NumPy across 32 shape/dtype/penalty/operation
+is **1.38×–7.86×** (median 1.81×) relative to NumPy across 32 shape/dtype/penalty/operation
 pairs. In the matched cold baseline on a fixed RTX 5070 Ti, native CUDA relative to CuPy on the
 same transport is **1.04×–1.96×** (median 1.35×) for host input and **1.06×–2.04×**
 (median 1.53×) for DLPack device input.

@@ -10,7 +10,7 @@
 
 `renewable-huber` 是一個針對串流資料的 Renewable Huber Regression 套件。它實作以 Huber loss 為基礎的穩健線性迴歸，處理批次資料時只保留係數與累積資訊矩陣，而非保留所有歷史觀測值。
 
-目前最新版本為 **0.7.0**，發布於 [PyPI](https://pypi.org/project/renewable-huber/)，但仍處於 **pre-alpha** 開發階段。套件提供 NumPy/CPU、Rust/Rayon native CPU、CuPy/CUDA、Rust/CUDA native、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 pandas 與 scikit-learn Pipeline／模型選擇工具。可用 `renewable-huber --version` 查詢已安裝版本。
+目前最新版本為 **0.7.1**，發布於 [PyPI](https://pypi.org/project/renewable-huber/)，但仍處於 **pre-alpha** 開發階段。套件提供 NumPy/CPU、Rust/Rayon native CPU、CuPy/CUDA、Rust/CUDA native、PyTorch 與 TensorFlow（CPU/CUDA）的 RHE、L1-penalised RPSHE 更新，以及可恢復的 `.npz` checkpoint，並可整合 pandas 與 scikit-learn Pipeline／模型選擇工具。可用 `renewable-huber --version` 查詢已安裝版本。
 
 `backend="auto"` 採用可預期的裝置規則：只有明確指定 `device="cuda"` 才選擇 CuPy，其餘一律留在 CPU。在 CPU 上，`auto` 預設仍是 NumPy；只有當批次夠大、且本機執行期量測顯示 Rust native CPU engine 明確較快時，才會改用 `native_cpu`。這個判斷完全依據**當前主機與當前執行環境**的即時量測，不讀取 CPU 型號字串，也不寫入任何快取檔案。量測結果只存活於記憶體，而且只在量測當下的執行環境內有效：CPU affinity mask（不只是核心數量）、`*_NUM_THREADS` 設定，或 optional `threadpoolctl` 可觀測到的實際 BLAS/OpenMP thread-pool 大小一改變就會被丟棄，`fork` 之後的子行程也會清空重測。在同一組執行環境內，相同形狀永遠得到相同答案，不受其他 estimator 先問過什麼影響。任何一步失敗（extension 缺失、engine 無法建立、量測不足，或由 `auto` 選中的 native engine 拋出任何一般例外）都會安靜回到 NumPy。細節與成本上限請見 [CPU auto-dispatch RFC](docs/cpu-auto-dispatch-rfc.md)。
 
@@ -33,10 +33,10 @@ Native CPU 核心與純 Python 基礎套件分開發行。安裝或在本機建�
 直接安裝 matching native wheel；它會精確依賴同版 base package：
 
 ```powershell
-python -m pip install renewable-huber-native-cpu==0.7.0
+python -m pip install renewable-huber-native-cpu==0.7.1
 ```
 
-0.7.0 release wheels 涵蓋 CPython 3.10–3.13、Windows x86-64、Linux
+0.7.1 release wheels 涵蓋 CPython 3.10–3.13、Windows x86-64、Linux
 x86-64／aarch64 與 macOS x86-64／Apple Silicon。一般使用者不需要安裝 Rust 或在
 本機編譯 extension。
 
@@ -113,11 +113,11 @@ gpu_model.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
 gpu_prediction = gpu_model.predict(cp.asarray(X_test))  # cupy.ndarray，未回傳 CPU
 ```
 
-CUDA 12 plugin wheel 可直接安裝。0.7.0 提供 Windows x86-64 與 Linux x86-64
+CUDA 12 plugin wheel 可直接安裝。0.7.1 提供 Windows x86-64 與 Linux x86-64
 （`manylinux_2_28`）wheels，涵蓋 CPython 3.10–3.13：
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.7.0
+python -m pip install renewable-huber-native-cuda==0.7.1
 ```
 
 Wheel 已包含針對支援 GPU 架構編譯的 native extension，因此不需要 Rust、CMake、
@@ -144,7 +144,7 @@ native_gpu.partial_fit(cp.asarray(X_batch), cp.asarray(y_batch))
 gpu_prediction = native_gpu.predict(cp.asarray(X_test))  # 就地讀取 device X，回傳 NumPy
 ```
 
-0.7.0 的 native CUDA engine（C ABI 2／Python API 4）支援 `penalty="none"` 與
+0.7.1 的 native CUDA engine（C ABI 2／Python API 4）支援 `penalty="none"` 與
 `penalty="l1"`；L1 使用與 NumPy、Rust CPU 相同的 LAMM proximal-gradient 更新，
 checkpoint 可在三個 engine 之間互相接續。
 
@@ -242,7 +242,7 @@ data/                    # 本地研究資料，不打包、不上傳 PyPI
 
 固定 Ryzen 9 9900X／24-thread Rayon 的 schema-v2 cold baseline 中，Rust CPU
 在 32 組 shape／dtype／penalty／operation 配對上相對 NumPy 為
-**1.17×–15.65×**（中位數 1.68×）。固定 RTX 5070 Ti 的 matched cold baseline
+**1.38×–7.86×**（中位數 1.81×）。固定 RTX 5070 Ti 的 matched cold baseline
 中，native CUDA 相對同 transport CuPy：host input 為 **1.04×–1.96×**
 （中位數 1.35×），DLPack device input 為 **1.06×–2.04×**（中位數 1.53×）。
 
