@@ -14,7 +14,12 @@ model = RenewableHuberRegressor(
 ```
 
 `cuda_graphs=True` captures the stable candidate-objective DAG for one native
-update and replays it across Newton iterations and line-search trials. A graph
+update and replays it across Newton iterations and line-search trials. Since
+P7 that DAG is the fused line-search round (see
+[P7 optimizations](native-core-p2.md#p7-optimizations-what-was-adopted-and-what-was-not)):
+a parameter copy from pinned memory, two kernels and a result copy, so one
+graph serves every round of the update and stays bit-identical to the stream
+path. Profiling such a capture needs Nsight's `--cuda-graph-trace=node`. A graph
 is scoped to that update, so captured pointers never outlive a borrowed DLPack
 tensor and a new batch shape/configuration cannot replay stale arguments.
 Capture is best effort. If the runtime or a library call rejects capture, the

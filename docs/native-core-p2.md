@@ -244,6 +244,190 @@ configuration, and BLAS provider; they are not portable headline numbers
 across machines. Native CUDA must pass the matched CuPy competitor parity gate
 under the same host/device transport before a calibration can recommend it.
 
+## P7 fixed-host breakdown (C ABI 2 / API 4)
+
+On 2026-10-09 the current engine (`f2dc7cb`, unchanged at the profiled
+`4373a82`) was profiled on the fixed RTX 5070 Ti host: driver 616.64, CUDA
+12.9, CPython 3.11.0, NumPy 2.4.6, CuPy 14.2.0, Nsight Systems 2025.3.2, PCIe
+5.0 x16. The desktop was in use; each capture's `nvidia-smi` compute clients
+and top CPU processes were recorded before and after it. Each configuration
+ran `scripts/profiling/run_nsight_systems.ps1 -Engine native_cuda` with the
+shape sweep's standard shapes, two warmups and three resident-engine repeats
+of the whole stream. `--phase-ranges` marks the estimator's prepare, update and
+commit phases, and `summarize_nsys_sqlite.py` (schema 2) assigns every instant
+of every `partial_fit` to exactly one class, so the classes add up to its wall
+time. The summaries are committed as
+`benchmarks/baselines/p7-windows-rtx5070ti-nsys-<configuration>.json`.
+
+| Configuration | ms per stream | Iterations per batch | GPU compute | H2D | Launch and sync¹ | Python and binding (input validation) | Launches per iteration | Syncs per iteration | Line-search candidates per iteration | H2D API / DMA per batch |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| latency f32 none host | 2.83 | 5.00 | 16% | 2% | 79% | 4% (2%) | 56 | 2.8 | 2.20 | 0.038 / 0.007 ms |
+| reference f32 none host | 11.36 | 3.75 | 24% | 14% | 44% | 18% (15%) | 52 | 2.6 | 2.00 | 0.390 / 0.337 ms |
+| reference f32 none device | 9.28 | 3.75 | 30% | 0% | 56% | 14% (11%) | 52 | 2.6 | 2.00 | — |
+| reference f64 none host | 37.44 | 3.75 | 70% | 8% | 14% | 8% (7%) | 50 | 2.5 | 1.87 | 0.769 / 0.703 ms |
+| reference f32 l1 host | 18.98 | 8.00 | 15% | 8% | 66% | 11% (9%) | 45 | 2.3 | 2.06 | 0.380 / 0.329 ms |
+| streaming f32 none host | 38.36 | 2.31 | 14% | 18% | 46% | 23% (19%) | 53 | 2.8 | 1.89 | 0.404 / 0.348 ms |
+| wide f32 none host | 11.05 | 3.00 | 31% | 7% | 52% | 10% (8%) | 68 | 3.8 | 3.00 | 0.177 / 0.132 ms |
+| wide f32 none host, `cuda_graphs=True` | 8.53 | 3.00 | 31% | 10% | 45% | 14% (10%) | 34 | 3.8 | 3.00 | 0.185 / 0.138 ms |
+
+¹ Includes device-to-host and device-to-device copies and memsets, which are
+0.3%–1.2% in every configuration.
+
+Nsight inflates API time: profiled latency costs 0.565 ms per iteration, the
+unprofiled p5 sweep about 0.47 ms. The shares are for prioritizing, not a
+prediction of the unprofiled speedup.
+
+What the breakdown shows:
+
+- **Launch and sync latency dominates every `float32` configuration (44%–79%).**
+  A Newton iteration issues 45–68 kernel launches at about 5 µs each under
+  Nsight, 0.28–0.32 ms of API time, while the GPU sits idle between them.
+- **The line search evaluates 1.9–3.0 candidates per iteration, and each costs
+  about 21 API calls and a stream synchronization.** Two patterns produce
+  them. The first iteration of a stream starts from zero coefficients, and its
+  Newton step overshoots far: reference needs 8 step sizes, wide 11 and then
+  9, latency 4 and 4. In warm `float32` batches the second iteration often
+  backtracks one to five more times, because the `float32` cuBLAS `asum`
+  objective cannot resolve the remaining decrease. Together the extra
+  candidates are roughly 12%–28% of the wall time.
+- **Pageable host-to-device copies are not the bottleneck they look like.**
+  The API time per batch is only 13%–16% above the DMA time (23 GB/s against
+  27 GB/s on reference), so the driver's own staging is already efficient. H2D
+  is 14%–18% of host-input `float32` time.
+- **`float64` is compute-bound.** Kernels are 70% of its wall time; one
+  `float64` Gram GEMM takes 980 µs.
+- **The fixed cost of a `partial_fit` call is small.** The Python core and the
+  PyO3 entry before the first CUDA call take 0.011–0.033 ms, decoding the
+  result 0.015–0.032 ms and committing it 0.009–0.018 ms. The final
+  synchronization waits 2–3 µs, and the state export's device-to-host copy is
+  within the under-1.2% "other copies" share. Input validation
+  (`np.isfinite` over the batch) is most of the Python column at 0.21–0.65 ms
+  per batch; it is outside this work and only recorded.
+- `cuda_graphs=True` halves the launches on wide and cuts its stream time by
+  23% under Nsight.
+
+### P7 optimizations: what was adopted, and what was not
+
+The breakdown named four candidates. One was adopted.
+
+**Adopted: fused line-search rounds** (`1815ddc`, `a6f9fe6`, `238df5b`,
+`67d60bb`). A round evaluates up to four Newton steps, or four LAMM
+curvatures, in two kernels:
+
+- the first forms the candidates and reduces their coefficient-space terms
+  (history quadratic, step and coefficient norms, the L1 inner products);
+- the second computes every candidate's residuals and Huber loss in one pass
+  over X, and its last block folds all partial sums.
+
+The host pays one parameter copy, two launches, one transfer and one
+synchronization per round instead of about 21 API calls and a
+synchronization per candidate, and accepts the first candidate in step order
+exactly as the sequential search did. The accepted candidate's residuals feed
+the next gradient directly.
+
+Three refinements followed measurements:
+
+- a full-width round made streaming `float64` 12.7% slower in the first cold
+  A/B, because `float64` is compute-bound there and Newton almost always
+  accepts the full step. A Newton search now opens with the full step alone,
+  unless it starts from an empty state or the previous iteration backtracked;
+  LAMM opens with two curvatures. The width never changes a value;
+- Nsight then put the round's residual kernel at 290 µs per call on
+  streaming `float64`, against 64 µs for the cuBLAS GEMV it replaced: with a
+  warp per row, the shuffle tree spends a warp-wide `float64` add per level
+  and candidate. Up to 64 coefficients a thread now owns its row; the kernel
+  takes 40 µs there;
+- the loss sum takes absolute values like the `asum` it replaced, which only
+  matters for a negative weight passed through the raw C ABI.
+
+`cuda_graphs=True` now captures the round, so the graph path stays
+bit-identical to the stream path; Nsight needs `--cuda-graph-trace=node` to
+import such a capture, and `run_nsight_systems.ps1` passes it.
+
+**Numerics.** Every sum across rows or coefficients accumulates in double in
+a fixed order over a grid that depends only on the batch shape, so repeated
+runs are bit-identical and a candidate's value never depends on which round it
+shared. Against `main` the results change at rounding level, because the
+objective no longer comes from `float32` cuBLAS reductions. On the 16 standard
+workloads `float64` iteration counts are unchanged and coefficients agree to
+about 1e-7 relative or better; `float32` unpenalized counts are unchanged except wide,
+one iteration fewer. `float32` L1 counts move, as they already did between
+engines: `float32` at `tol=1e-6` sits at the rounding floor. Over 20 dataset
+seeds per shape the mean change in total iterations is −0.3 (latency), +0.2
+(reference), +1.5 (wide) and +4.9 (streaming, 69.2 → 74.0; NumPy needs 67.6).
+Accumulating the narrow rows' dot products in double was tried and made
+streaming worse (+10.2), so it was reverted.
+
+**Final A/B against `main`** (`f2dc7cb` → `5e7a45d`, frozen plan,
+`--rounds 9 --minimum-sample-seconds 1.0`, standard profile, both penalties,
+both dtypes, host and device input):
+
+| Lifecycle | Speedup range | Median | Cases > 10% faster | Cases slower |
+|---|---:|---:|---:|---:|
+| cold | 1.00x–2.34x | 1.58x | 29 of 32 | 0 |
+| steady | 1.01x–4.30x | 1.69x | 30 of 32 | 0 |
+
+Per shape, the cold medians are latency 1.61x, reference 1.25x, wide 1.90x
+and streaming 1.40x; the steady medians are latency 2.23x, reference 1.26x, wide
+1.87x and streaming 1.46x. Native CUDA stays faster than CuPy under
+the same transport in every case, and no case is slower than `main`.
+
+Neither strict gate (`gate.json`) passes. In cold the only failing check is
+the iteration difference of the four `float32` L1 cases below, above the
+one-iteration limit. Steady fails the same four, plus relative MAD above 10%
+in three cases: two on the baseline side (latency f64 L1 host 19.1%,
+streaming f32 unpenalized host 14.6%) and one on the candidate side (streaming
+f32 L1 device 12.5%). A steady recapture with a larger repetition cap was
+started and stopped on the maintainer's instruction, so those three stand as
+measured.
+
+On the maintainer's instruction the iteration limit was then relaxed for this
+A/B only: `gate-max-iteration-delta-11.json` beside each strict gate recomputes
+it from the same merged records with `max_iteration_delta=11`, the smallest
+value covering the observed differences, and every other threshold at the
+runner default. Nothing was remeasured and the runner's default stays 1. The
+relaxed cold gate passes; the relaxed steady gate fails only the three MAD
+cases. The time per iteration in the four cases is:
+
+| Case | Iterations main → candidate | Cold ms per iteration | Steady ms per iteration |
+|---|---:|---:|---:|
+| streaming f32 L1, device input | 52 → 63 | 0.781 → 0.275 | 0.609 → 0.252 |
+| streaming f32 L1, host input | 52 → 63 | 0.961 → 0.434 | 0.797 → 0.385 |
+| wide f32 L1, device input | 49 → 51 | 0.549 → 0.260 | 0.432 → 0.178 |
+| wide f32 L1, host input | 49 → 51 | 0.553 → 0.240 | 0.458 → 0.193 |
+
+**After the change**, the same Nsight configurations
+(`p7-windows-rtx5070ti-nsys-after-<configuration>.json`) show:
+
+| Configuration | ms per batch before → after | Launches per iteration | Launch and sync share |
+|---|---:|---:|---:|
+| latency f32 none host | 2.83 → 1.22 | 56 → 21 | 78% → 63% |
+| reference f32 none host | 2.84 → 2.51 | 52 → 23 | 43% → 31% |
+| reference f32 none device | 2.32 → 1.97 | 52 → 23 | 55% → 43% |
+| reference f64 none host | 9.36 → 9.77 | 50 → 22 | 14% → 15% |
+| reference f32 l1 host | 4.75 → 2.64 | 45 → 9 | 65% → 38% |
+| streaming f32 none host | 2.40 → 1.92 | 53 → 25 | 45% → 36% |
+| wide f32 none host | 2.76 → 2.07 | 68 → 24 | 51% → 35% |
+| wide f32 none host, graphs | 2.13 → 2.02 | 34 → 23 | 44% → 31% |
+
+**Not adopted:**
+
+- **Pinned staging for host input (D).** Pageable copies already run within
+  13%–16% of their DMA time, so a pinned buffer could save about 0.05 ms per
+  reference batch, and filling it costs a host `memcpy` of the same size.
+  Not implemented.
+- **Fusing the remaining small kernels (C).** After the rounds, an iteration
+  issues about 21 calls, most of them inside cuSOLVER `potrf`/`potrs` and
+  cuBLAS. The fusions that keep results bit-identical (Hessian assembly with
+  its factor copy, the gradient-delta subtraction) remove three or four, an
+  estimated 8% of a latency iteration at most, below the 10% acceptance
+  threshold. Not implemented.
+- **A whole-iteration CUDA Graph (A).** After the rounds, wide with
+  `cuda_graphs=True` measures 2.02 ms per batch against 2.07 ms without: the
+  graph's advantage was the candidate DAG the rounds now fuse. Capturing the
+  rest would mean capturing cuSOLVER for an opt-in path only. Not
+  implemented.
+
 ## Rollback and lifetime rules
 
 - Destruction of `NativeCudaEngine` releases device allocations and CUDA

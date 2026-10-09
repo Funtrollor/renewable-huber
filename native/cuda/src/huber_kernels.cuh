@@ -48,16 +48,6 @@ cudaError_t launch_weight_design(
 );
 
 template <typename T>
-cudaError_t launch_huber_loss(
-    const T* residual,
-    const T* weights,
-    T* loss,
-    int64_t count,
-    T tau,
-    cudaStream_t stream
-);
-
-template <typename T>
 cudaError_t launch_subtract(
     const T* left,
     const T* right,
@@ -100,16 +90,6 @@ cudaError_t launch_axpby(
     const T* right,
     T right_scale,
     T* output,
-    int64_t count,
-    cudaStream_t stream
-);
-
-template <typename T>
-cudaError_t launch_candidate(
-    const T* beta,
-    const T* direction,
-    T step,
-    T* candidate,
     int64_t count,
     cudaStream_t stream
 );
@@ -165,17 +145,99 @@ cudaError_t launch_weighted_huber_score(
     cudaStream_t stream
 );
 
-/// candidate[i] = soft_threshold(beta[i] - gradient[i] * inverse_phi, t_i),
-/// with t_i = threshold for penalized coordinates and 0 otherwise.
+/*
+ * Fused line-search rounds.
+ *
+ * A round evaluates up to kCandidateRoundWidth candidates along one search
+ * direction -- Newton steps 2^-b, 2^-(b+1), ... or LAMM curvatures phi,
+ * 2 phi, ... -- in two kernels, so the host pays one transfer and one stream
+ * synchronization per round instead of about twenty API calls and a
+ * synchronization per candidate.
+ *
+ * Every per-candidate value is computed by the same threads in the same order
+ * whatever the round width, and every reduction runs in a fixed order over a
+ * grid that depends only on the batch shape. Which candidates share a round
+ * therefore never changes a result bit, and repeated runs are bit-identical.
+ * The X c and J delta products accumulate in T like the cuBLAS calls they
+ * replace; every reduction across rows or coefficients accumulates in double.
+ */
+constexpr int kCandidateRoundWidth = 4;
+
+/// double slots per candidate in a round's results:
+///   0 weighted Huber loss          1 (c - history)' J (c - history)
+///   2 ||c - beta||^2               3 ||c||^2
+///   4 gradient . (c - beta)        5 sign(history) . (c - history)
+constexpr int kCandidateRoundSlots = 6;
+
+/// Slots 1..5 are reduced over coefficients rather than rows.
+constexpr int kCandidateRoundTermSlots = kCandidateRoundSlots - 1;
+
+/// How a round forms candidate k from beta.
+enum CandidateForm : int32_t {
+    /// c = beta; evaluates the objective at the current point.
+    kCandidateCopy = 0,
+    /// c = beta - scale[k] * direction.
+    kCandidateNewton = 1,
+    /// c = soft_threshold(beta - gradient * scale[k], threshold[k]) on the
+    /// penalized coordinates; scale[k] = 1 / phi_k.
+    kCandidateProximal = 2,
+};
+
+/// Per-round inputs, read by the kernels from device memory so one captured
+/// CUDA Graph serves every round of an update.
 template <typename T>
-cudaError_t launch_soft_threshold_candidate(
+struct CandidateRoundParameters {
+    int32_t width;
+    int32_t form;
+    T scale[kCandidateRoundWidth];
+    T threshold[kCandidateRoundWidth];
+};
+
+/// Residual-kernel blocks for a batch of `rows` x `parameters`. A function of
+/// the shape alone, so the reduction order never depends on the device or the
+/// round.
+int candidate_round_blocks(int64_t rows, int64_t parameters);
+
+/// Term-kernel blocks per candidate for `parameters` coefficients.
+int candidate_round_chunks(int64_t parameters);
+
+template <typename T>
+struct CandidateRoundBuffers {
+    const CandidateRoundParameters<T>* parameters;
+    /// n_parameters x kCandidateRoundWidth, one column per candidate.
+    T* candidates;
+    /// rows x kCandidateRoundWidth, one column per candidate.
+    T* residuals;
+    /// kCandidateRoundWidth x candidate_round_chunks(p) x kCandidateRoundTermSlots.
+    double* term_partials;
+    /// kCandidateRoundWidth x candidate_round_blocks(rows, p).
+    double* loss_partials;
+    /// kCandidateRoundWidth x kCandidateRoundSlots.
+    double* results;
+    /// Zero between rounds; the last residual block resets it.
+    unsigned int* counter;
+};
+
+/// Enqueue one round: form the candidates, reduce the coefficient-space
+/// terms, then the residuals and Huber loss, and write `results`.
+/// `gradient` may be null unless the form is proximal; `penalty_sign` and
+/// `weights` may be null.
+template <typename T>
+cudaError_t launch_candidate_round(
+    const CandidateRoundBuffers<T>& buffers,
     const T* beta,
+    const T* direction,
     const T* gradient,
-    T inverse_phi,
-    T threshold,
-    T* candidate,
-    int64_t count,
+    const T* coefficients,
+    const T* information,
+    const T* penalty_sign,
+    const T* design,
+    const T* y,
+    const T* weights,
+    int64_t rows,
+    int64_t parameters,
     int64_t penalized_count,
+    T tau,
     cudaStream_t stream
 );
 

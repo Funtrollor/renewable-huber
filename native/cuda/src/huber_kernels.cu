@@ -92,29 +92,6 @@ __global__ void weight_design_kernel(
 }
 
 template <typename T>
-__global__ void huber_loss_kernel(
-    const T* residual,
-    const T* weights,
-    T* loss,
-    int64_t count,
-    T tau
-) {
-    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (index >= count) {
-        return;
-    }
-    const T value = residual[index];
-    const T absolute = value < static_cast<T>(0) ? -value : value;
-    T result = absolute <= tau
-        ? static_cast<T>(0.5) * value * value
-        : tau * absolute - static_cast<T>(0.5) * tau * tau;
-    if (weights != nullptr) {
-        result *= weights[index];
-    }
-    loss[index] = result;
-}
-
-template <typename T>
 __global__ void subtract_kernel(
     const T* left,
     const T* right,
@@ -186,20 +163,6 @@ __global__ void axpby_kernel(
     const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (index < count) {
         output[index] = left_scale * left[index] + right_scale * right[index];
-    }
-}
-
-template <typename T>
-__global__ void candidate_kernel(
-    const T* beta,
-    const T* direction,
-    T step,
-    T* candidate,
-    int64_t count
-) {
-    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (index < count) {
-        candidate[index] = beta[index] - step * direction[index];
     }
 }
 
@@ -290,26 +253,286 @@ __global__ void weighted_huber_score_kernel(
     score[index] = result;
 }
 
+/*
+ * Candidate rounds.  Both kernels run 256 threads per block; the term kernel
+ * handles one candidate per grid row and 256 coefficients per block, the
+ * residual kernel one batch row per warp.
+ */
+constexpr int kRoundThreads = 256;
+constexpr int kRoundWarps = kRoundThreads / 32;
+constexpr int kRoundMaxBlocks = 1024;
+constexpr int kRoundRowsPerWarp = 4;
+/// Up to this many coefficients a thread computes a whole row's dot products
+/// alone. A warp per row would spend its time in the shuffle reduction, which
+/// costs a warp-wide add per level and candidate -- ruinous for float64, which
+/// this GPU class runs at 1/64 of the float32 rate.
+constexpr int64_t kThreadRowMaxParameters = 64;
+constexpr unsigned kFullWarp = 0xffffffffu;
+
 template <typename T>
-__global__ void soft_threshold_candidate_kernel(
+__device__ T form_candidate(
+    const CandidateRoundParameters<T>& round,
+    int k,
+    int64_t index,
     const T* beta,
+    const T* direction,
     const T* gradient,
-    T inverse_phi,
-    T threshold,
-    T* candidate,
-    int64_t count,
     int64_t penalized_count
 ) {
-    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (index >= count) {
+    if (round.form == kCandidateNewton) {
+        return beta[index] - round.scale[k] * direction[index];
+    }
+    if (round.form == kCandidateProximal) {
+        // Same operation order as the Rust CPU engine: step, then shrink.
+        const T value = beta[index] - gradient[index] * round.scale[k];
+        const T limit = index < penalized_count ? round.threshold[k] : static_cast<T>(0);
+        const T absolute = value < static_cast<T>(0) ? -value : value;
+        const T remainder = absolute - limit;
+        return sign_of(value) * (remainder > static_cast<T>(0) ? remainder : static_cast<T>(0));
+    }
+    return beta[index];
+}
+
+template <typename T>
+__device__ T huber_loss_value(T value, T tau) {
+    const T absolute = value < static_cast<T>(0) ? -value : value;
+    return absolute <= tau
+        ? static_cast<T>(0.5) * value * value
+        : tau * absolute - static_cast<T>(0.5) * tau * tau;
+}
+
+/// Sum `value` over the block in a fixed order; the total lands in thread 0.
+__device__ double block_sum(double value, double* scratch) {
+    const int lane = threadIdx.x % 32;
+    const int warp = threadIdx.x / 32;
+    for (int offset = 16; offset > 0; offset /= 2) {
+        value += __shfl_down_sync(kFullWarp, value, offset);
+    }
+    if (lane == 0) {
+        scratch[warp] = value;
+    }
+    __syncthreads();
+    double total = 0.0;
+    if (threadIdx.x == 0) {
+        for (int index = 0; index < kRoundWarps; ++index) {
+            total += scratch[index];
+        }
+    }
+    __syncthreads();
+    return total;
+}
+
+/*
+ * Form candidate k = blockIdx.y and reduce its coefficient-space terms over
+ * this block's 256 coefficients.  The history product (J (c - history))_i is
+ * a column-major GEMV row accumulated in T over shared-memory tiles of the
+ * delta, like cuBLAS; the five dot products accumulate in double.
+ */
+template <typename T>
+__global__ void candidate_terms_kernel(
+    const CandidateRoundParameters<T>* round_pointer,
+    const T* beta,
+    const T* direction,
+    const T* gradient,
+    const T* coefficients,
+    const T* information,
+    const T* penalty_sign,
+    T* candidates,
+    double* term_partials,
+    int64_t parameters,
+    int64_t penalized_count
+) {
+    const CandidateRoundParameters<T> round = *round_pointer;
+    const int k = static_cast<int>(blockIdx.y);
+    if (k >= round.width) {
         return;
     }
-    // Same operation order as the Rust CPU engine: step, then shrink.
-    const T value = beta[index] - gradient[index] * inverse_phi;
-    const T limit = index < penalized_count ? threshold : static_cast<T>(0);
-    const T absolute = value < static_cast<T>(0) ? -value : value;
-    const T remainder = absolute - limit;
-    candidate[index] = sign_of(value) * (remainder > static_cast<T>(0) ? remainder : static_cast<T>(0));
+    __shared__ T delta_tile[kRoundThreads];
+    __shared__ double scratch[kRoundWarps];
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+
+    T history_product = static_cast<T>(0);
+    for (int64_t tile = 0; tile < parameters; tile += kRoundThreads) {
+        const int64_t column = tile + threadIdx.x;
+        delta_tile[threadIdx.x] = column < parameters
+            ? form_candidate(round, k, column, beta, direction, gradient, penalized_count) -
+                coefficients[column]
+            : static_cast<T>(0);
+        __syncthreads();
+        if (index < parameters) {
+            const int64_t tile_width =
+                parameters - tile < kRoundThreads ? parameters - tile : kRoundThreads;
+            for (int64_t offset = 0; offset < tile_width; ++offset) {
+                history_product += information[index + (tile + offset) * parameters] * delta_tile[offset];
+            }
+        }
+        __syncthreads();
+    }
+
+    double terms[kCandidateRoundTermSlots] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    if (index < parameters) {
+        const T value = form_candidate(round, k, index, beta, direction, gradient, penalized_count);
+        candidates[static_cast<int64_t>(k) * parameters + index] = value;
+        const T delta = value - coefficients[index];
+        const T step = value - beta[index];
+        terms[0] = static_cast<double>(delta) * static_cast<double>(history_product);
+        terms[1] = static_cast<double>(step) * static_cast<double>(step);
+        terms[2] = static_cast<double>(value) * static_cast<double>(value);
+        if (gradient != nullptr && round.form != kCandidateCopy) {
+            terms[3] = static_cast<double>(gradient[index]) * static_cast<double>(step);
+        }
+        if (penalty_sign != nullptr) {
+            terms[4] = static_cast<double>(penalty_sign[index]) * static_cast<double>(delta);
+        }
+    }
+    double* output = term_partials +
+        (static_cast<int64_t>(k) * gridDim.x + blockIdx.x) * kCandidateRoundTermSlots;
+    for (int term = 0; term < kCandidateRoundTermSlots; ++term) {
+        const double total = block_sum(terms[term], scratch);
+        if (threadIdx.x == 0) {
+            output[term] = total;
+        }
+    }
+}
+
+/*
+ * Residuals and Huber loss of every candidate in the round, one batch row per
+ * warp: X is read once for all candidates.  Each block writes its loss
+ * partials; the last block to finish folds them, and the term kernel's
+ * partials, into `results` in index order and resets the counter.
+ */
+template <typename T>
+__global__ void candidate_residual_loss_kernel(
+    const CandidateRoundParameters<T>* round_pointer,
+    const T* design,
+    const T* y,
+    const T* weights,
+    const T* candidates,
+    T* residuals,
+    double* loss_partials,
+    const double* term_partials,
+    double* results,
+    unsigned int* counter,
+    int64_t rows,
+    int64_t parameters,
+    int chunks,
+    T tau
+) {
+    const int width = round_pointer->width;
+    __shared__ double scratch[kRoundWarps];
+    __shared__ bool last_block;
+
+    double loss[kCandidateRoundWidth] = {0.0, 0.0, 0.0, 0.0};
+    // Called by the one thread that owns `row` once its dot products are done.
+    const auto finish_row = [&](int64_t row, const T* dot) {
+        const T target = y[row];
+#pragma unroll
+        for (int k = 0; k < kCandidateRoundWidth; ++k) {
+            if (k < width) {
+                const T residual = target - dot[k];
+                residuals[static_cast<int64_t>(k) * rows + row] = residual;
+                T value = huber_loss_value(residual, tau);
+                if (weights != nullptr) {
+                    value *= weights[row];
+                }
+                // Absolute like the cuBLAS asum this replaces; it only
+                // differs for a negative weight, which the estimator
+                // rejects but the raw C ABI does not.
+                loss[k] += static_cast<double>(value < static_cast<T>(0) ? -value : value);
+            }
+        }
+    };
+
+    // The layout depends on the shape only, never on the round width.
+    if (parameters <= kThreadRowMaxParameters) {
+        const int64_t stride = static_cast<int64_t>(gridDim.x) * blockDim.x;
+        for (int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; row < rows;
+             row += stride) {
+            T dot[kCandidateRoundWidth] = {};
+            const T* x = design + row * parameters;
+            for (int64_t column = 0; column < parameters; ++column) {
+                const T value = x[column];
+#pragma unroll
+                for (int k = 0; k < kCandidateRoundWidth; ++k) {
+                    if (k < width) {
+                        dot[k] += value * candidates[static_cast<int64_t>(k) * parameters + column];
+                    }
+                }
+            }
+            finish_row(row, dot);
+        }
+    } else {
+        const int lane = threadIdx.x % 32;
+        const int warp = threadIdx.x / 32;
+        const int64_t warp_stride = static_cast<int64_t>(gridDim.x) * kRoundWarps;
+        for (int64_t row = static_cast<int64_t>(blockIdx.x) * kRoundWarps + warp; row < rows;
+             row += warp_stride) {
+            T dot[kCandidateRoundWidth] = {};
+            const T* x = design + row * parameters;
+            for (int64_t column = lane; column < parameters; column += 32) {
+                const T value = x[column];
+#pragma unroll
+                for (int k = 0; k < kCandidateRoundWidth; ++k) {
+                    if (k < width) {
+                        dot[k] += value * candidates[static_cast<int64_t>(k) * parameters + column];
+                    }
+                }
+            }
+#pragma unroll
+            for (int k = 0; k < kCandidateRoundWidth; ++k) {
+                if (k < width) {
+                    for (int offset = 16; offset > 0; offset /= 2) {
+                        dot[k] += __shfl_down_sync(kFullWarp, dot[k], offset);
+                    }
+                }
+            }
+            if (lane == 0) {
+                finish_row(row, dot);
+            }
+        }
+    }
+
+    for (int k = 0; k < width; ++k) {
+        const double total = block_sum(loss[k], scratch);
+        if (threadIdx.x == 0) {
+            loss_partials[static_cast<int64_t>(k) * gridDim.x + blockIdx.x] = total;
+        }
+    }
+
+    // Classic last-block reduction: publish the partials, then count blocks.
+    __threadfence();
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        last_block = atomicAdd(counter, 1u) == gridDim.x - 1;
+    }
+    __syncthreads();
+    if (!last_block) {
+        return;
+    }
+    __threadfence();
+    for (int k = 0; k < width; ++k) {
+        // Thread t folds blocks t, t + 256, ... in order, then a fixed tree.
+        double partial = 0.0;
+        for (int64_t block = threadIdx.x; block < gridDim.x; block += kRoundThreads) {
+            partial += __ldcg(loss_partials + static_cast<int64_t>(k) * gridDim.x + block);
+        }
+        const double total = block_sum(partial, scratch);
+        if (threadIdx.x == 0) {
+            results[k * kCandidateRoundSlots] = total;
+        }
+    }
+    if (threadIdx.x < width * kCandidateRoundTermSlots) {
+        const int k = threadIdx.x / kCandidateRoundTermSlots;
+        const int term = threadIdx.x % kCandidateRoundTermSlots;
+        double total = 0.0;
+        for (int chunk = 0; chunk < chunks; ++chunk) {
+            total += term_partials[(static_cast<int64_t>(k) * chunks + chunk) * kCandidateRoundTermSlots + term];
+        }
+        results[k * kCandidateRoundSlots + 1 + term] = total;
+    }
+    if (threadIdx.x == 0) {
+        *counter = 0u;
+    }
 }
 
 template <typename T>
@@ -380,21 +603,6 @@ cudaError_t launch_weight_design(
 }
 
 template <typename T>
-cudaError_t launch_huber_loss(
-    const T* residual,
-    const T* weights,
-    T* loss,
-    int64_t count,
-    T tau,
-    cudaStream_t stream
-) {
-    huber_loss_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
-        residual, weights, loss, count, tau
-    );
-    return last_launch_error<T>();
-}
-
-template <typename T>
 cudaError_t launch_subtract(
     const T* left,
     const T* right,
@@ -460,21 +668,6 @@ cudaError_t launch_axpby(
 ) {
     axpby_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
         left, left_scale, right, right_scale, output, count
-    );
-    return last_launch_error<T>();
-}
-
-template <typename T>
-cudaError_t launch_candidate(
-    const T* beta,
-    const T* direction,
-    T step,
-    T* candidate,
-    int64_t count,
-    cudaStream_t stream
-) {
-    candidate_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
-        beta, direction, step, candidate, count
     );
     return last_launch_error<T>();
 }
@@ -551,19 +744,69 @@ cudaError_t launch_weighted_huber_score(
     return last_launch_error<T>();
 }
 
+int candidate_round_blocks(int64_t rows, int64_t parameters) {
+    const int64_t rows_per_block = parameters <= kThreadRowMaxParameters
+        ? static_cast<int64_t>(kRoundThreads)
+        : static_cast<int64_t>(kRoundWarps) * kRoundRowsPerWarp;
+    const int64_t blocks = (rows + rows_per_block - 1) / rows_per_block;
+    return static_cast<int>(std::max<int64_t>(1, std::min<int64_t>(blocks, kRoundMaxBlocks)));
+}
+
+int candidate_round_chunks(int64_t parameters) {
+    return static_cast<int>(std::max<int64_t>(1, (parameters + kRoundThreads - 1) / kRoundThreads));
+}
+
 template <typename T>
-cudaError_t launch_soft_threshold_candidate(
+cudaError_t launch_candidate_round(
+    const CandidateRoundBuffers<T>& buffers,
     const T* beta,
+    const T* direction,
     const T* gradient,
-    T inverse_phi,
-    T threshold,
-    T* candidate,
-    int64_t count,
+    const T* coefficients,
+    const T* information,
+    const T* penalty_sign,
+    const T* design,
+    const T* y,
+    const T* weights,
+    int64_t rows,
+    int64_t parameters,
     int64_t penalized_count,
+    T tau,
     cudaStream_t stream
 ) {
-    soft_threshold_candidate_kernel<<<blocks_for(count), kThreadsPerBlock, 0, stream>>>(
-        beta, gradient, inverse_phi, threshold, candidate, count, penalized_count
+    const int chunks = candidate_round_chunks(parameters);
+    candidate_terms_kernel<<<dim3(chunks, kCandidateRoundWidth), kRoundThreads, 0, stream>>>(
+        buffers.parameters,
+        beta,
+        direction,
+        gradient,
+        coefficients,
+        information,
+        penalty_sign,
+        buffers.candidates,
+        buffers.term_partials,
+        parameters,
+        penalized_count
+    );
+    const cudaError_t terms = cudaGetLastError();
+    if (terms != cudaSuccess) {
+        return terms;
+    }
+    candidate_residual_loss_kernel<<<candidate_round_blocks(rows, parameters), kRoundThreads, 0, stream>>>(
+        buffers.parameters,
+        design,
+        y,
+        weights,
+        buffers.candidates,
+        buffers.residuals,
+        buffers.loss_partials,
+        buffers.term_partials,
+        buffers.results,
+        buffers.counter,
+        rows,
+        parameters,
+        chunks,
+        tau
     );
     return last_launch_error<T>();
 }
@@ -587,12 +830,6 @@ template cudaError_t launch_weight_design<float>(
 );
 template cudaError_t launch_weight_design<double>(
     const double*, const double*, const double*, double*, int64_t, int64_t, cudaStream_t
-);
-template cudaError_t launch_huber_loss<float>(
-    const float*, const float*, float*, int64_t, float, cudaStream_t
-);
-template cudaError_t launch_huber_loss<double>(
-    const double*, const double*, double*, int64_t, double, cudaStream_t
 );
 template cudaError_t launch_subtract<float>(
     const float*, const float*, float*, int64_t, cudaStream_t
@@ -624,12 +861,6 @@ template cudaError_t launch_axpby<float>(
 template cudaError_t launch_axpby<double>(
     const double*, double, const double*, double, double*, int64_t, cudaStream_t
 );
-template cudaError_t launch_candidate<float>(
-    const float*, const float*, float, float*, int64_t, cudaStream_t
-);
-template cudaError_t launch_candidate<double>(
-    const double*, const double*, double, double*, int64_t, cudaStream_t
-);
 template cudaError_t launch_copy<float>(float*, const float*, int64_t, cudaStream_t);
 template cudaError_t launch_copy<double>(double*, const double*, int64_t, cudaStream_t);
 template cudaError_t launch_pseudoinverse_scale<float>(
@@ -658,11 +889,15 @@ template cudaError_t launch_weighted_huber_score<float>(
 template cudaError_t launch_weighted_huber_score<double>(
     const double*, const double*, double*, int64_t, double, cudaStream_t
 );
-template cudaError_t launch_soft_threshold_candidate<float>(
-    const float*, const float*, float, float, float*, int64_t, int64_t, cudaStream_t
+template cudaError_t launch_candidate_round<float>(
+    const CandidateRoundBuffers<float>&, const float*, const float*, const float*, const float*,
+    const float*, const float*, const float*, const float*, const float*, int64_t, int64_t,
+    int64_t, float, cudaStream_t
 );
-template cudaError_t launch_soft_threshold_candidate<double>(
-    const double*, const double*, double, double, double*, int64_t, int64_t, cudaStream_t
+template cudaError_t launch_candidate_round<double>(
+    const CandidateRoundBuffers<double>&, const double*, const double*, const double*,
+    const double*, const double*, const double*, const double*, const double*, const double*,
+    int64_t, int64_t, int64_t, double, cudaStream_t
 );
 
 }  // namespace rh_cuda
