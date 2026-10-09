@@ -22,6 +22,6 @@ num-traits = "0.2"
 # Dev-only. Pinned below 1.10, whose rust-version (1.84) exceeds the workspace
 # MSRV; the rust-msrv CI job checks every target, tests included, at 1.83.
 # Without `fork`/`timeout` there is no subprocess runner and no tempfile.
-proptest = { version = "~1.9", default-features = false, features = ["std"] }
+proptest = { version = "~1.11", default-features = false, features = ["std"] }
 pyo3 = { version = "0.29", features = ["extension-module"] }
 thiserror = "2.0"
