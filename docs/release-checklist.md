@@ -3,7 +3,7 @@
 ## 每次 release 前
 
 - [ ] 目標版本尚未存在於 PyPI／TestPyPI，對應 Git tag 與 GitHub Release 也不存在。
-- [ ] 本次發布使用 `0.7.0`（tag `v0.7.0`）；既有 tag（包括未成功發布的 `v0.6.0`）
+- [ ] 本次發布使用 `0.7.1`（tag `v0.7.1`）；既有 tag（包括未成功發布的 `v0.6.0`）
       一律不移動、不重用。
 - [ ] Base、native CPU、native CUDA 使用相同的 PEP 440 版本。
 - [ ] Native distributions 精確依賴同版 `renewable-huber==X.Y.Z`。

@@ -8,7 +8,7 @@ basis.
 
 | Version | Supported |
 | --- | --- |
-| 0.7.0 (latest 0.7 patch) | Yes |
+| 0.7.1 (latest 0.7 patch) | Yes |
 | latest `main` | Best effort |
 | 0.6.x and earlier | No |
 

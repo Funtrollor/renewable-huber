@@ -1,6 +1,6 @@
 # 架構
 
-v0.7.0 將「公開估計器」、「portable 陣列核心」與「native whole-batch engine」分離。NumPy、CuPy、PyTorch、TensorFlow 四個 portable backend 共用 Python 的 RHE Newton／RPSHE LAMM 更新邏輯；Rust CPU 與 Rust/CUDA engine 則透過明確 capability contract 接管整批更新。連同 `auto` 選擇器共有七個公開 backend 名稱；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
+v0.7.1 將「公開估計器」、「portable 陣列核心」與「native whole-batch engine」分離。NumPy、CuPy、PyTorch、TensorFlow 四個 portable backend 共用 Python 的 RHE Newton／RPSHE LAMM 更新邏輯；Rust CPU 與 Rust/CUDA engine 則透過明確 capability contract 接管整批更新。連同 `auto` 選擇器共有七個公開 backend 名稱；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
 
 後續 native engine 的正式邊界、相容性契約與遷移門檻已定義於
 [native-core RFC](native-core-rfc.md)；重構前的 golden corpus、shape sweep

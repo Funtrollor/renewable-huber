@@ -2,11 +2,11 @@
 
 Optional Rust/Rayon CPU engine for
 [`renewable-huber`](https://github.com/Funtrollor/renewable-huber). Version
-0.7.0 requires exactly `renewable-huber==0.7.0`; the base package owns the
+0.7.1 requires exactly `renewable-huber==0.7.1`; the base package owns the
 public estimator API, validation and portable checkpoint format.
 
 ```bash
-python -m pip install renewable-huber-native-cpu==0.7.0
+python -m pip install renewable-huber-native-cpu==0.7.1
 ```
 
 Release wheels support CPython 3.10–3.13 on Windows x86-64, manylinux2014

@@ -2,10 +2,10 @@
 
 Optional Rust/CUDA 12 engine for
 [`renewable-huber`](https://github.com/Funtrollor/renewable-huber). Version
-0.7.0 requires exactly `renewable-huber==0.7.0`.
+0.7.1 requires exactly `renewable-huber==0.7.1`.
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.7.0
+python -m pip install renewable-huber-native-cuda==0.7.1
 ```
 
 Release wheels cover CPython 3.10–3.13 on Windows x86-64 and Linux x86-64
