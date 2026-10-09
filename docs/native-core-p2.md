@@ -244,6 +244,68 @@ configuration, and BLAS provider; they are not portable headline numbers
 across machines. Native CUDA must pass the matched CuPy competitor parity gate
 under the same host/device transport before a calibration can recommend it.
 
+## P7 fixed-host breakdown (C ABI 2 / API 4)
+
+On 2026-10-09 the current engine (`f2dc7cb`, unchanged at the profiled
+`4373a82`) was profiled on the fixed RTX 5070 Ti host: driver 616.64, CUDA
+12.9, CPython 3.11.0, NumPy 2.4.6, CuPy 14.2.0, Nsight Systems 2025.3.2, PCIe
+5.0 x16. The desktop was in use; each capture's `nvidia-smi` compute clients
+and top CPU processes were recorded before and after it. Each configuration
+ran `scripts/profiling/run_nsight_systems.ps1 -Engine native_cuda` with the
+shape sweep's standard shapes, two warmups and three resident-engine repeats
+of the whole stream. `--phase-ranges` marks the estimator's prepare, update and
+commit phases, and `summarize_nsys_sqlite.py` (schema 2) assigns every instant
+of every `partial_fit` to exactly one class, so the classes add up to its wall
+time. The summaries are committed as
+`benchmarks/baselines/p7-windows-rtx5070ti-nsys-<configuration>.json`.
+
+| Configuration | ms per stream | Iterations per batch | GPU compute | H2D | Launch and sync¹ | Python and binding (input validation) | Launches per iteration | Syncs per iteration | Line-search candidates per iteration | H2D API / DMA per batch |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| latency f32 none host | 2.83 | 5.00 | 16% | 2% | 79% | 4% (2%) | 56 | 2.8 | 2.20 | 0.038 / 0.007 ms |
+| reference f32 none host | 11.36 | 3.75 | 24% | 14% | 44% | 18% (15%) | 52 | 2.6 | 2.00 | 0.390 / 0.337 ms |
+| reference f32 none device | 9.28 | 3.75 | 30% | 0% | 56% | 14% (11%) | 52 | 2.6 | 2.00 | — |
+| reference f64 none host | 37.44 | 3.75 | 70% | 8% | 14% | 8% (7%) | 50 | 2.5 | 1.87 | 0.769 / 0.703 ms |
+| reference f32 l1 host | 18.98 | 8.00 | 15% | 8% | 66% | 11% (9%) | 45 | 2.3 | 2.06 | 0.380 / 0.329 ms |
+| streaming f32 none host | 38.36 | 2.31 | 14% | 18% | 46% | 23% (19%) | 53 | 2.8 | 1.89 | 0.404 / 0.348 ms |
+| wide f32 none host | 11.05 | 3.00 | 31% | 7% | 52% | 10% (8%) | 68 | 3.8 | 3.00 | 0.177 / 0.132 ms |
+| wide f32 none host, `cuda_graphs=True` | 8.53 | 3.00 | 31% | 10% | 45% | 14% (10%) | 34 | 3.8 | 3.00 | 0.185 / 0.138 ms |
+
+¹ Includes device-to-host and device-to-device copies and memsets, which are
+0.3%–1.2% in every configuration.
+
+Nsight inflates API time: profiled latency costs 0.565 ms per iteration, the
+unprofiled p5 sweep about 0.47 ms. The shares are for prioritizing, not a
+prediction of the unprofiled speedup.
+
+What the breakdown shows:
+
+- **Launch and sync latency dominates every `float32` configuration (44%–79%).**
+  A Newton iteration issues 45–68 kernel launches at about 5 µs each under
+  Nsight, 0.28–0.32 ms of API time, while the GPU sits idle between them.
+- **The line search evaluates 1.9–3.0 candidates per iteration, and each costs
+  about 21 API calls and a stream synchronization.** Two patterns produce
+  them. The first iteration of a stream starts from zero coefficients, and its
+  Newton step overshoots far: reference needs 8 step sizes, wide 11 and then
+  9, latency 4 and 4. In warm `float32` batches the second iteration often
+  backtracks one to five more times, because the `float32` cuBLAS `asum`
+  objective cannot resolve the remaining decrease. Together the extra
+  candidates are roughly 12%–28% of the wall time.
+- **Pageable host-to-device copies are not the bottleneck they look like.**
+  The API time per batch is only 13%–16% above the DMA time (23 GB/s against
+  27 GB/s on reference), so the driver's own staging is already efficient. H2D
+  is 14%–18% of host-input `float32` time.
+- **`float64` is compute-bound.** Kernels are 70% of its wall time; one
+  `float64` Gram GEMM takes 980 µs.
+- **The fixed cost of a `partial_fit` call is small.** The Python core and the
+  PyO3 entry before the first CUDA call take 0.011–0.033 ms, decoding the
+  result 0.015–0.032 ms and committing it 0.009–0.018 ms. The final
+  synchronization waits 2–3 µs, and the state export's device-to-host copy is
+  within the under-1.2% "other copies" share. Input validation
+  (`np.isfinite` over the batch) is most of the Python column at 0.21–0.65 ms
+  per batch; it is outside this work and only recorded.
+- `cuda_graphs=True` halves the launches on wide and cuts its stream time by
+  23% under Nsight.
+
 ## Rollback and lifetime rules
 
 - Destruction of `NativeCudaEngine` releases device allocations and CUDA
