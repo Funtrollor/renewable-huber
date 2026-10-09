@@ -115,7 +115,7 @@ no case is slower, and native CUDA stays faster than CuPy everywhere. The
 four `float32` L1 cases change iteration counts by more than one, so the
 strict A/B gates do not pass; with the iteration limit relaxed to 11 on the
 maintainer's instruction, cold passes and steady fails only three
-relative-MAD cases; [native-core P2](native-core-p2.md#p7-fixed-host-breakdown-c-abi-2-api-4)
+relative-MAD cases; [native-core P2](native-core-p2.md#p7-fixed-host-breakdown-c-abi-2--api-4)
 has the breakdown, the per-iteration times and the rejected alternatives.
 The A/B records are
 `benchmarks/baselines/p7-windows-rtx5070ti-native-cuda-ab-{cold,steady}-*.json`.
