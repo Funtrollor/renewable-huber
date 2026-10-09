@@ -128,15 +128,40 @@ loop reuses the accepted candidate residual.
 ## Optimized schema-v2 baseline
 
 The current fixed-runner record is
-[`p3-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json).
+[`p6-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-v2.json),
+captured at `be8984a` after the post-0.7.0 engine optimizations below, with
+its gate report
+[`p6-windows-ryzen9900x-native-cpu-v2-gate.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-v2-gate.json).
 It uses identical cold lifecycles for both engines, three warmups, nine
-measured samples, 0.25 seconds of fixed block work per sample, NumPy 2.4.6,
-and a 24-thread Rayon pool. It covers all four standard shapes, both dtypes,
-both penalties, and both public operations (`fit` and `partial_fit`).
+measured samples, 0.5 seconds of fixed block work per sample, CPython 3.11.0,
+NumPy 2.4.6 (scipy-openblas 0.3.31), and a 24-thread Rayon pool. It covers all
+four standard shapes, both dtypes, both penalties, and both public operations
+(`fit` and `partial_fit`).
 
 The strict competitor and 5% relative-MAD gate passed all 32 Native/NumPy
 pairs with `--max-competitor-slowdown 1.0`. NumPy/native median speedup ranged
-from 1.17x to 15.65x, with a 1.68x median. The implementation uses size-gated Rayon
+from 1.38x to 7.86x, with a 1.81x median; the largest native relative MAD was
+3.8%. A first capture with 0.25-second samples had three pairs at 6.6%-9.7%
+relative MAD, so the whole sweep was recaptured with 0.5-second samples rather
+than more repeats. The host was a desktop in light use during the capture
+(browser, chat client, game launcher); the processes using the most CPU were
+recorded before and after each run, and together they averaged well under one
+of the 24 hardware threads.
+
+The wide unpenalized ratios are lower than in the previous record
+(3.06x-7.86x against 6.19x-15.65x) because the NumPy reference got faster, not
+because native got slower. With the same NumPy and OpenBLAS, the NumPy wide
+`none` medians fell to 0.31x-0.47x of the earlier record's, after the backend
+and solver changes since that capture, while native fell to 0.71x-0.79x.
+Every other pair kept or widened its native advantage (median 1.15x the
+earlier ratio).
+
+The previous record,
+[`p3-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json)
+(`8c631ab`, 0.25-second samples, 1.17x-15.65x, median 1.68x), is kept as a
+historical record.
+
+The implementation uses size-gated Rayon
 row partitions for residuals and gradients, and reduces multiple
 matrixmultiply SIMD Gram blocks without nested thread pools. Partial Gram
 scratch is capped at 64 MiB; smaller workloads stay on a row-major serial
@@ -209,5 +234,54 @@ the VM has the usual cloud noise of roughly ±10%. Every case was faster:
 | streaming (1,000,000 × 32) | 1.32x-1.69x | 1.51x-1.58x |
 
 Each range covers both dtypes and both penalties. The median was 1.41x on one
-thread and 1.54x on four. A schema-v2 fixed-runner capture is still needed
-before these figures replace the committed baseline above.
+thread and 1.54x on four.
+
+The fixed Ryzen 9 9900X runner then repeated the comparison through the public
+estimator with `run_interleaved_benchmark.py --freeze-sample-repetitions`:
+`v0.7.0` (`53b5f20`) against `be8984a`, standard profile, `--backend cpu`,
+both penalties and dtypes, `partial_fit`, nine aligned rounds, three warmups,
+the default 24-thread pool, CPython 3.11.0 and NumPy 2.4.6 on both sides. Both
+records report native ABI 1 / API 2, so no native-version option was used.
+The records are
+[`p6-windows-ryzen9900x-native-cpu-ab-cold-gate.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-ab-cold-gate.json)
+and
+[`p6-windows-ryzen9900x-native-cpu-ab-steady-gate.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-ab-steady-gate.json),
+each with its merged baseline and candidate records and frozen sample plan.
+Speedup below is `baseline / candidate`, the inverse of the gate's paired
+median:
+
+| Shape | cold | steady | 4-vCPU VM, engine only, 4 threads |
+| --- | --- | --- | --- |
+| latency (4,096 × 16) | 1.25x-1.30x | 1.18x-1.28x | 1.23x-2.06x |
+| reference (100,000 × 90) | 1.04x-1.27x | 1.03x-1.25x | 1.40x-2.11x |
+| wide (16,384 × 256) | 1.14x-1.64x | 1.20x-1.66x | 1.09x-1.85x |
+| streaming (1,000,000 × 32) | 0.99x-1.09x | 1.02x-1.11x | 1.51x-1.58x |
+
+The medians were 1.21x (cold) and 1.18x (steady). Within the ±10% noise band
+of this host, ten cold and twelve steady cases are faster; the rest show no
+measurable difference, and no case is slower. The cases without a measurable
+difference are reference float64 (both penalties cold, unpenalized steady) and
+every streaming case except steady float32 unpenalized.
+
+The VM column measures something narrower and is not directly comparable: it
+called `NativeCpuEngine.update` on prebuilt design matrices, while the fixed
+runner timed the public estimator. The estimator also runs the Python-side
+batch preparation (`np.isfinite` over the batch, and the `column_stack` copy
+that appends the intercept), which is single-threaded and which these
+optimizations deliberately left alone. On the VM that preparation was already
+about a fifth of a streaming `partial_fit` at four threads. With 24 threads
+the engine's share of an update shrinks further, so the unchanged
+preparation takes a larger share, and the end-to-end gain on the long narrow
+reference and streaming batches is diluted the most. Native stayed 1.4x-8.2x faster than NumPy in every case of both
+captures.
+
+Neither gate passed. In both lifecycles, the three float32 L1 cases with
+several batches failed `median solver iterations differ`: reference 26 -> 28,
+streaming 56 -> 51, wide 48 -> 45 (summed over the stream's batches). That is
+the expected effect of the new `dot` summation order near `tol`, not a
+slowdown, and the `--max-iteration-delta 1` limit was not changed. Per
+iteration, the candidate took 0.73x-0.75x (reference), 0.995x-1.015x (streaming) and
+0.62x-0.66x (wide) of the baseline's time. In the steady capture, wide float32
+L1 also exceeded the 5% MAD limit on the candidate side (5.02%, one 26 ms
+sample among 19-22 ms ones). Every other case passed every check, including
+competitor parity against NumPy.

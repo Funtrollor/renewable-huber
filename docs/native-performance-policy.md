@@ -88,14 +88,33 @@ estimator per repeat. They remain useful for investigation but cannot be used
 as a schema-v2 pass/fail baseline.
 
 The approved CPU schema-v2 baseline is
-[`p3-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json).
-Its strict native/reference gate passes all 32 standard combinations across
-shape, penalty, dtype, and public operation using 0.25-second samples. The
-approved CUDA baseline is
+[`p6-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-v2.json),
+captured at `be8984a` with the post-0.7.0 Rust CPU engine. Its strict
+native/reference gate
+([`p6-windows-ryzen9900x-native-cpu-v2-gate.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-v2-gate.json))
+passes all 32 standard combinations across shape, penalty, dtype, and public
+operation using 0.5-second samples: NumPy/native 1.38x-7.86x, median 1.81x.
+The first capture used 0.25-second samples and three pairs exceeded the 5%
+relative MAD; the sweep was recaptured with longer samples, not more repeats.
+It was taken on the fixed host while the desktop was in light use; the
+processes using the most CPU before and after each run are recorded in the
+pull request that added it. The earlier
+[`p3-windows-ryzen9900x-native-cpu-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-ryzen9900x-native-cpu-v2.json)
+(1.17x-15.65x, median 1.68x, 0.25-second samples) is historical; see
+[P1](native-core-p1.md#optimized-schema-v2-baseline) for why the wide
+unpenalized ratios are lower now. The approved CUDA baseline is
 [`p3-windows-rtx5070ti-native-cuda-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-rtx5070ti-native-cuda-v2.json).
 It passes all 16 host-input and all 16 device-input CuPy comparisons using
-0.5-second samples. Both records use three warmups and nine measured samples;
-a result captured while another workload is active must not be promoted.
+0.5-second samples. Both records use three warmups and nine measured samples.
+
+A result captured while another benchmark, build or test suite runs on the
+host must not be promoted. The fixed host is also the maintainer's desktop,
+and light interactive use during a capture (browser, chat, launchers) is
+acceptable on two conditions: the processes using the most CPU (or, for GPU
+captures, the GPU clients) are recorded before and after each run and kept
+with the evidence, and the record passes its relative-MAD gate unchanged. A
+capture that misses the MAD gate is recaptured with longer samples, never
+accepted by relaxing the limit.
 
 Two N5 fixed-host baselines were added for native CUDA at C ABI 2 / Python
 API 4 on the same RTX 5070 Ti host. No threshold changed for either. The
