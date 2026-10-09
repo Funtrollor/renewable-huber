@@ -234,6 +234,16 @@ report; these are the ones worth memorising.
   container would make the glibc tag untrue. `scripts/native/build_linux_cuda_wheel.sh`
   also fails on any `NEEDED` entry outside the declared runtime closure. CI and
   the release run that same script; keep it that way.
+- **A line-search round's arithmetic must not depend on the round width.**
+  `launch_candidate_round` (`native/cuda/src/huber_kernels.cu`) sizes its
+  grids from the batch shape alone, computes each candidate with the same
+  threads in the same order whatever `width` is, and folds partial sums in
+  index order. That is what lets `pipeline.cu` pick round widths purely for
+  speed and keeps `cuda_graphs=True` bit-identical to the stream path. A grid
+  that depends on the width, or atomic accumulation, still passes the golden
+  corpus, whose tolerances absorb it; results just stop being reproducible.
+  Only `NativeCudaTuningTests`' `assert_array_equal` of graph against strict
+  notices, and only when the two paths happen to differ.
 - **`CUDA_SEPARABLE_COMPILATION` must stay `OFF` in `native/cuda/CMakeLists.txt`.**
   Turning it on routes every architecture through nvlink, which emits SASS only.
   The device-linked image the runtime registers then has no PTX, so the

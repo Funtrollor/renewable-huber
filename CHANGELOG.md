@@ -10,6 +10,17 @@ stabilised.
 
 ### Changed
 
+- The native CUDA engine's `partial_fit` is faster: 1.58x in the median cold
+  case and 1.69x in the median steady case on the fixed RTX 5070 Ti host,
+  with no case slower than before. Nsight showed launch and synchronization
+  latency dominating, with the line search evaluating up to 11 candidates per
+  Newton iteration at about 21 API calls each. A fused round now evaluates up
+  to four candidates in two kernels and one synchronization, and accepts the
+  first in step order as before. Its sums accumulate in double in a fixed
+  order, so results are deterministic and `cuda_graphs=True` (which now
+  captures the round) stays bit-identical to the stream path; against 0.7.0
+  they change at rounding level, and `float32` L1 iteration counts can move.
+  No C ABI, contract or public default changed. See `docs/native-core-p2.md`.
 - The Rust CPU engine is faster on every standard shape that engages its
   thread pool. Four changes, each measured against the 0.7.0 engine; see
   `docs/native-core-p1.md` for the measurements and the rejected alternative:

@@ -103,6 +103,23 @@ strict execution by default. See [P4 native CUDA tuning](native-core-p4.md) for
 the public flags, error contract, fallback rules, benchmark, and Nsight
 reproduction commands.
 
+## P7: native CUDA line-search rounds
+
+An Nsight breakdown of the ABI 2 engine on the fixed host found launch and
+synchronization latency dominating every `float32` configuration, with the
+line search evaluating 1.9–3.0 candidates per Newton iteration at about 21
+API calls each. The engine now evaluates up to four candidates per fused
+round with one synchronization. Against the 0.7.0-era `main` it is 1.58x
+faster in the median cold case and 1.69x in the median steady case,
+no case is slower, and native CUDA stays faster than CuPy everywhere. The
+four `float32` L1 cases change iteration counts by more than one, so the
+strict A/B gates do not pass; with the iteration limit relaxed to 11 on the
+maintainer's instruction, cold passes and steady fails only three
+relative-MAD cases; [native-core P2](native-core-p2.md#p7-fixed-host-breakdown-c-abi-2-api-4)
+has the breakdown, the per-iteration times and the rejected alternatives.
+The A/B records are
+`benchmarks/baselines/p7-windows-rtx5070ti-native-cuda-ab-{cold,steady}-*.json`.
+
 ## N5 fixed-host results for native CUDA
 
 All N5 records were captured on the Windows host with an RTX 5070 Ti
