@@ -32,6 +32,19 @@ constexpr int kMaxBacktracks = 26;
 constexpr int kMaxProximalAttempts = 40;
 
 /*
+ * Round widths.  Speculating is not free: a round of four reads X once but
+ * does four candidates' dot products, which shows on float64, where the GPU is
+ * compute-bound.  A Newton search therefore opens with the full step alone
+ * unless it is expected to backtrack -- the first iteration from an empty
+ * state, whose step overshoots far, or any iteration after one that
+ * backtracked.  LAMM halves phi after every accepted step and often doubles it
+ * straight back, so it opens with two curvatures.  Every later round is full
+ * width.  The width never changes a value, only how many rounds it takes.
+ */
+constexpr int kNewtonOpeningWidth = 1;
+constexpr int kProximalOpeningWidth = 2;
+
+/*
  * Damped Newton for penalty NONE.  Each line-search round evaluates the next
  * kCandidateRoundWidth step sizes together; the first accepted one in step
  * order wins, exactly as if they had been tried one at a time, and a round's
@@ -62,6 +75,7 @@ SolveOutcome solve_unpenalized(
     rounds.evaluate<T>(rows, weights, tau, n_total, terms, CandidateRound{}, evaluated);
     outcome.objective = evaluated[0].objective;
     const T* residual = rounds.residual<T>(rows, 0);
+    bool expect_backtracking = engine->n_samples_seen == 0;
 
     for (int iteration = 1; iteration <= static_cast<int>(config->max_iter); ++iteration) {
         compute_gradient_hessian<T>(
@@ -86,7 +100,10 @@ SolveOutcome solve_unpenalized(
         while (backtrack <= kMaxBacktracks) {
             CandidateRound round;
             round.form = rh_cuda::kCandidateNewton;
-            round.width = std::min(rh_cuda::kCandidateRoundWidth, kMaxBacktracks + 1 - backtrack);
+            const int width = backtrack == 0 && !expect_backtracking
+                ? kNewtonOpeningWidth
+                : rh_cuda::kCandidateRoundWidth;
+            round.width = std::min(width, kMaxBacktracks + 1 - backtrack);
             for (int k = 0; k < round.width; ++k) {
                 round.scale[k] = std::ldexp(1.0, -(backtrack + k));
             }
@@ -129,6 +146,7 @@ SolveOutcome solve_unpenalized(
         outcome.residual = residual;
         outcome.objective = evaluated[accepted].objective;
         outcome.iterations = iteration;
+        expect_backtracking = backtrack + accepted > 0;
         if (evaluated[accepted].difference_norm <=
             config->tolerance * (1.0 + evaluated[accepted].beta_norm)) {
             outcome.converged = true;
@@ -206,7 +224,8 @@ SolveOutcome solve_l1(
         for (int attempt = 0; attempt < kMaxProximalAttempts && accepted < 0;) {
             CandidateRound round;
             round.form = rh_cuda::kCandidateProximal;
-            round.width = std::min(rh_cuda::kCandidateRoundWidth, kMaxProximalAttempts - attempt);
+            const int width = attempt == 0 ? kProximalOpeningWidth : rh_cuda::kCandidateRoundWidth;
+            round.width = std::min(width, kMaxProximalAttempts - attempt);
             double curvature[rh_cuda::kCandidateRoundWidth] = {};
             double next_phi = phi;
             for (int k = 0; k < round.width; ++k) {
