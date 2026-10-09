@@ -8,6 +8,28 @@ stabilised.
 
 ## [Unreleased]
 
+### Changed
+
+- The Rust CPU engine is faster on every standard shape that engages its
+  thread pool. Four changes, each measured against the 0.7.0 engine; see
+  `docs/native-core-p1.md` for the measurements and the rejected alternative:
+  - the row-chunked gradient (all L1 batches, and narrow unpenalized ones)
+    now accumulates into worker-local buffers. In place, neighbouring
+    workers wrote the same cache line on every row, and the loop did not
+    speed up with threads at all;
+  - Newton iterations reuse the residual the accepted line-search trial
+    already computed, as L1 iterations did, instead of recomputing `X @ beta`;
+  - the weighted Gram matrix is built 256 rows at a time through a
+    cache-resident scratch block, reading the batch once instead of writing
+    and re-reading a full `n * p` weighted copy. That workspace is gone;
+  - `dot` keeps eight independent partial sums, so the residual and
+    prediction row kernels vectorize.
+
+  The first three are bitwise identical to 0.7.0. The `dot` change fixes a
+  different, still deterministic summation order, so native CPU coefficients
+  and information matrices differ from 0.7.0 in the last bits; the golden
+  corpora and their tolerances are unchanged.
+
 ## [0.7.0] - 2026-10-03
 
 This minor release breaks the native CUDA interface: C ABI 2 and Python API 4

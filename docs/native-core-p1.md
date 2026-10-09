@@ -143,3 +143,71 @@ scratch is capped at 64 MiB; smaller workloads stay on a row-major serial
 gradient fast path. Large L1 gradients use contiguous row chunks and private
 thread accumulators. The extension also marks its returned result arrays as
 detached so the Python adapter does not copy the information matrix twice.
+
+## Post-0.7.0 engine optimizations
+
+An Amdahl decomposition of the 0.7.0 engine, timed per phase at one, two and
+four threads, showed that the code written as serial (dense solve, per-row
+Huber loops, `p^2` terms, input validation) was only 1%-11% of an update.
+The poor scaling came from elsewhere, and four changes address it. Python-side
+batch validation was deliberately left alone.
+
+- **False sharing in the row-chunked gradient.** Each worker accumulated its
+  p-wide partial gradient in place inside one shared `Vec`. Because
+  `p * size_of::<T>()` is rarely a multiple of 64 bytes, neighbouring workers
+  wrote the cache line they shared on every row, and this phase ran at
+  0.7x-1.2x on four threads. A worker-local accumulator, copied out once,
+  brings it to 2.2x-3.0x. The per-element summation order is unchanged.
+- **Redundant Newton residual.** `gradient_and_hessian` recomputed
+  `y - X @ beta`, although the preceding objective evaluation (the initial
+  one, or the accepted line-search trial) had just left exactly that
+  residual in the workspace. That was about one of every 3.5 full passes over
+  `X` per iteration. L1 already reused it.
+- **Gram memory traffic.** The weighted Gram matrix was two full passes:
+  scale every row into an `n * p` workspace, then read `X` and that
+  workspace back for GEMM. It is now built `GRAM_ROW_CHUNK = 256` rows at a
+  time: weight a block into cache-resident scratch, then accumulate its
+  product straight into the output. The weighting plus GEMM measured
+  1.2x-2.0x faster on one thread, and the `n * p` workspace is gone.
+  matrixmultiply already splits the row dimension into `KC = 256` blocks and
+  accumulates them in order, so a chunk of exactly that size reproduces a
+  whole-range GEMM bit for bit.
+  `tests.rs::chunked_gram_is_bitwise_identical_to_one_gemm` enforces it.
+- **Vectorized `dot`.** A single running sum is a chain of dependent
+  floating-point adds that the compiler may not reorder, so it could not
+  vectorize the residual and prediction row kernels. Eight independent
+  lanes, combined pairwise, make those kernels 1.3x-3.3x (f64) and 2x-4.9x
+  (f32) faster on a single thread. Sixteen lanes and an AVX build measured
+  no better.
+
+The first three are bitwise identical to 0.7.0, which was checked by hashing
+the coefficients and information matrices of three batches of every standard
+shape, dtype and penalty at one, two and four threads. The `dot` change fixes
+a different summation order. It is still deterministic and independent of
+the host and of the thread count, but native CPU results now differ from 0.7.0
+in the last bits. Some float32 L1 streams take one or two more or fewer
+iterations near `tol`. The golden corpora and their tolerances are unchanged.
+
+**Rejected: a triangular Gram product.** The Gram matrix is symmetric, so
+multiplying each 16-128-row block only against the columns from its diagonal
+onwards halves the arithmetic. With matrixmultiply this measured 0.43x-1.24x
+of a single full GEMM, usually slower. Each call repacks a long panel of the
+weighted design, and at these shapes the product is limited by reading the
+two `n * p` operands, not by multiply-adds. The full GEMM was kept.
+
+An interleaved A/B on a 4-vCPU x86-64 cloud VM compared the 0.7.0 engine with
+the optimized one. It called `NativeCpuEngine.update` directly over the
+standard-profile stream for each shape, from an empty state, taking the
+median of seven alternating rounds. This is not the fixed Ryzen runner, and
+the VM has the usual cloud noise of roughly ±10%. Every case was faster:
+
+| Shape | 1 thread | 4 threads |
+| --- | --- | --- |
+| latency (4,096 × 16) | 1.08x-1.18x | 1.23x-2.06x |
+| reference (100,000 × 90) | 1.30x-2.01x | 1.40x-2.11x |
+| wide (16,384 × 256) | 1.20x-2.43x | 1.09x-1.85x |
+| streaming (1,000,000 × 32) | 1.32x-1.69x | 1.51x-1.58x |
+
+Each range covers both dtypes and both penalties. The median was 1.41x on one
+thread and 1.54x on four. A schema-v2 fixed-runner capture is still needed
+before these figures replace the committed baseline above.

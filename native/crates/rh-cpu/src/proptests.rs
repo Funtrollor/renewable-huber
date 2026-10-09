@@ -361,7 +361,7 @@ fn check_weighted_gram<T: CpuScalar>(
     weighted_gram(
         view,
         &curvature_t,
-        &mut workspace.weighted_design,
+        &mut workspace.weighted_rows,
         &mut workspace.partial_grams,
         &mut workspace.gram,
     )
