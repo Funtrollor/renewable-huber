@@ -44,7 +44,7 @@ invariants it introduces are in the list below.
   an ignored `.claude/` file.
 - Structural refactors must not change an algorithm, a kernel order, stream
   behaviour, or a public API. The committed schema-v2 baselines are CPU
-1.17x–15.65x (median 1.68x), CUDA host 1.04x–1.96x (median 1.35x), and CUDA
+1.38x–7.86x (median 1.81x), CUDA host 1.04x–1.96x (median 1.35x), and CUDA
 DLPack 1.06x–2.04x (median 1.53x). Differences within about 10% on this GPU are
 noise, not a performance claim. The golden corpus must stay bit-identical.
 

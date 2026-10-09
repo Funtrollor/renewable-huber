@@ -29,6 +29,20 @@ stabilised.
   different, still deterministic summation order, so native CPU coefficients
   and information matrices differ from 0.7.0 in the last bits; the golden
   corpora and their tolerances are unchanged.
+- The approved CPU schema-v2 baseline is now
+  `benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-v2.json`, captured on
+  the fixed Ryzen 9 9900X runner with the optimized engine: NumPy/native
+  1.38x-7.86x (median 1.81x) across all 32 cases, gate passed with 0.5-second
+  samples. `p3-windows-ryzen9900x-native-cpu-v2.json` stays as history. The
+  wide unpenalized ratios are lower than before because the NumPy reference
+  became faster there, while native also got faster.
+- A fixed-host interleaved A/B against `v0.7.0` (cold and steady,
+  `--freeze-sample-repetitions`, records under `benchmarks/baselines/`)
+  measured the optimized engine 1.21x (cold) and 1.18x (steady) faster at the
+  median, with no case slower. Neither gate passed: three float32 L1 cases
+  take a different number of solver iterations after the `dot` change
+  (difference 2-5, limit 1), and in the steady capture one of them also
+  exceeded the 5% MAD limit (5.02%).
 
 ## [0.7.0] - 2026-10-03
 
