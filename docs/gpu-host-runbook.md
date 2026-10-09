@@ -173,7 +173,10 @@ This is an interleaved A/B of the pre-L1 engine against the current one:
 - **Candidate:** current `main`.
 
 Each side needs its own clone and its own venv, with the native CUDA
-extension built from that clone's own sources. ABI 1 Python code cannot load
+extension built from that clone's own sources. Keep the baseline worktree
+inside this repository under `artifacts\worktrees\` (ignored by Git), never
+beside it: the host's maintainer does not want working copies created
+outside the repository folder. ABI 1 Python code cannot load
 an ABI 2 extension, or the reverse. Create the baseline venv with the same
 Python version as the candidate's (see §0), and pin NumPy, SciPy and CuPy to
 the candidate's versions: the gate fingerprints the Python, NumPy and CuPy
@@ -181,15 +184,15 @@ versions, and an unpinned install picks whatever is newest that day.
 
 ```powershell
 $pins = & .\.venv\Scripts\python.exe -c "import importlib.metadata as m; print(' '.join(f'{p}=={m.version(p)}' for p in ('numpy', 'scipy', 'cupy-cuda12x')))"
-git worktree add ..\rh-baseline fca7b83
-Push-Location ..\rh-baseline
+git worktree add artifacts\worktrees\rh-baseline fca7b83
+Push-Location artifacts\worktrees\rh-baseline
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,gpu-cupy]" "maturin>=1.8,<2" $pins.Split(' ')
 .\scripts\native\build_native_cuda.ps1 -Python (Resolve-Path .\.venv\Scripts\python.exe).Path
 Pop-Location
 
 .\.venv\Scripts\python.exe scripts/benchmarks/run_interleaved_benchmark.py `
-  --baseline-python ..\rh-baseline\.venv\Scripts\python.exe --baseline-repo ..\rh-baseline `
+  --baseline-python artifacts\worktrees\rh-baseline\.venv\Scripts\python.exe --baseline-repo artifacts\worktrees\rh-baseline `
   --candidate-python .\.venv\Scripts\python.exe --candidate-repo . `
   --output-dir artifacts/n5-none-ab --profile standard --backend gpu `
   --penalty none --dtype both --lifecycle cold --operation partial-fit --rounds 9 `
