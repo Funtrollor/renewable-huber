@@ -250,7 +250,7 @@ each with its merged baseline and candidate records and frozen sample plan.
 Speedup below is `baseline / candidate`, the inverse of the gate's paired
 median:
 
-| Shape | cold | steady | 4-vCPU VM, 4 threads |
+| Shape | cold | steady | 4-vCPU VM, engine only, 4 threads |
 | --- | --- | --- | --- |
 | latency (4,096 × 16) | 1.25x-1.30x | 1.18x-1.28x | 1.23x-2.06x |
 | reference (100,000 × 90) | 1.04x-1.27x | 1.03x-1.25x | 1.40x-2.11x |
@@ -261,10 +261,18 @@ The medians were 1.21x (cold) and 1.18x (steady). Within the ±10% noise band
 of this host, ten cold and twelve steady cases are faster; the rest show no
 measurable difference, and no case is slower. The cases without a measurable
 difference are reference float64 (both penalties cold, unpenalized steady) and
-every streaming case except steady float32 unpenalized. The fixed runner
-gains less than the VM on reference and streaming: with 24 threads, the
-OpenBLAS-backed and memory-bound phases dominate more of an update than on
-four vCPUs. Native stayed 1.4x-8.2x faster than NumPy in every case of both
+every streaming case except steady float32 unpenalized.
+
+The VM column measures something narrower and is not directly comparable: it
+called `NativeCpuEngine.update` on prebuilt design matrices, while the fixed
+runner timed the public estimator. The estimator also runs the Python-side
+batch preparation (`np.isfinite` over the batch, and the `column_stack` copy
+that appends the intercept), which is single-threaded and which these
+optimizations deliberately left alone. On the VM that preparation was already
+about a fifth of a streaming `partial_fit` at four threads. With 24 threads
+the engine's share of an update shrinks further, so the unchanged
+preparation takes a larger share, and the end-to-end gain on the long narrow
+reference and streaming batches is diluted the most. Native stayed 1.4x-8.2x faster than NumPy in every case of both
 captures.
 
 Neither gate passed. In both lifecycles, the three float32 L1 cases with

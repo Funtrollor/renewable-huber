@@ -105,8 +105,16 @@ pull request that added it. The earlier
 unpenalized ratios are lower now. The approved CUDA baseline is
 [`p3-windows-rtx5070ti-native-cuda-v2.json`](https://github.com/Funtrollor/renewable-huber/blob/main/benchmarks/baselines/p3-windows-rtx5070ti-native-cuda-v2.json).
 It passes all 16 host-input and all 16 device-input CuPy comparisons using
-0.5-second samples. Both records use three warmups and nine measured samples;
-a result captured while another workload is active must not be promoted.
+0.5-second samples. Both records use three warmups and nine measured samples.
+
+A result captured while another benchmark, build or test suite runs on the
+host must not be promoted. The fixed host is also the maintainer's desktop,
+and light interactive use during a capture (browser, chat, launchers) is
+acceptable on two conditions: the processes using the most CPU (or, for GPU
+captures, the GPU clients) are recorded before and after each run and kept
+with the evidence, and the record passes its relative-MAD gate unchanged. A
+capture that misses the MAD gate is recaptured with longer samples, never
+accepted by relaxing the limit.
 
 Two N5 fixed-host baselines were added for native CUDA at C ABI 2 / Python
 API 4 on the same RTX 5070 Ti host. No threshold changed for either. The
