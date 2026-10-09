@@ -3,15 +3,15 @@ message: "If you use this software, please cite both the software and the prefer
 title: "renewable-huber"
 type: software
 license: "Apache-2.0"
-version: "0.7.0"
-date-released: "2026-10-03"
+version: "0.7.1"
+date-released: "2026-10-09"
 authors:
   - name: "Funtrollor"
 repository-code: "https://github.com/Funtrollor/renewable-huber"
 url: "https://github.com/Funtrollor/renewable-huber"
 identifiers:
   - type: url
-    value: "https://pypi.org/project/renewable-huber/0.7.0/"
+    value: "https://pypi.org/project/renewable-huber/0.7.1/"
     description: "PyPI release"
 abstract: >-
   A CPU- and GPU-capable implementation of renewable Huber regression for

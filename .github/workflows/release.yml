@@ -411,7 +411,7 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "${artifacts[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${artifacts[@]}" \
-              --verify-tag --generate-notes --notes-start-tag v0.6.1 \
+              --verify-tag --generate-notes --notes-start-tag v0.7.0 \
               --title "renewable-huber $GITHUB_REF_NAME"
           fi
 

@@ -14,8 +14,8 @@
 同時驗證來源 metadata 與最終 wheels。
 
 `v0.6.0` tag 曾用於未完成的發布流程，沒有成為正式 PyPI release。既有 tag 一律不可變，
-不移動、不重用。本次發布使用 `v0.7.0`；GitHub Release notes 從上一個正式 release
-`v0.6.1` 開始產生（`release.yml` 的 `--notes-start-tag`），每次發布都要把它改成上一個
+不移動、不重用。本次發布使用 `v0.7.1`；GitHub Release notes 從上一個正式 release
+`v0.7.0` 開始產生（`release.yml` 的 `--notes-start-tag`），每次發布都要把它改成上一個
 正式 release 的 tag。
 
 ## Wheel 支援範圍
@@ -125,14 +125,14 @@ publisher（或既有 project publisher）的 owner、repository、workflow 與 
 CPU 使用者：
 
 ```bash
-python -m pip install renewable-huber-native-cpu==0.7.0
+python -m pip install renewable-huber-native-cpu==0.7.1
 python -c "from renewable_huber import RenewableHuberRegressor; print(RenewableHuberRegressor(backend='native_cpu', n_jobs=-1))"
 ```
 
 CUDA 12 使用者：
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.7.0
+python -m pip install renewable-huber-native-cuda==0.7.1
 python -c "from renewable_huber import _native_cuda; print(_native_cuda.version()); print(_native_cuda.is_available())"
 ```
 

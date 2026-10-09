@@ -8,6 +8,12 @@ stabilised.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-09
+
+This patch release makes both native engines faster. No public API, C ABI,
+native Python API or checkpoint format changed; native CPU and CUDA results
+change at rounding level, and `float32` L1 iteration counts can move.
+
 ### Changed
 
 - The native CUDA engine's `partial_fit` is faster: 1.58x in the median cold
@@ -328,7 +334,8 @@ retained as an immutable historical record rather than moved or reused.
 
 - Documented private vulnerability reporting and supported-version policy.
 
-[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.1...v0.6.1
 [0.5.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...v0.5.1
