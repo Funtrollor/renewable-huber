@@ -66,9 +66,15 @@ $summarizer = Join-Path $PSScriptRoot "summarize_nsys_sqlite.py"
 $tuningArguments = @()
 if ($CudaGraphs) { $tuningArguments += "--cuda-graphs" }
 if ($CudaFastMath) { $tuningArguments += "--cuda-fast-math" }
+# Node-level graph tracing. With the default graph-level trace, Nsight
+# Systems 2025.1.3 and 2025.3.2 hang at 0% importing a capture whose graphs
+# contain a pinned host-to-device memcpy node (the native line-search round).
+$graphTrace = @()
+if ($CudaGraphs) { $graphTrace += "--cuda-graph-trace=node" }
 
 & $profilerPath profile `
     --trace=cuda,nvtx,cublas,cusolver `
+    @graphTrace `
     --stats=true `
     --force-overwrite=true `
     --output=$reportPrefix `
