@@ -344,10 +344,16 @@ def summarize(
     breakdown = _breakdown(database, bounds, metadata)
     database.close()
 
+    try:
+        # Relative like the committed p0/p2 summaries, so a record does not
+        # carry the capturing machine's home directory.
+        source = str(report.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        source = str(report)
     return {
         "schema": "renewable-huber-nsys-summary",
         "schema_version": 2,
-        "source": str(report),
+        "source": source,
         "nvtx": {
             "range_prefix": range_prefix,
             "range_count": range_count,
