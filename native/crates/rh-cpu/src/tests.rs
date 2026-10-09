@@ -6,10 +6,11 @@
 
 use serde_json::Value;
 
-use crate::kernels::gram::weighted_gram;
+use crate::kernels::gram::{weighted_gram, GRAM_ROW_CHUNK};
+use crate::kernels::vector::{dot, DOT_LANES};
 use crate::scalar::CpuScalar;
 use crate::workspace::Workspace;
-use crate::{predict, CpuEngine, PARALLEL_VECTOR_WORK};
+use crate::{predict, CpuEngine, PARALLEL_GRAM_WORK, PARALLEL_VECTOR_WORK};
 use rh_core::{BatchView, CoreError, Diagnostics, Penalty, State, UpdateConfig};
 
 const GOLDEN_CORPUS: &str = include_str!("../../../../tests/golden/native_core_v1.json");
@@ -39,7 +40,7 @@ fn rank_deficient_case_uses_minimum_norm_fallback() {
 
 #[test]
 fn public_gemm_dispatch_rejects_invalid_buffer_shapes() {
-    let error = f64::weighted_gram_gemm(&[1.0, 2.0], &[1.0, 2.0], 1, 2, &mut [0.0])
+    let error = f64::weighted_gram_gemm(&[1.0, 2.0], &[1.0, 2.0], 1, 2, &mut [0.0], false)
         .expect_err("a short output buffer must be rejected before unsafe GEMM");
     assert!(matches!(error, CoreError::InvalidBatch(_)));
 }
@@ -76,7 +77,7 @@ fn parallel_weighted_gram_matches_direct_weighted_sum() {
             weighted_gram(
                 batch,
                 &curvature,
-                &mut workspace.weighted_design,
+                &mut workspace.weighted_rows,
                 &mut workspace.partial_grams,
                 &mut workspace.gram,
             )
@@ -377,4 +378,158 @@ fn assert_close(actual: f64, expected: f64, rtol: f64, atol: f64, field: &str) {
         "{field}: actual={actual:?}, expected={expected:?}, difference={difference:?}, \
          allowed={allowed:?}"
     );
+}
+
+/// The whole-range product the chunked Gram must reproduce: weight every row,
+/// then one GEMM per worker row range, reduced in worker order.
+fn reference_gram<T: CpuScalar>(
+    x: &[T],
+    weights: &[T],
+    n_rows: usize,
+    p: usize,
+    workers: usize,
+) -> Vec<T> {
+    let weighted = x
+        .chunks_exact(p)
+        .zip(weights.iter())
+        .flat_map(|(row, weight)| row.iter().map(move |value| *value * *weight))
+        .collect::<Vec<_>>();
+    let mut output = vec![T::zero(); p * p];
+    let rows_per_worker = n_rows.div_ceil(workers.max(1));
+    let mut partial = vec![T::zero(); p * p];
+    for worker in 0..workers.max(1) {
+        let start = (worker * rows_per_worker).min(n_rows);
+        let end = (start + rows_per_worker).min(n_rows);
+        if start == end {
+            partial.fill(T::zero());
+        } else {
+            T::weighted_gram_gemm(
+                &x[start * p..end * p],
+                &weighted[start * p..end * p],
+                end - start,
+                p,
+                &mut partial,
+                false,
+            )
+            .unwrap();
+        }
+        if workers <= 1 {
+            return partial;
+        }
+        for (total, value) in output.iter_mut().zip(partial.iter()) {
+            *total += *value;
+        }
+    }
+    output
+}
+
+fn check_chunked_gram<T: CpuScalar>(n_rows: usize, p: usize, threads: usize) {
+    let x = (0..n_rows * p)
+        .map(|index| T::from_f64((((index * 7919) % 1009) as f64 - 504.0) / 97.3).unwrap())
+        .collect::<Vec<_>>();
+    let curvature = (0..n_rows)
+        .map(|row| T::from_f64(0.13 + ((row * 31) % 17) as f64 / 7.1).unwrap())
+        .collect::<Vec<_>>();
+    let y = vec![T::zero(); n_rows];
+    let batch = BatchView {
+        x_design: &x,
+        n_rows,
+        n_parameters: p,
+        y: &y,
+        sample_weight: None,
+        batch_weight: n_rows as f64,
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut workspace = Workspace::<T>::default();
+            workspace.reserve(n_rows, p).unwrap();
+            let workers = workspace.partial_grams.len() / (p * p);
+            weighted_gram(
+                batch,
+                &curvature,
+                &mut workspace.weighted_rows,
+                &mut workspace.partial_grams,
+                &mut workspace.gram,
+            )
+            .unwrap();
+            let parallel = workers > 1 && n_rows * p * p >= PARALLEL_GRAM_WORK;
+            let expected = reference_gram(
+                &x,
+                &curvature,
+                n_rows,
+                p,
+                if parallel { workers } else { 1 },
+            );
+            let bits = |values: &[T]| {
+                values
+                    .iter()
+                    .map(|value| value.to_f64().unwrap().to_bits())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                bits(&workspace.gram),
+                bits(&expected),
+                "n_rows={n_rows} p={p} threads={threads}"
+            );
+        });
+}
+
+#[test]
+fn chunked_gram_is_bitwise_identical_to_one_gemm() {
+    // Serial path: several full chunks plus a ragged tail, and a batch
+    // shorter than one chunk.
+    for (n_rows, p) in [
+        (3 * GRAM_ROW_CHUNK + 77, 13),
+        (GRAM_ROW_CHUNK - 5, 9),
+        (1, 4),
+    ] {
+        check_chunked_gram::<f64>(n_rows, p, 1);
+        check_chunked_gram::<f32>(n_rows, p, 1);
+    }
+    // Partitioned path: each worker range is itself chunked.
+    let p = 64;
+    let n_rows = PARALLEL_GRAM_WORK.div_ceil(p * p) + 333;
+    check_chunked_gram::<f64>(n_rows, p, 4);
+    check_chunked_gram::<f32>(n_rows, p, 3);
+}
+
+#[test]
+fn dot_lanes_cover_every_length_and_stop_at_the_shorter_slice() {
+    let values = (0..4 * DOT_LANES + 3)
+        .map(|index| ((index * 37) % 23) as f64 / 7.0 - 1.5)
+        .collect::<Vec<_>>();
+    for length in 0..values.len() {
+        let left = &values[..length];
+        let right = values
+            .iter()
+            .rev()
+            .take(length)
+            .copied()
+            .collect::<Vec<_>>();
+        let expected = left
+            .iter()
+            .zip(right.iter())
+            .map(|(a, b)| a * b)
+            .sum::<f64>();
+        let magnitude = left
+            .iter()
+            .zip(right.iter())
+            .map(|(a, b)| (a * b).abs())
+            .sum::<f64>();
+        let actual = dot(left, &right);
+        assert!(
+            (actual - expected).abs() <= 4.0 * f64::EPSILON * (length as f64 + 1.0) * magnitude,
+            "length {length}: {actual} vs {expected}"
+        );
+        assert_eq!(actual.to_bits(), dot(&right, left).to_bits());
+        // A longer right-hand side contributes nothing past the left's end.
+        assert_eq!(
+            actual.to_bits(),
+            dot(left, &[right.as_slice(), &[9.0; 5]].concat()).to_bits()
+        );
+    }
+    assert_eq!(dot::<f64>(&[], &[1.0]), 0.0);
 }

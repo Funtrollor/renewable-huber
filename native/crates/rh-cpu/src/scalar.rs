@@ -9,7 +9,9 @@ use rh_core::{CoreError, Scalar};
 
 /// Scalar supported by the CPU implementation.
 pub trait CpuScalar: Scalar + RealField {
-    /// Compute `X.T @ weighted_design` from two borrowed row-major matrices.
+    /// Compute `X.T @ weighted_design` from two borrowed row-major matrices,
+    /// adding it to `output` when `accumulate` is set and overwriting
+    /// `output` otherwise.
     #[doc(hidden)]
     fn weighted_gram_gemm(
         x_design: &[Self],
@@ -17,6 +19,7 @@ pub trait CpuScalar: Scalar + RealField {
         n_rows: usize,
         n_parameters: usize,
         output: &mut [Self],
+        accumulate: bool,
     ) -> Result<(), CoreError>;
 }
 
@@ -27,6 +30,7 @@ impl CpuScalar for f32 {
         n_rows: usize,
         n_parameters: usize,
         output: &mut [Self],
+        accumulate: bool,
     ) -> Result<(), CoreError> {
         let stride =
             validate_gemm_buffers(x_design, weighted_design, n_rows, n_parameters, output)?;
@@ -45,7 +49,7 @@ impl CpuScalar for f32 {
                 weighted_design.as_ptr(),
                 stride,
                 1,
-                0.0,
+                if accumulate { 1.0 } else { 0.0 },
                 output.as_mut_ptr(),
                 stride,
                 1,
@@ -62,6 +66,7 @@ impl CpuScalar for f64 {
         n_rows: usize,
         n_parameters: usize,
         output: &mut [Self],
+        accumulate: bool,
     ) -> Result<(), CoreError> {
         let stride =
             validate_gemm_buffers(x_design, weighted_design, n_rows, n_parameters, output)?;
@@ -79,7 +84,7 @@ impl CpuScalar for f64 {
                 weighted_design.as_ptr(),
                 stride,
                 1,
-                0.0,
+                if accumulate { 1.0 } else { 0.0 },
                 output.as_mut_ptr(),
                 stride,
                 1,
