@@ -452,7 +452,10 @@ __global__ void candidate_residual_loss_kernel(
                     if (weights != nullptr) {
                         value *= weights[row];
                     }
-                    loss[k] += static_cast<double>(value);
+                    // Absolute like the cuBLAS asum this replaces; it only
+                    // differs for a negative weight, which the estimator
+                    // rejects but the raw C ABI does not.
+                    loss[k] += static_cast<double>(value < static_cast<T>(0) ? -value : value);
                 }
             }
         }

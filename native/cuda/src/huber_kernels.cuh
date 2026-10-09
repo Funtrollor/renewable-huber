@@ -158,7 +158,8 @@ cudaError_t launch_weighted_huber_score(
  * whatever the round width, and every reduction runs in a fixed order over a
  * grid that depends only on the batch shape. Which candidates share a round
  * therefore never changes a result bit, and repeated runs are bit-identical.
- * Sums are accumulated in double for both dtypes.
+ * The X c and J delta products accumulate in T like the cuBLAS calls they
+ * replace; every reduction across rows or coefficients accumulates in double.
  */
 constexpr int kCandidateRoundWidth = 4;
 
