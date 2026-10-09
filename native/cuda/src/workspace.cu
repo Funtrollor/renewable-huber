@@ -270,7 +270,8 @@ void ensure_batch_capacity(RhCudaEngine* engine, int64_t rows) {
     );
     allocate<double>(
         &engine->d_round_loss_partials,
-        round_width * static_cast<size_t>(rh_cuda::candidate_round_blocks(rows)),
+        round_width *
+            static_cast<size_t>(rh_cuda::candidate_round_blocks(rows, engine->n_parameters)),
         "line-search round loss partials",
         engine->stream,
         engine->stream_ordered_allocations,

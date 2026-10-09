@@ -262,6 +262,11 @@ constexpr int kRoundThreads = 256;
 constexpr int kRoundWarps = kRoundThreads / 32;
 constexpr int kRoundMaxBlocks = 1024;
 constexpr int kRoundRowsPerWarp = 4;
+/// Up to this many coefficients a thread computes a whole row's dot products
+/// alone. A warp per row would spend its time in the shuffle reduction, which
+/// costs a warp-wide add per level and candidate -- ruinous for float64, which
+/// this GPU class runs at 1/64 of the float32 rate.
+constexpr int64_t kThreadRowMaxParameters = 64;
 constexpr unsigned kFullWarp = 0xffffffffu;
 
 template <typename T>
@@ -414,66 +419,84 @@ __global__ void candidate_residual_loss_kernel(
     T tau
 ) {
     const int width = round_pointer->width;
-    const int lane = threadIdx.x % 32;
-    const int warp = threadIdx.x / 32;
     __shared__ double scratch[kRoundWarps];
-    __shared__ double warp_loss[kRoundWarps][kCandidateRoundWidth];
     __shared__ bool last_block;
 
     double loss[kCandidateRoundWidth] = {0.0, 0.0, 0.0, 0.0};
-    const int64_t warp_stride = static_cast<int64_t>(gridDim.x) * kRoundWarps;
-    for (int64_t row = static_cast<int64_t>(blockIdx.x) * kRoundWarps + warp; row < rows;
-         row += warp_stride) {
-        T dot[kCandidateRoundWidth] = {};
-        const T* x = design + row * parameters;
-        for (int64_t column = lane; column < parameters; column += 32) {
-            const T value = x[column];
-#pragma unroll
-            for (int k = 0; k < kCandidateRoundWidth; ++k) {
-                if (k < width) {
-                    dot[k] += value * candidates[static_cast<int64_t>(k) * parameters + column];
-                }
-            }
-        }
+    // Called by the one thread that owns `row` once its dot products are done.
+    const auto finish_row = [&](int64_t row, const T* dot) {
+        const T target = y[row];
 #pragma unroll
         for (int k = 0; k < kCandidateRoundWidth; ++k) {
-            for (int offset = 16; offset > 0; offset /= 2) {
-                dot[k] += __shfl_down_sync(kFullWarp, dot[k], offset);
+            if (k < width) {
+                const T residual = target - dot[k];
+                residuals[static_cast<int64_t>(k) * rows + row] = residual;
+                T value = huber_loss_value(residual, tau);
+                if (weights != nullptr) {
+                    value *= weights[row];
+                }
+                // Absolute like the cuBLAS asum this replaces; it only
+                // differs for a negative weight, which the estimator
+                // rejects but the raw C ABI does not.
+                loss[k] += static_cast<double>(value < static_cast<T>(0) ? -value : value);
             }
         }
-        if (lane == 0) {
-            const T target = y[row];
+    };
+
+    // The layout depends on the shape only, never on the round width.
+    if (parameters <= kThreadRowMaxParameters) {
+        const int64_t stride = static_cast<int64_t>(gridDim.x) * blockDim.x;
+        for (int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; row < rows;
+             row += stride) {
+            T dot[kCandidateRoundWidth] = {};
+            const T* x = design + row * parameters;
+            for (int64_t column = 0; column < parameters; ++column) {
+                const T value = x[column];
+#pragma unroll
+                for (int k = 0; k < kCandidateRoundWidth; ++k) {
+                    if (k < width) {
+                        dot[k] += value * candidates[static_cast<int64_t>(k) * parameters + column];
+                    }
+                }
+            }
+            finish_row(row, dot);
+        }
+    } else {
+        const int lane = threadIdx.x % 32;
+        const int warp = threadIdx.x / 32;
+        const int64_t warp_stride = static_cast<int64_t>(gridDim.x) * kRoundWarps;
+        for (int64_t row = static_cast<int64_t>(blockIdx.x) * kRoundWarps + warp; row < rows;
+             row += warp_stride) {
+            T dot[kCandidateRoundWidth] = {};
+            const T* x = design + row * parameters;
+            for (int64_t column = lane; column < parameters; column += 32) {
+                const T value = x[column];
+#pragma unroll
+                for (int k = 0; k < kCandidateRoundWidth; ++k) {
+                    if (k < width) {
+                        dot[k] += value * candidates[static_cast<int64_t>(k) * parameters + column];
+                    }
+                }
+            }
 #pragma unroll
             for (int k = 0; k < kCandidateRoundWidth; ++k) {
                 if (k < width) {
-                    const T residual = target - dot[k];
-                    residuals[static_cast<int64_t>(k) * rows + row] = residual;
-                    T value = huber_loss_value(residual, tau);
-                    if (weights != nullptr) {
-                        value *= weights[row];
+                    for (int offset = 16; offset > 0; offset /= 2) {
+                        dot[k] += __shfl_down_sync(kFullWarp, dot[k], offset);
                     }
-                    // Absolute like the cuBLAS asum this replaces; it only
-                    // differs for a negative weight, which the estimator
-                    // rejects but the raw C ABI does not.
-                    loss[k] += static_cast<double>(value < static_cast<T>(0) ? -value : value);
                 }
+            }
+            if (lane == 0) {
+                finish_row(row, dot);
             }
         }
     }
 
-    if (lane == 0) {
-#pragma unroll
-        for (int k = 0; k < kCandidateRoundWidth; ++k) {
-            warp_loss[warp][k] = loss[k];
+    for (int k = 0; k < width; ++k) {
+        const double total = block_sum(loss[k], scratch);
+        if (threadIdx.x == 0) {
+            loss_partials[static_cast<int64_t>(k) * gridDim.x + blockIdx.x] = total;
         }
-    }
-    __syncthreads();
-    if (threadIdx.x < width) {
-        double total = 0.0;
-        for (int index = 0; index < kRoundWarps; ++index) {
-            total += warp_loss[index][threadIdx.x];
-        }
-        loss_partials[static_cast<int64_t>(threadIdx.x) * gridDim.x + blockIdx.x] = total;
     }
 
     // Classic last-block reduction: publish the partials, then count blocks.
@@ -721,8 +744,10 @@ cudaError_t launch_weighted_huber_score(
     return last_launch_error<T>();
 }
 
-int candidate_round_blocks(int64_t rows) {
-    const int64_t rows_per_block = static_cast<int64_t>(kRoundWarps) * kRoundRowsPerWarp;
+int candidate_round_blocks(int64_t rows, int64_t parameters) {
+    const int64_t rows_per_block = parameters <= kThreadRowMaxParameters
+        ? static_cast<int64_t>(kRoundThreads)
+        : static_cast<int64_t>(kRoundWarps) * kRoundRowsPerWarp;
     const int64_t blocks = (rows + rows_per_block - 1) / rows_per_block;
     return static_cast<int>(std::max<int64_t>(1, std::min<int64_t>(blocks, kRoundMaxBlocks)));
 }
@@ -767,7 +792,7 @@ cudaError_t launch_candidate_round(
     if (terms != cudaSuccess) {
         return terms;
     }
-    candidate_residual_loss_kernel<<<candidate_round_blocks(rows), kRoundThreads, 0, stream>>>(
+    candidate_residual_loss_kernel<<<candidate_round_blocks(rows, parameters), kRoundThreads, 0, stream>>>(
         buffers.parameters,
         design,
         y,

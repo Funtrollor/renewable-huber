@@ -193,9 +193,10 @@ struct CandidateRoundParameters {
     T threshold[kCandidateRoundWidth];
 };
 
-/// Residual-kernel blocks for a batch of `rows`. A function of the shape
-/// alone, so the reduction order never depends on the device or the round.
-int candidate_round_blocks(int64_t rows);
+/// Residual-kernel blocks for a batch of `rows` x `parameters`. A function of
+/// the shape alone, so the reduction order never depends on the device or the
+/// round.
+int candidate_round_blocks(int64_t rows, int64_t parameters);
 
 /// Term-kernel blocks per candidate for `parameters` coefficients.
 int candidate_round_chunks(int64_t parameters);
@@ -209,7 +210,7 @@ struct CandidateRoundBuffers {
     T* residuals;
     /// kCandidateRoundWidth x candidate_round_chunks(p) x kCandidateRoundTermSlots.
     double* term_partials;
-    /// kCandidateRoundWidth x candidate_round_blocks(rows).
+    /// kCandidateRoundWidth x candidate_round_blocks(rows, p).
     double* loss_partials;
     /// kCandidateRoundWidth x kCandidateRoundSlots.
     double* results;
