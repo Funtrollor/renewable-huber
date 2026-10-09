@@ -21,9 +21,22 @@ struct SolveOutcome {
     bool converged = false;
     double objective = 0.0;
     bool used_fallback = false;
-    bool residual_is_current = true;
+    /// Residual of d_trial_beta, left by the last accepted round; null when
+    /// the solve stopped without accepting, so it must be recomputed.
+    const void* residual = nullptr;
 };
 
+/// The Newton line search tries steps 2^0 .. 2^-kMaxBacktracks.
+constexpr int kMaxBacktracks = 26;
+/// The LAMM search tries at most this many curvatures phi, 2 phi, ...
+constexpr int kMaxProximalAttempts = 40;
+
+/*
+ * Damped Newton for penalty NONE.  Each line-search round evaluates the next
+ * kCandidateRoundWidth step sizes together; the first accepted one in step
+ * order wins, exactly as if they had been tried one at a time, and a round's
+ * width never changes a candidate's value (see huber_kernels.cuh).
+ */
 template <typename T>
 SolveOutcome solve_unpenalized(
     RhCudaEngine* engine,
@@ -42,19 +55,20 @@ SolveOutcome solve_unpenalized(
         "initialize Newton coefficients"
     );
 
+    CandidateRoundEvaluator rounds(engine);
+    const ObjectiveTerms<T> terms;
+    ObjectiveResult evaluated[rh_cuda::kCandidateRoundWidth];
     SolveOutcome outcome;
-    outcome.objective = smooth_objective<T>(
-        engine, rows, typed<T>(engine->d_trial_beta), weights, tau, n_total
-    ).objective;
-    CandidateObjectiveGraph candidate_graph(engine);
-    ObjectiveTerms<T> candidate_terms;
-    candidate_terms.previous_beta = typed<T>(engine->d_trial_beta);
+    rounds.evaluate<T>(rows, weights, tau, n_total, terms, CandidateRound{}, evaluated);
+    outcome.objective = evaluated[0].objective;
+    const T* residual = rounds.residual<T>(rows, 0);
 
     for (int iteration = 1; iteration <= static_cast<int>(config->max_iter); ++iteration) {
         compute_gradient_hessian<T>(
             engine,
             rows,
             typed<T>(engine->d_trial_beta),
+            residual,
             weights,
             tau,
             bandwidth,
@@ -67,66 +81,56 @@ SolveOutcome solve_unpenalized(
             &outcome.used_fallback
         );
 
-        bool accepted = false;
-        outcome.residual_is_current = false;
-        double candidate_objective = outcome.objective;
-        ObjectiveResult candidate_result;
+        int accepted = -1;
         int backtrack = 0;
-        while (backtrack <= 26) {
-            const T step = std::ldexp(static_cast<T>(1), -backtrack);
-            check_cuda(
-                rh_cuda::launch_candidate(
-                    typed<T>(engine->d_trial_beta),
-                    typed<T>(engine->d_direction),
-                    step,
-                    typed<T>(engine->d_candidate),
-                    parameters,
-                    engine->stream
-                ),
-                "form line-search candidate"
-            );
-            candidate_result = candidate_graph.evaluate<T>(
-                rows,
-                typed<T>(engine->d_candidate),
-                weights,
-                tau,
-                n_total,
-                candidate_terms
-            );
-            candidate_objective = candidate_result.objective;
+        while (backtrack <= kMaxBacktracks) {
+            CandidateRound round;
+            round.form = rh_cuda::kCandidateNewton;
+            round.width = std::min(rh_cuda::kCandidateRoundWidth, kMaxBacktracks + 1 - backtrack);
+            for (int k = 0; k < round.width; ++k) {
+                round.scale[k] = std::ldexp(1.0, -(backtrack + k));
+            }
+            rounds.evaluate<T>(rows, weights, tau, n_total, terms, round, evaluated);
             if (cholesky_status_pending) {
                 cholesky_status_pending = false;
                 if (!cholesky_candidate_is_valid<T>(engine, &outcome.used_fallback)) {
                     // POTRF failed. LU/SVD has replaced the tentative
-                    // direction; discard this candidate and restart the line
-                    // search from a full step without advancing the counter.
+                    // direction; discard this round and restart the line
+                    // search from a full step.
                     backtrack = 0;
                     continue;
                 }
             }
-            if (candidate_objective <= outcome.objective) {
-                accepted = true;
+            for (int k = 0; k < round.width; ++k) {
+                if (evaluated[k].objective <= outcome.objective) {
+                    accepted = k;
+                    break;
+                }
+            }
+            if (accepted >= 0) {
                 break;
             }
-            ++backtrack;
+            backtrack += round.width;
         }
-        if (!accepted) {
+        if (accepted < 0) {
             outcome.iterations = iteration;
             outcome.converged = false;
+            outcome.residual = nullptr;
             return outcome;
         }
 
         check_cuda(
             rh_cuda::launch_copy(
-                typed<T>(engine->d_trial_beta), typed<T>(engine->d_candidate), parameters, engine->stream
+                typed<T>(engine->d_trial_beta), rounds.candidate<T>(accepted), parameters, engine->stream
             ),
             "commit accepted Newton candidate to workspace"
         );
-        outcome.residual_is_current = true;
-        outcome.objective = candidate_objective;
+        residual = rounds.residual<T>(rows, accepted);
+        outcome.residual = residual;
+        outcome.objective = evaluated[accepted].objective;
         outcome.iterations = iteration;
-        if (candidate_result.difference_norm <=
-            config->tolerance * (1.0 + candidate_result.beta_norm)) {
+        if (evaluated[accepted].difference_norm <=
+            config->tolerance * (1.0 + evaluated[accepted].beta_norm)) {
             outcome.converged = true;
             return outcome;
         }
@@ -142,10 +146,12 @@ SolveOutcome solve_unpenalized(
  * of curvature phi, soft-threshold every coordinate except the trailing
  * intercept, double phi until the candidate's smooth objective sits under
  * the majorizer, then halve phi (floored at 1e-8) after an accepted step.
+ * A round evaluates the next kCandidateRoundWidth curvatures together and
+ * accepts the first that satisfies the bound, as the sequential search would.
  *
- * The residual resident in d_residual always belongs to d_trial_beta at the
- * top of an iteration: the initial objective evaluates it, and every accepted
- * candidate objective re-establishes it for the next gradient.
+ * The residual a round leaves for its accepted candidate always belongs to
+ * d_trial_beta at the top of an iteration: the initial round evaluates it, and
+ * every accepted candidate re-establishes it for the next gradient.
  */
 template <typename T>
 SolveOutcome solve_l1(
@@ -168,18 +174,19 @@ SolveOutcome solve_l1(
         "initialize proximal coefficients"
     );
 
-    ObjectiveTerms<T> base_terms;
-    base_terms.penalty_sign = penalty_sign;
-    base_terms.penalty_scale = penalty_scale;
+    // Every round of the update shares these terms, including the initial
+    // one, whose copy form neither reads nor reduces the gradient.
+    ObjectiveTerms<T> terms;
+    terms.gradient = typed<T>(engine->d_gradient);
+    terms.penalty_sign = penalty_sign;
+    terms.penalty_scale = penalty_scale;
+    terms.penalized_count = penalized_count;
+    CandidateRoundEvaluator rounds(engine);
+    ObjectiveResult evaluated[rh_cuda::kCandidateRoundWidth];
     SolveOutcome outcome;
-    outcome.objective = smooth_objective<T>(
-        engine, rows, typed<T>(engine->d_trial_beta), weights, tau, n_total, base_terms
-    ).objective;
-
-    CandidateObjectiveGraph candidate_graph(engine);
-    ObjectiveTerms<T> candidate_terms = base_terms;
-    candidate_terms.previous_beta = typed<T>(engine->d_trial_beta);
-    candidate_terms.gradient = typed<T>(engine->d_gradient);
+    rounds.evaluate<T>(rows, weights, tau, n_total, terms, CandidateRound{}, evaluated);
+    outcome.objective = evaluated[0].objective;
+    const T* residual = rounds.residual<T>(rows, 0);
     double phi = 1.0;
 
     for (int iteration = 1; iteration <= static_cast<int>(config->max_iter); ++iteration) {
@@ -187,6 +194,7 @@ SolveOutcome solve_l1(
             engine,
             rows,
             typed<T>(engine->d_trial_beta),
+            residual,
             weights,
             tau,
             n_total,
@@ -194,57 +202,55 @@ SolveOutcome solve_l1(
             penalty_scale
         );
 
-        bool accepted = false;
-        outcome.residual_is_current = false;
-        ObjectiveResult candidate_result;
-        for (int attempt = 0; attempt < 40; ++attempt) {
-            check_cuda(
-                rh_cuda::launch_soft_threshold_candidate(
-                    typed<T>(engine->d_trial_beta),
-                    typed<T>(engine->d_gradient),
-                    static_cast<T>(1.0 / phi),
-                    static_cast<T>(lambda_value / phi),
-                    typed<T>(engine->d_candidate),
-                    parameters,
-                    penalized_count,
-                    engine->stream
-                ),
-                "form proximal candidate"
-            );
-            candidate_result = candidate_graph.evaluate<T>(
-                rows,
-                typed<T>(engine->d_candidate),
-                weights,
-                tau,
-                n_total,
-                candidate_terms
-            );
-            const double upper_bound = outcome.objective + candidate_result.gradient_dot +
-                0.5 * phi * candidate_result.difference_norm * candidate_result.difference_norm;
-            if (candidate_result.objective <= upper_bound + 1.0e-12) {
-                accepted = true;
-                break;
+        int accepted = -1;
+        for (int attempt = 0; attempt < kMaxProximalAttempts && accepted < 0;) {
+            CandidateRound round;
+            round.form = rh_cuda::kCandidateProximal;
+            round.width = std::min(rh_cuda::kCandidateRoundWidth, kMaxProximalAttempts - attempt);
+            double curvature[rh_cuda::kCandidateRoundWidth] = {};
+            double next_phi = phi;
+            for (int k = 0; k < round.width; ++k) {
+                curvature[k] = next_phi;
+                round.scale[k] = 1.0 / next_phi;
+                round.threshold[k] = lambda_value / next_phi;
+                next_phi *= 2.0;
             }
-            phi *= 2.0;
+            rounds.evaluate<T>(rows, weights, tau, n_total, terms, round, evaluated);
+            for (int k = 0; k < round.width; ++k) {
+                const double upper_bound = outcome.objective + evaluated[k].gradient_dot +
+                    0.5 * curvature[k] * evaluated[k].difference_norm *
+                        evaluated[k].difference_norm;
+                if (evaluated[k].objective <= upper_bound + 1.0e-12) {
+                    accepted = k;
+                    phi = curvature[k];
+                    break;
+                }
+            }
+            if (accepted < 0) {
+                phi = next_phi;
+            }
+            attempt += round.width;
         }
-        if (!accepted) {
+        if (accepted < 0) {
             outcome.iterations = iteration;
             outcome.converged = false;
+            outcome.residual = nullptr;
             return outcome;
         }
 
         check_cuda(
             rh_cuda::launch_copy(
-                typed<T>(engine->d_trial_beta), typed<T>(engine->d_candidate), parameters, engine->stream
+                typed<T>(engine->d_trial_beta), rounds.candidate<T>(accepted), parameters, engine->stream
             ),
             "commit accepted proximal candidate to workspace"
         );
-        outcome.residual_is_current = true;
-        outcome.objective = candidate_result.objective;
+        residual = rounds.residual<T>(rows, accepted);
+        outcome.residual = residual;
+        outcome.objective = evaluated[accepted].objective;
         outcome.iterations = iteration;
         phi = std::max(phi * 0.5, 1.0e-8);
-        if (candidate_result.difference_norm <=
-            config->tolerance * (1.0 + candidate_result.beta_norm)) {
+        if (evaluated[accepted].difference_norm <=
+            config->tolerance * (1.0 + evaluated[accepted].beta_norm)) {
             outcome.converged = true;
             return outcome;
         }
@@ -405,10 +411,10 @@ RhCudaStatus update_typed(
     final_information<T>(
         engine,
         static_cast<int>(batch.n_rows),
+        static_cast<const T*>(outcome.residual),
         weights,
         static_cast<T>(config->tau),
-        static_cast<T>(bandwidth),
-        outcome.residual_is_current
+        static_cast<T>(bandwidth)
     );
     if (l1) {
         // The reported objective adds lambda * ||beta||_1 over the penalized

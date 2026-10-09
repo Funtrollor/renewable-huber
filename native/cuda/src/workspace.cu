@@ -1,5 +1,6 @@
 #include "blas_traits.cuh"
 #include "engine_internal.cuh"
+#include "huber_kernels.cuh"
 #include "workspace.cuh"
 
 #include <cuda_runtime_api.h>
@@ -23,9 +24,7 @@ RhCudaEngine::~RhCudaEngine() noexcept {
     release(d_information, stream, stream_ordered_allocations);
     release(d_information_next, stream, stream_ordered_allocations);
     release(d_trial_beta, stream, stream_ordered_allocations);
-    release(d_candidate, stream, stream_ordered_allocations);
     release(d_delta, stream, stream_ordered_allocations);
-    release(d_history_vector, stream, stream_ordered_allocations);
     release(d_gradient, stream, stream_ordered_allocations);
     release(d_penalty_sign, stream, stream_ordered_allocations);
     release(d_direction, stream, stream_ordered_allocations);
@@ -39,6 +38,11 @@ RhCudaEngine::~RhCudaEngine() noexcept {
     release(d_factor_work, stream, stream_ordered_allocations);
     release(d_svd_work, stream, stream_ordered_allocations);
     release(d_reduction_results, stream, stream_ordered_allocations);
+    release(d_round_parameters, stream, stream_ordered_allocations);
+    release(d_round_candidates, stream, stream_ordered_allocations);
+    release(d_round_term_partials, stream, stream_ordered_allocations);
+    release(d_round_results, stream, stream_ordered_allocations);
+    release(d_round_counter, stream, stream_ordered_allocations);
     void* pivots = d_pivots;
     release(pivots, stream, stream_ordered_allocations);
     d_pivots = nullptr;
@@ -51,8 +55,9 @@ RhCudaEngine::~RhCudaEngine() noexcept {
     release(d_residual, stream, stream_ordered_allocations);
     release(d_score, stream, stream_ordered_allocations);
     release(d_curvature, stream, stream_ordered_allocations);
-    release(d_loss, stream, stream_ordered_allocations);
     release(d_weighted_design, stream, stream_ordered_allocations);
+    release(d_round_residuals, stream, stream_ordered_allocations);
+    release(d_round_loss_partials, stream, stream_ordered_allocations);
     if (stream_ordered_allocations && stream != nullptr) {
         cudaStreamSynchronize(stream);
     }
@@ -63,6 +68,14 @@ RhCudaEngine::~RhCudaEngine() noexcept {
     if (h_reduction_results != nullptr) {
         cudaFreeHost(h_reduction_results);
         h_reduction_results = nullptr;
+    }
+    if (h_round_parameters != nullptr) {
+        cudaFreeHost(h_round_parameters);
+        h_round_parameters = nullptr;
+    }
+    if (h_round_results != nullptr) {
+        cudaFreeHost(h_round_results);
+        h_round_results = nullptr;
     }
     if (svd_params != nullptr) {
         cusolverDnDestroyGesvdjInfo(svd_params);
@@ -102,9 +115,7 @@ void allocate_static_buffers(RhCudaEngine* engine) {
     allocate_engine(&engine->d_information, square, "information");
     allocate_engine(&engine->d_information_next, square, "next information");
     allocate_engine(&engine->d_trial_beta, p, "trial coefficients");
-    allocate_engine(&engine->d_candidate, p, "candidate coefficients");
     allocate_engine(&engine->d_delta, p, "coefficient delta");
-    allocate_engine(&engine->d_history_vector, p, "history vector");
     allocate_engine(&engine->d_gradient, p, "gradient");
     allocate_engine(&engine->d_penalty_sign, p, "L1 historical subgradient");
     allocate_engine(&engine->d_direction, p, "Newton direction");
@@ -112,6 +123,38 @@ void allocate_static_buffers(RhCudaEngine* engine) {
     allocate_engine(&engine->d_hessian, square, "Hessian");
     allocate_engine(&engine->d_factor, square, "factor matrix");
     allocate_engine(&engine->d_reduction_results, kReductionSlots, "device reduction results");
+    const auto allocate_round = [&](auto element, void** pointer, size_t elements, const char* name) {
+        allocate<decltype(element)>(
+            pointer,
+            elements,
+            name,
+            engine->stream,
+            engine->stream_ordered_allocations,
+            engine->memory_pool
+        );
+    };
+    const size_t round_width = static_cast<size_t>(rh_cuda::kCandidateRoundWidth);
+    allocate_engine(&engine->d_round_candidates, p * round_width, "line-search round candidates");
+    allocate_round(
+        double{},
+        &engine->d_round_term_partials,
+        round_width * static_cast<size_t>(rh_cuda::candidate_round_chunks(engine->n_parameters)) *
+            rh_cuda::kCandidateRoundTermSlots,
+        "line-search round term partials"
+    );
+    allocate_round(
+        double{},
+        &engine->d_round_results,
+        round_width * rh_cuda::kCandidateRoundSlots,
+        "line-search round results"
+    );
+    allocate_round(
+        static_cast<unsigned char>(0),
+        &engine->d_round_parameters,
+        sizeof(rh_cuda::CandidateRoundParameters<T>),
+        "line-search round parameters"
+    );
+    allocate_round(0u, &engine->d_round_counter, 1, "line-search round counter");
     allocate<int>(
         reinterpret_cast<void**>(&engine->d_pivots),
         p,
@@ -135,6 +178,17 @@ void allocate_static_buffers(RhCudaEngine* engine) {
     check_cuda(
         cudaMallocHost(&engine->h_reduction_results, kReductionSlots * sizeof(double)),
         "pinned host objective reductions"
+    );
+    check_cuda(
+        cudaMallocHost(&engine->h_round_parameters, sizeof(rh_cuda::CandidateRoundParameters<T>)),
+        "pinned host line-search round parameters"
+    );
+    check_cuda(
+        cudaMallocHost(
+            &engine->h_round_results,
+            round_width * rh_cuda::kCandidateRoundSlots * sizeof(double)
+        ),
+        "pinned host line-search round results"
     );
 
     const int n = static_cast<int>(engine->n_parameters);
@@ -163,6 +217,12 @@ void allocate_static_buffers(RhCudaEngine* engine) {
     );
     check_cuda(cudaMemsetAsync(engine->d_coefficients, 0, p * sizeof(T), engine->stream), "zero coefficients");
     check_cuda(cudaMemsetAsync(engine->d_information, 0, square * sizeof(T), engine->stream), "zero information");
+    // The residual kernel's last block counts arrivals from zero and resets
+    // the counter itself, so it is zeroed exactly once.
+    check_cuda(
+        cudaMemsetAsync(engine->d_round_counter, 0, sizeof(unsigned int), engine->stream),
+        "zero line-search round counter"
+    );
     check_cuda(cudaStreamSynchronize(engine->stream), "initial state synchronization");
 }
 void release_batch_buffers(RhCudaEngine* engine) noexcept {
@@ -172,8 +232,9 @@ void release_batch_buffers(RhCudaEngine* engine) noexcept {
     release(engine->d_residual, engine->stream, engine->stream_ordered_allocations);
     release(engine->d_score, engine->stream, engine->stream_ordered_allocations);
     release(engine->d_curvature, engine->stream, engine->stream_ordered_allocations);
-    release(engine->d_loss, engine->stream, engine->stream_ordered_allocations);
     release(engine->d_weighted_design, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_round_residuals, engine->stream, engine->stream_ordered_allocations);
+    release(engine->d_round_loss_partials, engine->stream, engine->stream_ordered_allocations);
     engine->capacity_rows = 0;
 }
 template <typename T>
@@ -200,8 +261,21 @@ void ensure_batch_capacity(RhCudaEngine* engine, int64_t rows) {
     allocate_batch(&engine->d_residual, vector, "residual");
     allocate_batch(&engine->d_score, vector, "score");
     allocate_batch(&engine->d_curvature, vector, "curvature");
-    allocate_batch(&engine->d_loss, vector, "loss");
     allocate_batch(&engine->d_weighted_design, matrix, "weighted design");
+    const size_t round_width = static_cast<size_t>(rh_cuda::kCandidateRoundWidth);
+    allocate_batch(
+        &engine->d_round_residuals,
+        checked_elements(rows, rh_cuda::kCandidateRoundWidth, "line-search round residuals"),
+        "line-search round residuals"
+    );
+    allocate<double>(
+        &engine->d_round_loss_partials,
+        round_width * static_cast<size_t>(rh_cuda::candidate_round_blocks(rows)),
+        "line-search round loss partials",
+        engine->stream,
+        engine->stream_ordered_allocations,
+        engine->memory_pool
+    );
     engine->capacity_rows = rows;
 }
 template <typename T>

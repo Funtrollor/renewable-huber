@@ -78,10 +78,6 @@ void compute_weighted_gram(RhCudaEngine* engine, int rows, int parameters) {
     );
 }
 
-
-
-
-
 template <typename T>
 void compute_residual(RhCudaEngine* engine, int rows, const T* beta) {
     const T negative_one = static_cast<T>(-1);
@@ -114,207 +110,19 @@ void compute_residual(RhCudaEngine* engine, int rows, const T* beta) {
 }
 
 
-template <typename T>
-size_t reduction_count(const ObjectiveTerms<T>& terms) {
-    if (terms.penalty_sign != nullptr) {
-        return 6;
-    }
-    if (terms.gradient != nullptr) {
-        return 5;
-    }
-    return terms.previous_beta != nullptr ? 4 : 2;
-}
-
-template <typename T>
-void enqueue_smooth_objective(
-    RhCudaEngine* engine,
-    int rows,
-    const T* beta,
-    const T* weights,
-    T tau,
-    const ObjectiveTerms<T>& terms
-) {
-    const int parameters = static_cast<int>(engine->n_parameters);
-    compute_residual<T>(engine, rows, beta);
-    check_cuda(
-        rh_cuda::launch_huber_loss(
-            typed<T>(engine->d_residual), weights, typed<T>(engine->d_loss), rows, tau, engine->stream
-        ),
-        "launch Huber loss"
-    );
-    T* reduction_results = typed<T>(engine->d_reduction_results);
-    check_cublas(
-        Blas<T>::asum(
-            engine->cublas_reduction,
-            rows,
-            typed<T>(engine->d_loss),
-            reduction_results
-        ),
-        "reduce Huber loss"
-    );
-
-    check_cuda(
-        rh_cuda::launch_subtract(
-            beta, typed<T>(engine->d_coefficients), typed<T>(engine->d_delta), parameters, engine->stream
-        ),
-        "form historical coefficient delta"
-    );
-    const T one = static_cast<T>(1);
-    const T zero = static_cast<T>(0);
-    check_cublas(
-        Blas<T>::gemv(
-            engine->cublas,
-            CUBLAS_OP_N,
-            parameters,
-            parameters,
-            &one,
-            typed<T>(engine->d_information),
-            parameters,
-            typed<T>(engine->d_delta),
-            &zero,
-            typed<T>(engine->d_history_vector)
-        ),
-        "compute historical objective term"
-    );
-    check_cublas(
-        Blas<T>::dot(
-            engine->cublas_reduction,
-            parameters,
-            typed<T>(engine->d_delta),
-            typed<T>(engine->d_history_vector),
-            reduction_results + 1
-        ),
-        "reduce historical objective term"
-    );
-    if (terms.penalty_sign != nullptr) {
-        // d_delta still holds beta - history here; the convergence terms
-        // below overwrite it, so this reduction has to come first.
-        check_cublas(
-            Blas<T>::dot(
-                engine->cublas_reduction,
-                parameters,
-                typed<T>(engine->d_delta),
-                terms.penalty_sign,
-                reduction_results + 5
-            ),
-            "reduce L1 historical subgradient term"
-        );
-    }
-    if (terms.previous_beta != nullptr) {
-        /*
-         * Candidate acceptance and Newton convergence are both host-side
-         * decisions.  Queue the two convergence reductions behind the
-         * objective work so all four scalars cross PCIe in one transfer and
-         * require only one stream synchronization.  Rejected backtracking
-         * candidates simply discard these two inexpensive reductions.
-         */
-        check_cuda(
-            rh_cuda::launch_subtract(
-                beta,
-                terms.previous_beta,
-                typed<T>(engine->d_delta),
-                parameters,
-                engine->stream
-            ),
-            "form Newton coefficient difference"
-        );
-        check_cublas(
-            Blas<T>::nrm2(
-                engine->cublas_reduction,
-                parameters,
-                typed<T>(engine->d_delta),
-                reduction_results + 2
-            ),
-            "reduce Newton coefficient difference"
-        );
-        check_cublas(
-            Blas<T>::nrm2(
-                engine->cublas_reduction,
-                parameters,
-                beta,
-                reduction_results + 3
-            ),
-            "reduce Newton coefficient norm"
-        );
-        if (terms.gradient != nullptr) {
-            // The L1 majorization bound needs gradient . (candidate - beta),
-            // and d_delta now holds exactly that difference.
-            check_cublas(
-                Blas<T>::dot(
-                    engine->cublas_reduction,
-                    parameters,
-                    terms.gradient,
-                    typed<T>(engine->d_delta),
-                    reduction_results + 4
-                ),
-                "reduce L1 majorization inner product"
-            );
-        }
-    }
-    T* host_results = typed<T>(engine->h_reduction_results);
-    check_cuda(
-        cudaMemcpyAsync(
-            host_results,
-            reduction_results,
-            reduction_count(terms) * sizeof(T),
-            cudaMemcpyDeviceToHost,
-            engine->stream
-        ),
-        "read objective reductions"
-    );
-}
-
-template <typename T>
-ObjectiveResult finish_smooth_objective(
-    RhCudaEngine* engine,
-    double n_total,
-    const ObjectiveTerms<T>& terms
-) {
-    check_cuda(cudaStreamSynchronize(engine->stream), "wait for objective reductions");
-    T* host_results = typed<T>(engine->h_reduction_results);
-    ObjectiveResult result;
-    result.objective = (
-        static_cast<double>(host_results[0]) + 0.5 * static_cast<double>(host_results[1])
-    ) / n_total;
-    if (terms.penalty_sign != nullptr) {
-        result.objective -= terms.penalty_scale * static_cast<double>(host_results[5]);
-    }
-    if (terms.previous_beta != nullptr) {
-        result.difference_norm = static_cast<double>(host_results[2]);
-        result.beta_norm = static_cast<double>(host_results[3]);
-    }
-    if (terms.gradient != nullptr) {
-        result.gradient_dot = static_cast<double>(host_results[4]);
-    }
-    return result;
-}
-
-template <typename T>
-ObjectiveResult smooth_objective(
-    RhCudaEngine* engine,
-    int rows,
-    const T* beta,
-    const T* weights,
-    T tau,
-    double n_total,
-    const ObjectiveTerms<T>& terms
-) {
-    enqueue_smooth_objective<T>(engine, rows, beta, weights, tau, terms);
-    return finish_smooth_objective<T>(engine, n_total, terms);
-}
-
 /*
- * One update owns one candidate-objective graph. Captured pointers therefore
- * cannot outlive a borrowed DLPack producer, and shape/config changes always
- * recapture. Capture is deliberately best-effort: unsupported cuBLAS/CUDA
- * combinations clear the capture and execute the strict stream path.
+ * One update owns one evaluator, so a captured round's pointers cannot outlive
+ * a borrowed DLPack producer, and shape or configuration changes always
+ * recapture.  The round's width, form and step scalars travel through a
+ * pinned staging buffer that the round itself copies to the device, which is
+ * what lets one graph serve every round of the update.
  */
 
-CandidateObjectiveGraph::CandidateObjectiveGraph(RhCudaEngine* engine)
+CandidateRoundEvaluator::CandidateRoundEvaluator(RhCudaEngine* engine)
     : engine_(engine),
-      enabled_((engine->enabled_flags & RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS) != 0) {}
+      graphs_((engine->enabled_flags & RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS) != 0) {}
 
-CandidateObjectiveGraph::~CandidateObjectiveGraph() noexcept {
+CandidateRoundEvaluator::~CandidateRoundEvaluator() noexcept {
     if (execution_ != nullptr) {
         cudaGraphExecDestroy(execution_);
     }
@@ -324,14 +132,80 @@ CandidateObjectiveGraph::~CandidateObjectiveGraph() noexcept {
 }
 
 template <typename T>
-bool CandidateObjectiveGraph::capture(
+const T* CandidateRoundEvaluator::candidate(int k) const {
+    return typed<T>(engine_->d_round_candidates) + static_cast<int64_t>(k) * engine_->n_parameters;
+}
+
+template <typename T>
+const T* CandidateRoundEvaluator::residual(int rows, int k) const {
+    return typed<T>(engine_->d_round_residuals) + static_cast<int64_t>(k) * rows;
+}
+
+template <typename T>
+void CandidateRoundEvaluator::enqueue(
     int rows,
-    const T* beta,
     const T* weights,
     T tau,
     const ObjectiveTerms<T>& terms
-)
-{
+) {
+    check_cuda(
+        cudaMemcpyAsync(
+            engine_->d_round_parameters,
+            engine_->h_round_parameters,
+            sizeof(rh_cuda::CandidateRoundParameters<T>),
+            cudaMemcpyHostToDevice,
+            engine_->stream
+        ),
+        "copy line-search round parameters"
+    );
+    const rh_cuda::CandidateRoundBuffers<T> buffers{
+        typed<rh_cuda::CandidateRoundParameters<T>>(engine_->d_round_parameters),
+        typed<T>(engine_->d_round_candidates),
+        typed<T>(engine_->d_round_residuals),
+        typed<double>(engine_->d_round_term_partials),
+        typed<double>(engine_->d_round_loss_partials),
+        typed<double>(engine_->d_round_results),
+        typed<unsigned int>(engine_->d_round_counter),
+    };
+    check_cuda(
+        rh_cuda::launch_candidate_round(
+            buffers,
+            typed<T>(engine_->d_trial_beta),
+            typed<T>(engine_->d_direction),
+            terms.gradient,
+            typed<T>(engine_->d_coefficients),
+            typed<T>(engine_->d_information),
+            terms.penalty_sign,
+            typed<T>(engine_->d_design),
+            typed<T>(engine_->d_y),
+            weights,
+            rows,
+            engine_->n_parameters,
+            terms.penalized_count,
+            tau,
+            engine_->stream
+        ),
+        "launch line-search round"
+    );
+    check_cuda(
+        cudaMemcpyAsync(
+            engine_->h_round_results,
+            engine_->d_round_results,
+            rh_cuda::kCandidateRoundWidth * rh_cuda::kCandidateRoundSlots * sizeof(double),
+            cudaMemcpyDeviceToHost,
+            engine_->stream
+        ),
+        "read line-search round results"
+    );
+}
+
+template <typename T>
+bool CandidateRoundEvaluator::capture(
+    int rows,
+    const T* weights,
+    T tau,
+    const ObjectiveTerms<T>& terms
+) {
     const cudaError_t begin = cudaStreamBeginCapture(
         engine_->stream, cudaStreamCaptureModeThreadLocal
     );
@@ -340,7 +214,7 @@ bool CandidateObjectiveGraph::capture(
         return false;
     }
     try {
-        enqueue_smooth_objective<T>(engine_, rows, beta, weights, tau, terms);
+        enqueue<T>(rows, weights, tau, terms);
     } catch (...) {
         cudaGraph_t abandoned = nullptr;
         cudaStreamEndCapture(engine_->stream, &abandoned);
@@ -371,31 +245,61 @@ bool CandidateObjectiveGraph::capture(
 }
 
 template <typename T>
-ObjectiveResult CandidateObjectiveGraph::evaluate(
+void CandidateRoundEvaluator::evaluate(
     int rows,
-    const T* beta,
     const T* weights,
     T tau,
     double n_total,
-    const ObjectiveTerms<T>& terms
-)
-{
-    if (!enabled_) {
-        return smooth_objective<T>(engine_, rows, beta, weights, tau, n_total, terms);
+    const ObjectiveTerms<T>& terms,
+    const CandidateRound& round,
+    ObjectiveResult* results
+) {
+    if (round.width < 1 || round.width > rh_cuda::kCandidateRoundWidth) {
+        fail(RH_CUDA_STATUS_INTERNAL_ERROR, "line-search round width is out of range");
     }
-    if (execution_ == nullptr && !capture<T>(rows, beta, weights, tau, terms)) {
-        ++engine_->graph_fallbacks;
-        engine_->enabled_flags &= ~RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS;
-        enabled_ = false;
-        return smooth_objective<T>(engine_, rows, beta, weights, tau, n_total, terms);
+    // The previous round completed before its results were read, so the
+    // pinned staging buffer is free to rewrite.
+    auto* parameters = typed<rh_cuda::CandidateRoundParameters<T>>(engine_->h_round_parameters);
+    parameters->width = round.width;
+    parameters->form = round.form;
+    for (int k = 0; k < rh_cuda::kCandidateRoundWidth; ++k) {
+        parameters->scale[k] = static_cast<T>(round.scale[k]);
+        parameters->threshold[k] = static_cast<T>(round.threshold[k]);
     }
-    check_cuda(cudaGraphLaunch(execution_, engine_->stream), "launch candidate objective graph");
-    if (launched_once_) {
-        ++engine_->graph_replays;
-    } else {
-        launched_once_ = true;
+
+    bool launched = false;
+    if (graphs_) {
+        if (execution_ == nullptr && !capture<T>(rows, weights, tau, terms)) {
+            ++engine_->graph_fallbacks;
+            engine_->enabled_flags &= ~RH_CUDA_ENGINE_FLAG_CUDA_GRAPHS;
+            graphs_ = false;
+        } else {
+            check_cuda(cudaGraphLaunch(execution_, engine_->stream), "launch line-search round graph");
+            if (launched_once_) {
+                ++engine_->graph_replays;
+            } else {
+                launched_once_ = true;
+            }
+            launched = true;
+        }
     }
-    return finish_smooth_objective<T>(engine_, n_total, terms);
+    if (!launched) {
+        enqueue<T>(rows, weights, tau, terms);
+    }
+    check_cuda(cudaStreamSynchronize(engine_->stream), "wait for line-search round");
+
+    const double* slots = typed<double>(engine_->h_round_results);
+    for (int k = 0; k < round.width; ++k) {
+        const double* candidate_slots = slots + k * rh_cuda::kCandidateRoundSlots;
+        ObjectiveResult& result = results[k];
+        result.objective = (candidate_slots[0] + 0.5 * candidate_slots[1]) / n_total;
+        if (terms.penalty_sign != nullptr) {
+            result.objective -= terms.penalty_scale * candidate_slots[5];
+        }
+        result.difference_norm = std::sqrt(candidate_slots[2]);
+        result.beta_norm = std::sqrt(candidate_slots[3]);
+        result.gradient_dot = candidate_slots[4];
+    }
 }
 
 template <typename T>
@@ -403,6 +307,7 @@ void compute_gradient_hessian(
     RhCudaEngine* engine,
     int rows,
     const T* beta,
+    const T* residual,
     const T* weights,
     T tau,
     T bandwidth,
@@ -412,13 +317,14 @@ void compute_gradient_hessian(
     const int parameters = static_cast<int>(engine->n_parameters);
     /*
      * solve_unpenalized evaluates the objective for the current trial before
-     * every gradient/Hessian evaluation.  That objective leaves the matching
-     * residual resident in d_residual, so recomputing y - X beta here would
-     * duplicate a full-vector copy and GEMV on every Newton iteration.
+     * every gradient/Hessian evaluation, and that round leaves the matching
+     * residual in its residual buffer; recomputing y - X beta here would
+     * duplicate a full-vector copy and GEMV on every Newton iteration.  The
+     * kernel copies it into d_residual, so the next round may overwrite it.
      */
     check_cuda(
         rh_cuda::launch_residual_score_curvature(
-            typed<T>(engine->d_residual),
+            residual,
             typed<T>(engine->d_residual),
             typed<T>(engine->d_score),
             typed<T>(engine->d_curvature),
@@ -517,6 +423,7 @@ void compute_l1_gradient(
     RhCudaEngine* engine,
     int rows,
     const T* beta,
+    const T* residual,
     const T* weights,
     T tau,
     double n_total,
@@ -525,10 +432,10 @@ void compute_l1_gradient(
 ) {
     const int parameters = static_cast<int>(engine->n_parameters);
     // The proximal step needs no curvature, so only the weighted score is
-    // formed from the residual the preceding objective left resident.
+    // formed from the residual the preceding round left.
     check_cuda(
         rh_cuda::launch_weighted_huber_score(
-            typed<T>(engine->d_residual),
+            residual,
             weights,
             typed<T>(engine->d_score),
             rows,
@@ -597,18 +504,19 @@ template <typename T>
 void final_information(
     RhCudaEngine* engine,
     int rows,
+    const T* residual,
     const T* weights,
     T tau,
-    T bandwidth,
-    bool residual_is_current
+    T bandwidth
 ) {
     const int parameters = static_cast<int>(engine->n_parameters);
-    if (!residual_is_current) {
+    if (residual == nullptr) {
         compute_residual<T>(engine, rows, typed<T>(engine->d_trial_beta));
+        residual = typed<T>(engine->d_residual);
     }
     check_cuda(
         rh_cuda::launch_residual_score_curvature(
-            typed<T>(engine->d_residual),
+            residual,
             typed<T>(engine->d_residual),
             typed<T>(engine->d_score),
             typed<T>(engine->d_curvature),
@@ -646,36 +554,38 @@ void final_information(
 
 // Explicit instantiation: the engine is only ever float or double, and a
 // missing pair fails the link instead of silently duplicating a definition.
-template ObjectiveResult smooth_objective<float>(
-    RhCudaEngine*, int, const float*, const float*, float, double, const ObjectiveTerms<float>&
-);
-template ObjectiveResult smooth_objective<double>(
-    RhCudaEngine*, int, const double*, const double*, double, double,
-    const ObjectiveTerms<double>&
-);
 template void compute_l1_gradient<float>(
-    RhCudaEngine*, int, const float*, const float*, float, double, const float*, double
+    RhCudaEngine*, int, const float*, const float*, const float*, float, double, const float*,
+    double
 );
 template void compute_l1_gradient<double>(
-    RhCudaEngine*, int, const double*, const double*, double, double, const double*, double
+    RhCudaEngine*, int, const double*, const double*, const double*, double, double,
+    const double*, double
 );
 template void compute_gradient_hessian<float>(
-    RhCudaEngine*, int, const float*, const float*, float, float, double, float
+    RhCudaEngine*, int, const float*, const float*, const float*, float, float, double, float
 );
 template void compute_gradient_hessian<double>(
-    RhCudaEngine*, int, const double*, const double*, double, double, double, double
+    RhCudaEngine*, int, const double*, const double*, const double*, double, double, double,
+    double
 );
 template void final_information<float>(
-    RhCudaEngine*, int, const float*, float, float, bool
+    RhCudaEngine*, int, const float*, const float*, float, float
 );
 template void final_information<double>(
-    RhCudaEngine*, int, const double*, double, double, bool
+    RhCudaEngine*, int, const double*, const double*, double, double
 );
-template ObjectiveResult CandidateObjectiveGraph::evaluate<float>(
-    int, const float*, const float*, float, double, const ObjectiveTerms<float>&
+template void CandidateRoundEvaluator::evaluate<float>(
+    int, const float*, float, double, const ObjectiveTerms<float>&, const CandidateRound&,
+    ObjectiveResult*
 );
-template ObjectiveResult CandidateObjectiveGraph::evaluate<double>(
-    int, const double*, const double*, double, double, const ObjectiveTerms<double>&
+template void CandidateRoundEvaluator::evaluate<double>(
+    int, const double*, double, double, const ObjectiveTerms<double>&, const CandidateRound&,
+    ObjectiveResult*
 );
+template const float* CandidateRoundEvaluator::candidate<float>(int) const;
+template const double* CandidateRoundEvaluator::candidate<double>(int) const;
+template const float* CandidateRoundEvaluator::residual<float>(int, int) const;
+template const double* CandidateRoundEvaluator::residual<double>(int, int) const;
 
 }  // namespace rh_cuda::engine
