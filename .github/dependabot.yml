@@ -33,6 +33,11 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps(native)"
+    ignore:
+      # proptest stays on ~1.9: later releases need a newer Rust than the
+      # workspace's 1.83 MSRV (AGENTS.md). Patch updates are still offered.
+      - dependency-name: "proptest"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   - package-ecosystem: "pip"
     directory: "/native/python-cpu"
