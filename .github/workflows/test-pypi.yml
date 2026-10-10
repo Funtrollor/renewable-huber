@@ -10,7 +10,7 @@ jobs:
   build:
     name: Validate and build distributions
     if: github.repository == 'Funtrollor/renewable-huber' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -56,7 +56,7 @@ jobs:
   publish-test-pypi:
     name: Publish distributions to TestPyPI
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
       name: testpypi

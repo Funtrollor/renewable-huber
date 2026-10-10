@@ -13,7 +13,7 @@ jobs:
   source-gate:
     name: Validate source release
     if: github.repository == 'Funtrollor/renewable-huber'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -90,10 +90,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-15]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             architecture: linux-x86_64
             rust-target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
@@ -305,7 +305,7 @@ jobs:
     # platform tag is true of the binary. Like the Windows job it compiles and
     # inspects without a GPU; the NVIDIA runtime arrives as nvidia-*-cu12
     # dependencies rather than inside the wheel.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -348,7 +348,7 @@ jobs:
   validate-release-set:
     name: Validate complete artifact set
     needs: [source-gate, native-cpu-wheels, native-cuda-wheels, native-cuda-linux-wheels]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -389,7 +389,7 @@ jobs:
     name: Create GitHub Release
     needs: validate-release-set
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -419,7 +419,7 @@ jobs:
     name: Publish base package to PyPI
     needs: github-release
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: pypi
       url: https://pypi.org/p/renewable-huber
@@ -441,7 +441,7 @@ jobs:
     # base version is still absent from the index.
     needs: [github-release, publish-base]
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: pypi-native-cpu
       url: https://pypi.org/p/renewable-huber-native-cpu
@@ -461,7 +461,7 @@ jobs:
     name: Publish native CUDA wheels to PyPI
     needs: [github-release, publish-base]
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: pypi-native-cuda
       url: https://pypi.org/p/renewable-huber-native-cuda
