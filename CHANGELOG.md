@@ -8,6 +8,20 @@ stabilised.
 
 ## [Unreleased]
 
+### Changed
+
+- The interleaved A/B gate no longer fails a float32 case only because its
+  solver iteration count moved. float32 sits at its rounding floor at
+  `tol=1e-6`, and the 0.7.1 CPU and CUDA changes moved float32 L1 streams by
+  2-11 iterations, which forced a whole-gate relaxation. Under the new default
+  `--iteration-policy relative`, such a case passes only if the move is at most
+  25% of the baseline, each iteration is no slower, and both builds reach the
+  same final objective (relative difference at most 1e-4, a bound measured on
+  the released 0.7.0 -> 0.7.1 change). float64 keeps the one-iteration limit,
+  and `check_performance_regression.py` is unchanged. Shape-sweep records now
+  store each sample's final diagnostic objective, and `gate.json` (schema 3)
+  lists every case accepted with a moved count.
+
 ## [0.7.1] - 2026-10-09
 
 This patch release makes both native engines faster. No public API, C ABI,
