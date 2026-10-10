@@ -82,10 +82,49 @@ pub(crate) fn smoothed_curvature<T: CpuScalar>(
     }
     Ok(())
 }
+
+/// Independent partial sums kept by [`dot`].
+///
+/// A single running sum is one chain of dependent floating-point additions.
+/// The compiler may not reorder them, so it could neither vectorize the loop
+/// nor start an element before the previous add finished; only out-of-order
+/// overlap between neighbouring rows hid any of that latency. Separate lanes
+/// break the chain and let LLVM vectorize with baseline SIMD, which made the
+/// residual/prediction row kernel 1.3x-3.3x (f64) and 2x-4.9x (f32) faster on
+/// a single thread. Wider lanes or AVX measured no better, because the tail
+/// and memory traffic then dominate.
+///
+/// The lane count and the pairwise combination below fix the summation
+/// order, so the result is deterministic and independent of the host and of
+/// the thread count. It is not the order the single running sum used, so
+/// results differ from engines before this change in the last bits.
+pub(crate) const DOT_LANES: usize = 8;
+
 pub(crate) fn dot<T: CpuScalar>(left: &[T], right: &[T]) -> T {
-    left.iter()
-        .zip(right.iter())
-        .fold(T::zero(), |sum, (left, right)| sum + *left * *right)
+    let length = left.len().min(right.len());
+    let (left, right) = (&left[..length], &right[..length]);
+    let mut lanes = [T::zero(); DOT_LANES];
+    let left_chunks = left.chunks_exact(DOT_LANES);
+    let right_chunks = right.chunks_exact(DOT_LANES);
+    let (left_tail, right_tail) = (left_chunks.remainder(), right_chunks.remainder());
+    for (left_chunk, right_chunk) in left_chunks.zip(right_chunks) {
+        for lane in 0..DOT_LANES {
+            lanes[lane] += left_chunk[lane] * right_chunk[lane];
+        }
+    }
+    let mut width = DOT_LANES;
+    while width > 1 {
+        width /= 2;
+        for lane in 0..width {
+            let upper = lanes[lane + width];
+            lanes[lane] += upper;
+        }
+    }
+    let mut sum = lanes[0];
+    for (left_value, right_value) in left_tail.iter().zip(right_tail.iter()) {
+        sum += *left_value * *right_value;
+    }
+    sum
 }
 
 pub(crate) fn norm<T: CpuScalar>(values: &[T]) -> T {

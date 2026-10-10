@@ -1,6 +1,6 @@
 # 架構
 
-v0.6.1 將「公開估計器」、「portable 陣列核心」與「native whole-batch engine」分離。NumPy、CuPy、PyTorch、TensorFlow 四個 portable backend 共用 Python 的 RHE Newton／RPSHE LAMM 更新邏輯；Rust CPU 與 Rust/CUDA engine 則透過明確 capability contract 接管整批更新。連同 `auto` 選擇器共有七個公開 backend 名稱；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
+v0.7.1 將「公開估計器」、「portable 陣列核心」與「native whole-batch engine」分離。NumPy、CuPy、PyTorch、TensorFlow 四個 portable backend 共用 Python 的 RHE Newton／RPSHE LAMM 更新邏輯；Rust CPU 與 Rust/CUDA engine 則透過明確 capability contract 接管整批更新。連同 `auto` 選擇器共有七個公開 backend 名稱；支援範圍與平台限制另見[支援矩陣](support-matrix.md)。
 
 後續 native engine 的正式邊界、相容性契約與遷移門檻已定義於
 [native-core RFC](native-core-rfc.md)；重構前的 golden corpus、shape sweep
@@ -48,11 +48,12 @@ constructor 值（`None`、`-1` 或正整數），fitted estimator 則以 `n_job
 - `backend="native_cpu"` 明確選擇選用的 Rust/PyO3 whole-batch CPU 核心；
   明確指定時不會經過任何量測，失敗也不會被替換成 NumPy。
 - `backend="native_cuda"` 明確選擇選用的 Rust/CUDA whole-batch GPU 核心；除了相容的 NumPy host input，也接受相同裝置、相同 dtype、C-contiguous 的 CUDA DLPack tensor；
-  P2 不會由 `auto` 自動選取，且目前只支援 `penalty="none"`。
+  不會由 `auto` 自動選取。C ABI 2／Python API 4 起同時支援 `penalty="none"` 與
+  `penalty="l1"`；extension 未宣告的 penalty 會在呼叫 engine 前以 `ValidationError` 拒絕。
 - `backend="torch"` 與 `backend="tensorflow"` 必須由呼叫端明確選擇；不會依輸入 tensor 推斷。
 - `device="auto"` 對 Torch 與 TensorFlow 也選擇 CPU；CUDA 必須明確要求。
 
-輸入會由選定 backend 轉型並移至它的裝置。一般跨框架輸入沒有 DLPack 零複製保證，可能發生配置或主機／裝置複製；`native_cuda` device-update 是明確例外，它會消費 CuPy／PyTorch CUDA 或 TensorFlow eager GPU 的 DLPack capsule，並以 device-to-device copy 搬入 engine workspace，全程不經 host。CuPy／PyTorch producer 會收到 consumer stream；TensorFlow legacy exporter 無法協商 stream，因此先建立明確 producer synchronization boundary。PyTorch tensor 使用共享 storage 的 detached view；TensorFlow 只支援 eager execution。Native CUDA 的 device-resident `predict` 尚未提供，會拒絕 CUDA tensor 而不執行隱式 D2H copy。
+輸入會由選定 backend 轉型並移至它的裝置。一般跨框架輸入沒有 DLPack 零複製保證，可能發生配置或主機／裝置複製；`native_cuda` device-update 是明確例外，它會消費 CuPy／PyTorch CUDA 或 TensorFlow eager GPU 的 DLPack capsule，並以 device-to-device copy 搬入 engine workspace，全程不經 host。CuPy／PyTorch producer 會收到 consumer stream；TensorFlow legacy exporter 無法協商 stream，因此先建立明確 producer synchronization boundary。PyTorch tensor 使用共享 storage 的 detached view；TensorFlow 只支援 eager execution。Native CUDA 的 `predict` 同樣就地讀取這類 DLPack tensor，只把預測值複製回 host 並回傳 NumPy；不支援 device prediction 的舊 extension 會拒絕 CUDA tensor，而不執行隱式 D2H copy。
 
 ## 演算法正確性邊界
 

@@ -95,6 +95,18 @@ class NativeEngineBackend(NumPyBackend):
         del state
         return False
 
+    def _resident_engine(self) -> Any:
+        """Return the engine that :meth:`restore_native_state` just ensured exists.
+
+        Every caller runs ``restore_native_state`` first in the same call, so
+        the engine is never absent here; the assertion states that lifecycle
+        invariant rather than adding a new runtime branch.
+        """
+
+        engine = self._engine
+        assert engine is not None, "restore_native_state must run before a native call"
+        return engine
+
     def _discard_engine(self) -> None:
         self._engine = None
         self._engine_state_token = None
@@ -145,7 +157,7 @@ class NativeEngineBackend(NumPyBackend):
             return
 
         with self._engine_call():
-            self._engine.restore(
+            self._resident_engine().restore(
                 np.ascontiguousarray(state.coefficients, dtype=self.dtype),
                 np.ascontiguousarray(state.information, dtype=self.dtype),
                 int(state.n_samples_seen),

@@ -119,8 +119,11 @@ extension 在完成 device-to-device workspace copy 後才釋放並且只釋放�
 DLPack capsule。TensorFlow 的 legacy exporter 沒有 consumer-stream 參數，
 因此 adapter 在 export 前以 `tf.experimental.async_wait()` 建立安全邊界；若
 該 API 不存在，只允許已明確啟用 synchronous eager execution。這項同步不會
-複製 tensor storage。Device-resident `predict` 尚未實作，傳入 CUDA tensor
-會明確報錯，不會偷偷搬回 host；目前需由呼叫端明確傳入 host prediction array。
+複製 tensor storage。Native CUDA Python API 4 起，`predict` 也接受同樣條件的
+CUDA DLPack tensor：engine 在自己的 stream 上就地讀取（未展開的特徵矩陣在 device
+上補 intercept 欄），只有預測值回到 host，回傳型別仍為 `numpy.ndarray`。載入的
+extension 若未宣告 `device_predict="dlpack"`，傳入 CUDA tensor 會以
+`BackendUnavailableError` 明確拒絕，不會偷偷搬回 host。
 
 Renewable 更新使用上一批的係數與累積資訊矩陣。批次邊界與觀測順序因此是運算語意的一部分；不同分批、重排後的串流與一次性 `fit` 不保證逐位元相同。需要可重現續跑時，應固定 backend、dtype、批次切法、順序，並由 checkpoint 後接續相同的剩餘批次。
 
@@ -130,4 +133,4 @@ SciPy sparse matrix 會以清楚的 `TypeError` 拒絕，不會隱式轉 dense�
 
 ## 版本界線
 
-v0.6.1 正式支援 NumPy CPU、Rust native CPU、CuPy CUDA、Rust native CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。完整安裝方式、回傳型別、作業系統與限制請見[支援矩陣](support-matrix.md)。安裝 `sklearn` extra 後，可使用 `renewable_huber.integrations.sklearn.SklearnRenewableHuberRegressor` 進入 Pipeline、clone、GridSearchCV 與 cross-validation 工作流；完整 estimator contract 由 CI 執行 `check_estimator`。
+v0.7.1 正式支援 NumPy CPU、Rust native CPU、CuPy CUDA、Rust native CUDA、PyTorch CPU/CUDA 與 TensorFlow CPU/CUDA。完整安裝方式、回傳型別、作業系統與限制請見[支援矩陣](support-matrix.md)。安裝 `sklearn` extra 後，可使用 `renewable_huber.integrations.sklearn.SklearnRenewableHuberRegressor` 進入 Pipeline、clone、GridSearchCV 與 cross-validation 工作流；完整 estimator contract 由 CI 執行 `check_estimator`。

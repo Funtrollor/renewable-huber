@@ -38,6 +38,10 @@ class BackendCapabilities:
 
     #: Run one whole batch inside a native engine, bypassing the Python solver.
     native_update: Callable[..., Any] | None = None
+    #: Penalties ``native_update`` implements.  ``None`` means the backend does
+    #: not restrict them (the portable solver handles every penalty); a set
+    #: means any other penalty must be refused before the engine is called.
+    native_update_penalties: frozenset[str] | None = None
     #: Predict through resident native coefficients.
     native_predict: Callable[..., Any] | None = None
     #: Build the design matrix, possibly leaving the intercept to the engine.
@@ -67,6 +71,13 @@ def _callable_or_none(backend: Any, name: str) -> Callable[..., Any] | None:
     return value if callable(value) else None
 
 
+def _penalty_set(backend: Any) -> frozenset[str] | None:
+    declared = getattr(backend, "native_update_penalties", None)
+    if declared is None:
+        return None
+    return frozenset(str(penalty) for penalty in declared)
+
+
 def _reader(backend: Any, name: str) -> Callable[[], Any] | None:
     """Return an accessor that re-reads ``name`` on every call, or ``None``.
 
@@ -82,6 +93,7 @@ def _reader(backend: Any, name: str) -> Callable[[], Any] | None:
 def _probe(backend: Any) -> BackendCapabilities:
     return BackendCapabilities(
         native_update=_callable_or_none(backend, "renewable_update"),
+        native_update_penalties=_penalty_set(backend),
         native_predict=_callable_or_none(backend, "native_predict"),
         native_design_matrix=_callable_or_none(backend, "native_design_matrix"),
         minimum_scalar=_callable_or_none(backend, "minimum_scalar"),

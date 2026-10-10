@@ -3,7 +3,8 @@
 ## 每次 release 前
 
 - [ ] 目標版本尚未存在於 PyPI／TestPyPI，對應 Git tag 與 GitHub Release 也不存在。
-- [ ] 本次發布使用 `0.6.1`；既有但未成功發布的 `v0.6.0` tag 不移動、不重用。
+- [ ] 本次發布使用 `0.7.1`（tag `v0.7.1`）；既有 tag（包括未成功發布的 `v0.6.0`）
+      一律不移動、不重用。
 - [ ] Base、native CPU、native CUDA 使用相同的 PEP 440 版本。
 - [ ] Native distributions 精確依賴同版 `renewable-huber==X.Y.Z`。
 - [ ] `CHANGELOG.md`、README、API、架構、支援矩陣、`SECURITY.md` 與
@@ -14,6 +15,9 @@
 - [ ] 固定硬體上的 CPU 與 CUDA performance gates 無效能或正確性回歸。
 - [ ] 本機固定 CUDA 12 主機的 GPU correctness、C ABI smoke、shape sweep 與
       interleaved performance gate 已通過，並記錄 commit、環境與 JSON 證據。
+- [ ] 固定主機已安裝 CUDA 版 PyTorch，`cuda` profile 的
+      `PyTorchDlpackIntegrationTests` 實際通過而非 skip；TensorFlow CUDA DLPack
+      若仍未在 WSL2／Linux GPU 主機驗證，支援矩陣須維持「尚未在裝置上驗證」。
 - [ ] `python scripts/native/validate_release_artifacts.py --source-only` 通過。
 - [ ] `release.yml` 的手動 build-only run 在精確 release candidate SHA 成功；不建立
       GitHub Release，也不寫入任何 package index。
@@ -22,8 +26,11 @@
 ## Artifact gate
 
 - [ ] Base wheel 與 sdist 通過 `twine check` 與 clean-install smoke test。
-- [ ] 15 個 CPU wheels 全數產生：Python 3.10–3.12 × 5 個 OS/architecture targets。
-- [ ] 3 個 Windows x86-64 CUDA 12 wheels 全數產生。
+- [ ] 20 個 CPU wheels 全數產生：Python 3.10–3.13 × 5 個 OS/architecture targets。
+- [ ] 8 個 CUDA 12 wheels 全數產生：Python 3.10–3.13 × Windows x86-64 與
+      Linux x86-64（`manylinux_2_28`）。
+- [ ] CUDA wheels 的 `Requires-Dist` 含完整 `nvidia-*-cu12` runtime closure，且不
+      vendor 任何 NVIDIA 函式庫。
 - [ ] CUDA wheel 在無 GPU hosted runner 可乾淨安裝、載入，並回報正確公開 API
       version、native ABI 與 capability metadata。
 - [ ] `cuobjdump` 證明 CUDA wheel 含 SM 75/80/86/89/90/120 SASS，且只有 SM 120

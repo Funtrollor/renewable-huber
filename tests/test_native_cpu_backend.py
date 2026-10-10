@@ -19,6 +19,7 @@ from renewable_huber.exceptions import BackendUnavailableError, NotFittedError
 from renewable_huber.state import RenewableHuberState
 
 CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v1.json"
+V2_CORPUS_PATH = Path(__file__).parent / "golden" / "native_core_v2.json"
 NATIVE_TOLERANCES = {
     "float32": (4e-4, 4e-5),
     "float64": (2e-8, 3e-9),
@@ -330,6 +331,12 @@ class NativeCpuGoldenTests(unittest.TestCase):
 
     def test_complete_golden_corpus(self) -> None:
         for case in self.corpus["cases"]:
+            with self.subTest(case=case["id"]):
+                self._replay_case(case)
+
+    def test_complete_v2_l1_corpus(self) -> None:
+        corpus = json.loads(V2_CORPUS_PATH.read_text(encoding="utf-8"))
+        for case in corpus["cases"]:
             with self.subTest(case=case["id"]):
                 self._replay_case(case)
 
@@ -702,6 +709,7 @@ class NativeCpuCapabilityTests(unittest.TestCase):
         self.assertIsNotNone(capabilities.read_n_jobs)
         self.assertIsNone(capabilities.native_design_matrix)
         self.assertFalse(capabilities.elementwise_workspace)
+        self.assertEqual(capabilities.native_update_penalties, frozenset({"none", "l1"}))
 
 
 if __name__ == "__main__":

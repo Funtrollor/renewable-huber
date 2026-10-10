@@ -11,6 +11,7 @@ from unittest import mock
 
 from scripts.native.smoke_test_cuda_wheels import _smoke_program
 from scripts.native.validate_release_artifacts import (
+    NATIVE_RUNTIME_DEPENDENCIES,
     PROJECT_ROOT,
     SUPPORTED_PYTHON,
     _check_native_wheel,
@@ -123,6 +124,54 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                 self.assertIn(required_file, workflow)
         self.assertNotIn("runs-on: [self-hosted, windows, x64, gpu, cuda12]", workflow)
 
+    def test_linux_cuda_wheel_is_built_by_one_script_in_ci_and_release(self) -> None:
+        # PR CI can only prove the release's Linux CUDA build if both run the
+        # same script in the same manylinux image; a divergent copy in either
+        # workflow would let the release path rot unobserved.
+        workflows = Path(__file__).parents[1] / ".github" / "workflows"
+        script = "bash scripts/native/build_linux_cuda_wheel.sh"
+        images = set()
+        for name in ("ci.yml", "release.yml"):
+            with self.subTest(workflow=name):
+                workflow = (workflows / name).read_text(encoding="utf-8")
+                self.assertIn(script, workflow)
+                self.assertIn("--native-dir dist-native-cuda --import-only", workflow)
+                # Pinned by digest like every workflow action: a moved tag must
+                # not be able to change what the release compiles with.
+                found = re.findall(r"quay\.io/pypa/manylinux_2_28_x86_64(\S*)", workflow)
+                self.assertEqual(len(found), 1)
+                self.assertRegex(found[0], r"\A@sha256:[0-9a-f]{64}\Z")
+                images.add(found[0])
+        self.assertEqual(len(images), 1, "CI and release must build in the same image")
+        release = (workflows / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("native-cuda-linux-x86_64-py${{ matrix.python-version }}", release)
+        self.assertIn(
+            "needs: [source-gate, native-cpu-wheels, native-cuda-wheels, native-cuda-linux-wheels]",
+            release,
+        )
+        # Five CPU targets and two CUDA targets, each for every supported CPython.
+        self.assertIn("--expected-cpu 20 --expected-cuda 8", release)
+        build = Path(__file__).parents[1] / "scripts" / "native" / "build_linux_cuda_wheel.sh"
+        text = build.read_text(encoding="utf-8")
+        for fragment in (
+            "--compatibility manylinux_2_28",
+            "--auditwheel skip",
+            "cuobjdump --list-elf",
+            "cuobjdump --list-ptx",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+
+    def test_release_matrices_cover_every_supported_python(self) -> None:
+        supported = ["3.10", "3.11", "3.12", "3.13"]
+        self.assertEqual(SUPPORTED_PYTHON, ">=3.10,<3.14")
+        workflows = Path(__file__).parents[1] / ".github" / "workflows"
+        matrix = 'python-version: ["' + '", "'.join(supported) + '"]'
+        release = (workflows / "release.yml").read_text(encoding="utf-8")
+        self.assertEqual(release.count(matrix), 3, "CPU, Windows CUDA and Linux CUDA wheels")
+        ci = (workflows / "ci.yml").read_text(encoding="utf-8")
+        self.assertEqual(ci.count(matrix), 2, "native CPU and baseline matrices")
+
     def test_cuda_import_only_smoke_preserves_the_full_device_gate(self) -> None:
         import_only = _smoke_program("0.6.1", import_only=True)
         full = _smoke_program("0.6.1", import_only=False)
@@ -131,6 +180,10 @@ class NativeReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("backend='native_cuda'", import_only)
         self.assertIn("assert _native_cuda.is_available()", full)
         self.assertIn("backend='native_cuda'", full)
+        self.assertIn("penalty='l1'", full)
+        # The import-only gate still pins the ABI the wheel was built for.
+        self.assertIn("['abi_version']==2", import_only)
+        self.assertIn("['python_api_version']==4", import_only)
 
     def test_cuda_device_code_stays_whole_program_so_wheels_keep_ptx(self) -> None:
         # The release workflow proves the shipped wheel carries SM 120 PTX, but
@@ -163,7 +216,7 @@ class NativeReleaseMetadataTests(unittest.TestCase):
             PROJECT_ROOT / "native" / "python-cuda" / "pyproject.toml": {
                 "name": "renewable-huber-native-cuda",
                 "version": version,
-                "dependencies": [expected_dependency],
+                "dependencies": [expected_dependency, *NATIVE_RUNTIME_DEPENDENCIES["cuda"]],
                 "requires-python": SUPPORTED_PYTHON,
             },
         }
@@ -193,7 +246,7 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                 "Metadata-Version: 2.4\n"
                 "Name: renewable-huber-native-cpu\n"
                 "Version: 0.6.0\n"
-                "Requires-Python: >=3.10, <3.13\n"
+                "Requires-Python: >=3.10, <3.14\n"
                 "Requires-Dist: renewable-huber==0.6.0\n\n"
             )
             with zipfile.ZipFile(wheel, "w") as archive:
@@ -211,6 +264,44 @@ class NativeReleaseMetadataTests(unittest.TestCase):
                 expected_version="0.6.0",
             )
             self.assertEqual(errors, [])
+
+    def test_cuda_wheel_must_declare_its_nvidia_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = (
+                Path(directory)
+                / "renewable_huber_native_cuda-0.6.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+            )
+            runtime = list(NATIVE_RUNTIME_DEPENDENCIES["cuda"])
+            metadata = (
+                "Metadata-Version: 2.4\n"
+                "Name: renewable-huber-native-cuda\n"
+                "Version: 0.6.0\n"
+                f"Requires-Python: {SUPPORTED_PYTHON}\n"
+                "Requires-Dist: renewable-huber==0.6.0\n"
+                + "".join(f"Requires-Dist: {item}\n" for item in runtime[1:])
+                + "\n"
+            )
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr("renewable_huber_native_cuda-0.6.0.dist-info/METADATA", metadata)
+                archive.writestr(
+                    "_renewable_huber_native_cuda/_renewable_huber_native_cuda.so", b"extension"
+                )
+                archive.writestr(
+                    "renewable_huber_native_cuda-0.6.0.dist-info/licenses/LICENSE", "license"
+                )
+                archive.writestr(
+                    "renewable_huber_native_cuda-0.6.0.dist-info/licenses/NOTICE", "notice"
+                )
+            errors = _check_native_wheel(
+                read_wheel_metadata(wheel), kind="cuda", expected_version="0.6.0"
+            )
+        self.assertEqual(errors, [f"{wheel.name}: missing runtime dependency {runtime[0]}"])
+
+    def test_native_projects_declare_exactly_the_expected_runtime(self) -> None:
+        self.assertEqual(NATIVE_RUNTIME_DEPENDENCIES["cpu"], ())
+        self.assertTrue(
+            all(item.startswith("nvidia-") for item in NATIVE_RUNTIME_DEPENDENCIES["cuda"])
+        )
 
     def test_mismatched_native_version_and_dependency_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

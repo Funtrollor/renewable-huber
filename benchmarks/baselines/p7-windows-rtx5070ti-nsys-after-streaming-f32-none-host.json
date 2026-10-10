@@ -1,0 +1,348 @@
+{
+  "breakdown": {
+    "batch_count": 48,
+    "classes_fraction": {
+      "gpu_compute": 0.16752251097783744,
+      "h2d": 0.21205399826862775,
+      "launch_and_sync": 0.36046956650831835,
+      "other_copies": 0.008435932618824183,
+      "python_and_binding": 0.25151799162639227
+    },
+    "classes_milliseconds": {
+      "gpu_compute": 15.452685,
+      "h2d": 19.560378,
+      "launch_and_sync": 33.250592,
+      "other_copies": 0.778151,
+      "python_and_binding": 23.200633
+    },
+    "final_synchronize_milliseconds": 0.109623,
+    "h2d": {
+      "api_gigabytes_per_second": 21.68172901095195,
+      "api_milliseconds": 18.26524,
+      "bytes": 396021984,
+      "dma_gigabytes_per_second": 26.768634903794407,
+      "dma_milliseconds": 14.794254,
+      "source_kind_bytes": {
+        "Pageable": 396013464,
+        "Pinned": 8520
+      }
+    },
+    "iterations": 111,
+    "line_search_candidates_per_iteration": 1.4864864864864864,
+    "native_segment_milliseconds": 69.041806,
+    "per_batch": {
+      "capture_info_polls": 31.4375,
+      "graph_launches": 0.0,
+      "kernels_executed": 56.5625,
+      "launch_calls": 56.5625,
+      "memcpy_calls": 20.9375,
+      "stream_synchronizations": 5.5,
+      "wall_milliseconds": 1.9217174791666667
+    },
+    "per_iteration": {
+      "capture_info_polls": 13.594594594594595,
+      "graph_launches": 0.0,
+      "kernels_executed": 24.45945945945946,
+      "launch_calls": 24.45945945945946,
+      "memcpy_calls": 9.054054054054054,
+      "stream_synchronizations": 2.3783783783783785,
+      "wall_milliseconds": 0.831012963963964
+    },
+    "phase_ranges": true,
+    "python_and_binding_detail_milliseconds": {
+      "commit": 0.540275,
+      "input_validation": 19.98274,
+      "update_entry": 1.043311,
+      "update_exit": 0.876815
+    },
+    "wall_milliseconds": 92.242439
+  },
+  "kernels": {
+    "count": 2717,
+    "top": [
+      {
+        "count": 213,
+        "name": "void rh_cuda::<unnamed>::candidate_residual_loss_kernel<float>(const rh_cuda::CandidateRoundParameters<T1> *, const T1 *, const T1 *, const T1 *, const T1 *, T1 *, double *, const double *, double *, unsigned int *, long long, long long, int, T1)",
+        "total_milliseconds": 3.900502
+      },
+      {
+        "count": 159,
+        "name": "void cutlass::Kernel2<cutlass_80_simt_sgemm_64x64_8x5_nt_align1>(T1::Params)",
+        "total_milliseconds": 3.664113
+      },
+      {
+        "count": 159,
+        "name": "void rh_cuda::<unnamed>::weight_design_kernel<float>(const T1 *, const T1 *, const T1 *, T1 *, long long, long long)",
+        "total_milliseconds": 1.520604
+      },
+      {
+        "count": 213,
+        "name": "void rh_cuda::<unnamed>::candidate_terms_kernel<float>(const rh_cuda::CandidateRoundParameters<T1> *, const T1 *, const T1 *, const T1 *, const T1 *, const T1 *, const T1 *, T1 *, double *, long long, long long)",
+        "total_milliseconds": 1.353947
+      },
+      {
+        "count": 222,
+        "name": "void gemvNSP_kernel<float, float, float, float, (int)1, (int)32, (int)4, (int)1024, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T10)",
+        "total_milliseconds": 1.004317
+      },
+      {
+        "count": 111,
+        "name": "void kernel<getrf_wo_pivot_params_<float, (int)0, (int)256, (int)1, (int)64, (int)64, (int)68, (int)4, (int)1, (int)1>>(int, int, void *, int, void *, int, int, int, int, int, int *)",
+        "total_milliseconds": 0.907806
+      },
+      {
+        "count": 48,
+        "name": "void rh_cuda::<unnamed>::append_intercept_kernel<float>(const T1 *, T1 *, long long, long long)",
+        "total_milliseconds": 0.621786
+      },
+      {
+        "count": 270,
+        "name": "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)",
+        "total_milliseconds": 0.612159
+      },
+      {
+        "count": 111,
+        "name": "void trsv_ln_exec<float, (unsigned int)32, (unsigned int)32, (unsigned int)4, (bool)0>(int, const T1 *, long long, T1 *, long long, int *)",
+        "total_milliseconds": 0.531039
+      },
+      {
+        "count": 111,
+        "name": "void trsv_lt_exec<float, (unsigned int)32, (unsigned int)32, (unsigned int)4, (bool)0, (bool)0>(int, const T1 *, long long, T1 *, long long, int *)",
+        "total_milliseconds": 0.461375
+      },
+      {
+        "count": 159,
+        "name": "void rh_cuda::<unnamed>::residual_score_curvature_kernel<float>(const T1 *, T1 *, T1 *, T1 *, long long, T1, T1)",
+        "total_milliseconds": 0.166623
+      },
+      {
+        "count": 159,
+        "name": "void rh_cuda::<unnamed>::add_matrix_kernel<float>(const T1 *, const T1 *, T1 *, long long)",
+        "total_milliseconds": 0.124672
+      },
+      {
+        "count": 111,
+        "name": "void copy_kernel<float>(cublasCopyParams<T1>)",
+        "total_milliseconds": 0.098879
+      },
+      {
+        "count": 111,
+        "name": "void rh_cuda::<unnamed>::scale_and_add_identity_kernel<float>(T1 *, long long, T1, T1)",
+        "total_milliseconds": 0.094208
+      },
+      {
+        "count": 111,
+        "name": "void rh_cuda::<unnamed>::subtract_kernel<float>(const T1 *, const T1 *, T1 *, long long)",
+        "total_milliseconds": 0.086304
+      }
+    ],
+    "total_milliseconds": 15.454477
+  },
+  "memcopies": [
+    {
+      "bytes": 396030960,
+      "count": 319,
+      "kind": "Host-to-Device",
+      "total_milliseconds": 14.795534
+    },
+    {
+      "bytes": 257208,
+      "count": 420,
+      "kind": "Device-to-Host",
+      "total_milliseconds": 0.510653
+    },
+    {
+      "bytes": 504504,
+      "count": 270,
+      "kind": "Device-to-Device",
+      "total_milliseconds": 0.211775
+    }
+  ],
+  "nvtx": {
+    "range_count": 3,
+    "range_prefix": "profile/repeat-",
+    "window_milliseconds": 92.836243
+  },
+  "runtime_api": [
+    {
+      "count": 1009,
+      "name": "cudaMemcpyAsync_v3020",
+      "total_milliseconds": 25.268182
+    },
+    {
+      "count": 269,
+      "name": "cudaStreamSynchronize_v3020",
+      "total_milliseconds": 24.381482
+    },
+    {
+      "count": 2558,
+      "name": "cudaLaunchKernel_v7000",
+      "total_milliseconds": 13.871659
+    },
+    {
+      "count": 222,
+      "name": "cudaMemsetAsync_v3020",
+      "total_milliseconds": 0.950248
+    },
+    {
+      "count": 159,
+      "name": "cuLaunchKernel",
+      "total_milliseconds": 0.891185
+    },
+    {
+      "count": 270,
+      "name": "cudaEventRecord_v3020",
+      "total_milliseconds": 0.242236
+    },
+    {
+      "count": 1509,
+      "name": "cuStreamGetCaptureInfo_v2",
+      "total_milliseconds": 0.094972
+    },
+    {
+      "count": 159,
+      "name": "cuKernelGetFunction",
+      "total_milliseconds": 0.041045
+    }
+  ],
+  "schema": "renewable-huber-nsys-summary",
+  "schema_version": 2,
+  "source": "artifacts\\nsight-p7-afterB\\streaming-f32-none-host\\native-float32-none-host-1000000x32-b65536-systems.sqlite",
+  "synchronizations": [
+    {
+      "count": 269,
+      "kind": "Stream wait sync",
+      "total_milliseconds": 24.297234
+    }
+  ],
+  "workload_metadata": {
+    "all_batches_converged": true,
+    "batch_iterations": [
+      [
+        7,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      [
+        7,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      [
+        7,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    ],
+    "configuration": {
+      "batch_size": 65536,
+      "batches": 16,
+      "cuda_fast_math": false,
+      "cuda_graphs": false,
+      "dtype": "float32",
+      "engine": "native_cuda",
+      "engine_prime_runs": 1,
+      "features": 32,
+      "includes_engine_initialization": false,
+      "input_location": "host",
+      "max_iter": 100,
+      "penalty": "none",
+      "phase_ranges": true,
+      "repeat_state_reset": "restore_empty_portable_state",
+      "repeats": 3,
+      "resident_engine": true,
+      "samples": 1000000,
+      "seed": 42,
+      "tol": 1e-06,
+      "warmup": 2
+    },
+    "cuda_features": {
+      "cuda_graphs_enabled": false,
+      "cuda_graphs_requested": false,
+      "fast_math_enabled": false,
+      "fast_math_requested": false,
+      "graph_captures": 0,
+      "graph_fallbacks": 0,
+      "graph_replays": 0
+    },
+    "cuda_runtime": 12090,
+    "cupy": "14.2.0",
+    "elapsed_seconds": [
+      0.030961500015109777,
+      0.030852199997752905,
+      0.03060890012420714
+    ],
+    "git_revision": "d131e06afd7ce86dedd76f0ec1a501093c407047",
+    "gpu": "NVIDIA GeForce RTX 5070 Ti",
+    "gpu_compute_capability": "12.0",
+    "iteration_counts": [
+      37,
+      37,
+      37
+    ],
+    "native_cuda_abi": {
+      "abi_version": 2,
+      "cuda_available": true,
+      "cuda_graphs": "opt_in_best_effort",
+      "device_count": 1,
+      "device_input": "dlpack",
+      "device_predict": "dlpack",
+      "driver_version": 13040,
+      "engine_version": "0.7.0",
+      "fast_math": "opt_in_float32_tf32",
+      "initial_state": "canonical_empty",
+      "python_api_version": 4,
+      "runtime_version": 12090,
+      "supported_penalties": [
+        "none",
+        "l1"
+      ],
+      "supports_cuda_graphs": true,
+      "supports_fast_math": true
+    },
+    "numpy": "2.4.6",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.0",
+    "schema": "renewable-huber-nsight-profile",
+    "schema_version": 1
+  }
+}

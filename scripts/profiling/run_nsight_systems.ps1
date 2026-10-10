@@ -1,6 +1,8 @@
 param(
     [string]$Python = "python",
-    [string]$OutputDirectory = "artifacts/nsight",
+    # Empty selects a directory named after the configuration under
+    # artifacts/nsight, so two configurations never overwrite each other.
+    [string]$OutputDirectory = "",
     [int]$Samples = 100000,
     [int]$Features = 90,
     [int]$BatchSize = 32768,
@@ -10,19 +12,24 @@ param(
     [string]$Penalty = "none",
     [ValidateSet("cupy", "native_cuda")]
     [string]$Engine = "cupy",
+    # Empty keeps the historical defaults: host NumPy input for native_cuda,
+    # resident CuPy input for cupy. "device" hands native_cuda CuPy arrays
+    # through its DLPack path.
+    [ValidateSet("", "host", "device")]
+    [string]$InputLocation = "",
     [switch]$CudaGraphs,
     [switch]$CudaFastMath
 )
 
 $ErrorActionPreference = "Stop"
-if (($Engine -eq "native_cuda") -and ($Penalty -ne "none")) {
-    throw "The P2 native CUDA engine supports penalty='none' only."
-}
 if (($CudaGraphs -or $CudaFastMath) -and ($Engine -ne "native_cuda")) {
     throw "CUDA tuning switches require Engine='native_cuda'."
 }
 if ($CudaFastMath -and ($DType -ne "float32")) {
     throw "CudaFastMath requires DType='float32'."
+}
+if ($InputLocation -eq "") {
+    $InputLocation = if ($Engine -eq "native_cuda") { "host" } else { "device" }
 }
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $profiler = Get-Command nsys -ErrorAction SilentlyContinue
@@ -40,16 +47,17 @@ if ($null -eq $profiler) {
     $profilerPath = $profiler.Source
 }
 
+# Every input that changes the workload is part of the name, so reports from
+# different configurations cannot overwrite one another.
+$engineLabel = if ($Engine -eq "native_cuda") { "native" } else { "cupy" }
+$profileName = "$engineLabel-$DType-$Penalty-$InputLocation-${Samples}x${Features}-b$BatchSize"
+if ($CudaGraphs) { $profileName += "-graphs" }
+if ($CudaFastMath) { $profileName += "-fastmath" }
+if ($OutputDirectory -eq "") {
+    $OutputDirectory = Join-Path "artifacts/nsight" $profileName
+}
 $outputPath = Join-Path $projectRoot $OutputDirectory
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-$profileName = if ($CudaGraphs -or $CudaFastMath) {
-    "native-core-p4-tuned"
-} elseif ($Engine -eq "native_cuda") {
-    "native-core-p2-native"
-} else {
-    "native-core-p0-cupy"
-}
-$inputLocation = if ($Engine -eq "native_cuda") { "host" } else { "device" }
 $reportPrefix = Join-Path $outputPath "$profileName-systems"
 $metadataPath = Join-Path $outputPath "$profileName-systems.json"
 $summaryPath = Join-Path $outputPath "$profileName-summary.json"
@@ -58,9 +66,15 @@ $summarizer = Join-Path $PSScriptRoot "summarize_nsys_sqlite.py"
 $tuningArguments = @()
 if ($CudaGraphs) { $tuningArguments += "--cuda-graphs" }
 if ($CudaFastMath) { $tuningArguments += "--cuda-fast-math" }
+# Node-level graph tracing. With the default graph-level trace, Nsight
+# Systems 2025.1.3 and 2025.3.2 hang at 0% importing a capture whose graphs
+# contain a pinned host-to-device memcpy node (the native line-search round).
+$graphTrace = @()
+if ($CudaGraphs) { $graphTrace += "--cuda-graph-trace=node" }
 
 & $profilerPath profile `
     --trace=cuda,nvtx,cublas,cusolver `
+    @graphTrace `
     --stats=true `
     --force-overwrite=true `
     --output=$reportPrefix `
@@ -71,9 +85,10 @@ if ($CudaFastMath) { $tuningArguments += "--cuda-fast-math" }
     --dtype $DType `
     --penalty $Penalty `
     --engine $Engine `
-    --input-location $inputLocation `
+    --input-location $InputLocation `
     --warmup 2 `
     --repeats 3 `
+    --phase-ranges `
     @tuningArguments `
     --metadata-output $metadataPath
 

@@ -90,8 +90,8 @@ bool create_float64_engine(EngineHandle& handle, int64_t n_parameters) {
     return rh_cuda_engine_create(&options, &handle.value) == RH_CUDA_STATUS_SUCCESS;
 }
 
-RhCudaUnpenalizedConfig unpenalized_config(int64_t n_features_in) {
-    RhCudaUnpenalizedConfig config{};
+RhCudaUpdateConfig unpenalized_config(int64_t n_features_in) {
+    RhCudaUpdateConfig config{};
     initialize(&config);
     config.n_features_in = n_features_in;
     config.max_iter = 100;
@@ -148,7 +148,7 @@ bool fit_host_batch(
     batch.n_columns = n_columns;
     batch.batch_weight = static_cast<double>(n_rows);
 
-    const RhCudaUnpenalizedConfig config = unpenalized_config(n_features_in);
+    const RhCudaUpdateConfig config = unpenalized_config(n_features_in);
     initialize(&fit.state);
     initialize(&fit.diagnostics);
     fit.state.coefficients = fit.coefficients;
@@ -263,7 +263,7 @@ bool fit_device_batch(
     batch.n_columns = n_columns;
     batch.batch_weight = static_cast<double>(n_rows);
 
-    const RhCudaUnpenalizedConfig config = unpenalized_config(n_features_in);
+    const RhCudaUpdateConfig config = unpenalized_config(n_features_in);
     initialize(&fit.state);
     initialize(&fit.diagnostics);
     fit.state.coefficients = fit.coefficients;
@@ -315,7 +315,7 @@ bool case_update_device_then_host() {
     device_batch.n_columns = 2;
     device_batch.batch_weight = 4.0;
 
-    const RhCudaUnpenalizedConfig config = unpenalized_config(1);
+    const RhCudaUpdateConfig config = unpenalized_config(1);
     Fit device;
     initialize(&device.state);
     initialize(&device.diagnostics);
@@ -365,7 +365,7 @@ bool case_device_batch_rejects_host_pointer() {
     batch.n_columns = 2;
     batch.batch_weight = 4.0;
 
-    const RhCudaUnpenalizedConfig config = unpenalized_config(1);
+    const RhCudaUpdateConfig config = unpenalized_config(1);
     RhCudaDiagnostics diagnostics{};
     initialize(&diagnostics);
     double coefficients[2] = {};
@@ -413,7 +413,7 @@ bool case_status_survives_translation_units() {
     batch.n_columns = 5;  /* matches neither n_parameters nor n_features_in */
     batch.batch_weight = 4.0;
 
-    const RhCudaUnpenalizedConfig config = unpenalized_config(1);
+    const RhCudaUpdateConfig config = unpenalized_config(1);
     RhCudaDiagnostics diagnostics{};
     initialize(&diagnostics);
     const RhCudaStatus status =
@@ -444,13 +444,300 @@ bool case_intercept_invariant_is_enforced() {
     batch.n_columns = 1;
     batch.batch_weight = 4.0;
 
-    const RhCudaUnpenalizedConfig config = unpenalized_config(1);
+    const RhCudaUpdateConfig config = unpenalized_config(1);
     RhCudaDiagnostics diagnostics{};
     initialize(&diagnostics);
     REQUIRE(
         rh_cuda_engine_update_host(handle.value, &batch, &config, &diagnostics) ==
             RH_CUDA_STATUS_INVALID_ARGUMENT,
         "n_features_in = 1 with n_parameters = 4 was accepted"
+    );
+    return true;
+}
+
+/*
+ * ABI 2: penalty-aware update configuration and location-aware prediction.
+ */
+
+RhCudaUpdateConfig l1_config(int64_t n_features_in, double lambda_scale) {
+    RhCudaUpdateConfig config = unpenalized_config(n_features_in);
+    config.penalty = RH_CUDA_PENALTY_L1;
+    config.lambda_scale = lambda_scale;
+    config.max_iter = 400;
+    config.tolerance = 1e-9;
+    return config;
+}
+
+/* Two-feature stream shared with the NumPy/Rust reference values below. */
+const double kL1Features1[12] = {
+    -1.0, 0.5, 0.0, -1.0, 1.0, 0.25, 2.0, 1.5, -0.5, -0.5, 1.5, -1.25,
+};
+const double kL1Target1[6] = {-0.9, 0.35, 1.2, 2.6, -0.2, 1.1};
+const double kL1Features2[8] = {0.5, 1.0, -1.5, 0.0, 1.0, -1.0, 0.25, 0.75};
+const double kL1Target2[4] = {0.8, -1.4, 0.7, 0.6};
+const double kL1Weights2[4] = {1.0, 2.0, 0.5, 0.0};
+
+bool update_l1_host(
+    RhCudaEngine* engine,
+    const double* features,
+    const double* target,
+    const double* weights,
+    int64_t rows,
+    double batch_weight,
+    const RhCudaUpdateConfig& config,
+    Fit& fit
+) {
+    RhCudaHostBatch batch{};
+    initialize(&batch);
+    batch.x_design = features;
+    batch.y = target;
+    batch.sample_weight = weights;
+    batch.n_rows = rows;
+    batch.n_columns = 2;
+    batch.batch_weight = batch_weight;
+    initialize(&fit.state);
+    initialize(&fit.diagnostics);
+    fit.state.coefficients = fit.coefficients;
+    fit.state.information = fit.information;
+    return rh_cuda_engine_update_host_with_state(
+               engine, &batch, &config, &fit.diagnostics, &fit.state
+           ) == RH_CUDA_STATUS_SUCCESS;
+}
+
+bool case_l1_stream_matches_reference() {
+    /*
+     * Expected values come from the NumPy reference, which the Rust CPU engine
+     * reproduces to ~1e-15 on this stream.  The solver deliberately runs to
+     * max_iter; the GPU's reduction order moves the trajectory by far less
+     * than the 1e-6 allowed here.  The second batch exercises the historical
+     * subgradient, a zero weight, and non-unit weights.
+     */
+    EngineHandle handle;
+    REQUIRE(create_float64_engine(handle, 3), "engine creation failed");
+    REQUIRE(restore_zero_state(handle.value, 3), "zero-state restore failed");
+    const RhCudaUpdateConfig config = l1_config(2, 0.8);
+
+    Fit first;
+    REQUIRE(
+        update_l1_host(handle.value, kL1Features1, kL1Target1, nullptr, 6, 6.0, config, first),
+        "first L1 update failed"
+    );
+    REQUIRE(close(first.coefficients[0], 0.6829540472953248, 1e-6), "first L1 coefficient 0");
+    REQUIRE(first.coefficients[1] == 0.0, "first L1 update did not zero coefficient 1");
+    REQUIRE(close(first.coefficients[2], 0.35018992533742943, 1e-6), "first L1 intercept");
+    REQUIRE(close(first.diagnostics.objective, 0.3539251693367076, 1e-8), "first L1 objective");
+    REQUIRE(
+        close(first.diagnostics.lambda_value, 0.3657205604738795, 1e-12) &&
+            close(first.state.previous_lambda, first.diagnostics.lambda_value, 0.0),
+        "first L1 lambda was not committed as previous_lambda"
+    );
+
+    Fit second;
+    REQUIRE(
+        update_l1_host(handle.value, kL1Features2, kL1Target2, kL1Weights2, 4, 3.5, config, second),
+        "second L1 update failed"
+    );
+    REQUIRE(close(second.coefficients[0], 0.8055087401784005, 1e-6), "second L1 coefficient 0");
+    REQUIRE(second.coefficients[1] == 0.0, "second L1 update did not zero coefficient 1");
+    REQUIRE(close(second.coefficients[2], 0.1792146584340598, 1e-6), "second L1 intercept");
+    REQUIRE(close(second.diagnostics.objective, 0.23423173578534606, 1e-8), "second L1 objective");
+    REQUIRE(close(second.state.previous_lambda, 0.29064522959496986, 1e-12), "second L1 lambda");
+    REQUIRE(close(second.state.weight_sum, 9.5, 1e-12), "second L1 weight sum");
+    REQUIRE(second.state.batch_count == 2 && second.state.n_samples_seen == 10, "L1 counters");
+
+    const double probe[2] = {1.0, 2.0};
+    double predicted[1] = {};
+    RhCudaPrediction request{};
+    initialize(&request);
+    request.x_design = probe;
+    request.prediction = predicted;
+    request.n_rows = 1;
+    request.n_columns = 2;
+    request.n_features_in = 2;
+    request.input_location = RH_CUDA_MEMORY_HOST;
+    REQUIRE(rh_cuda_engine_predict(handle.value, &request) == RH_CUDA_STATUS_SUCCESS, "L1 predict");
+    REQUIRE(close(predicted[0], 0.9847233986124603, 1e-6), "L1 narrow host prediction");
+    return true;
+}
+
+bool case_l1_never_penalizes_the_intercept() {
+    EngineHandle handle;
+    REQUIRE(create_float64_engine(handle, 3), "engine creation failed");
+    REQUIRE(restore_zero_state(handle.value, 3), "zero-state restore failed");
+    Fit fit;
+    REQUIRE(
+        update_l1_host(
+            handle.value, kL1Features1, kL1Target1, nullptr, 6, 6.0, l1_config(2, 50.0), fit
+        ),
+        "heavily penalized update failed"
+    );
+    REQUIRE(fit.coefficients[0] == 0.0 && fit.coefficients[1] == 0.0, "features were not zeroed");
+    REQUIRE(close(fit.coefficients[2], 0.6125009324249108, 1e-6), "the intercept was penalized");
+    return true;
+}
+
+bool case_l1_rejections_leave_state_untouched() {
+    EngineHandle handle;
+    REQUIRE(create_float64_engine(handle, 3), "engine creation failed");
+    REQUIRE(restore_zero_state(handle.value, 3), "zero-state restore failed");
+    Fit committed;
+    REQUIRE(
+        update_l1_host(
+            handle.value, kL1Features1, kL1Target1, nullptr, 6, 6.0, l1_config(2, 0.8), committed
+        ),
+        "baseline L1 update failed"
+    );
+
+    RhCudaUpdateConfig unknown = l1_config(2, 0.8);
+    unknown.penalty = 2;
+    RhCudaUpdateConfig reserved = l1_config(2, 0.8);
+    reserved.reserved0 = 1;
+    RhCudaUpdateConfig negative = l1_config(2, -0.5);
+    RhCudaUpdateConfig not_finite = l1_config(2, std::nan(""));
+    const RhCudaUpdateConfig* rejected[] = {&unknown, &reserved, &negative, &not_finite};
+    for (const RhCudaUpdateConfig* config : rejected) {
+        Fit ignored;
+        RhCudaHostBatch batch{};
+        initialize(&batch);
+        batch.x_design = kL1Features2;
+        batch.y = kL1Target2;
+        batch.n_rows = 4;
+        batch.n_columns = 2;
+        batch.batch_weight = 4.0;
+        initialize(&ignored.diagnostics);
+        REQUIRE(
+            rh_cuda_engine_update_host(handle.value, &batch, config, &ignored.diagnostics) ==
+                RH_CUDA_STATUS_INVALID_ARGUMENT,
+            "a malformed penalty configuration was accepted"
+        );
+    }
+
+    double coefficients[3] = {};
+    double information[9] = {};
+    RhCudaHostState state{};
+    initialize(&state);
+    state.coefficients = coefficients;
+    state.information = information;
+    REQUIRE(rh_cuda_engine_copy_state(handle.value, &state) == RH_CUDA_STATUS_SUCCESS, "copy");
+    REQUIRE(
+        std::memcmp(coefficients, committed.coefficients, sizeof(coefficients)) == 0 &&
+            std::memcmp(information, committed.information, sizeof(information)) == 0 &&
+            state.batch_count == 1 && state.previous_lambda == committed.state.previous_lambda,
+        "a rejected update changed the committed state"
+    );
+    return true;
+}
+
+bool case_l1_device_input_matches_host() {
+    EngineHandle host_engine;
+    EngineHandle device_engine;
+    REQUIRE(create_float64_engine(host_engine, 3), "host engine creation failed");
+    REQUIRE(create_float64_engine(device_engine, 3), "device engine creation failed");
+    REQUIRE(restore_zero_state(host_engine.value, 3), "host zero-state restore failed");
+    REQUIRE(restore_zero_state(device_engine.value, 3), "device zero-state restore failed");
+    const RhCudaUpdateConfig config = l1_config(2, 0.8);
+
+    Fit host;
+    REQUIRE(
+        update_l1_host(host_engine.value, kL1Features1, kL1Target1, nullptr, 6, 6.0, config, host),
+        "host L1 update failed"
+    );
+
+    DeviceBuffer x;
+    DeviceBuffer target;
+    REQUIRE(x.upload(kL1Features1, 12) && target.upload(kL1Target1, 6), "device upload failed");
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess, "device upload did not complete");
+    RhCudaDeviceBatch batch{};
+    initialize(&batch);
+    batch.x_design = x.value;
+    batch.y = target.value;
+    batch.n_rows = 6;
+    batch.n_columns = 2;
+    batch.batch_weight = 6.0;
+    Fit device;
+    initialize(&device.state);
+    initialize(&device.diagnostics);
+    device.state.coefficients = device.coefficients;
+    device.state.information = device.information;
+    REQUIRE(
+        rh_cuda_engine_update_device_with_state(
+            device_engine.value, &batch, &config, &device.diagnostics, &device.state
+        ) == RH_CUDA_STATUS_SUCCESS,
+        "device L1 update failed"
+    );
+    REQUIRE(fits_agree(host, device, 3), "device L1 input changed the fit");
+    return true;
+}
+
+bool case_prediction_reads_device_input() {
+    /*
+     * The same fitted engine predicts from a host expanded design, a device
+     * expanded design (read in place), and a device feature matrix widened on
+     * device.  All three must agree exactly.
+     */
+    EngineHandle handle;
+    Fit fit;
+    REQUIRE(create_float64_engine(handle, 2), "engine creation failed");
+    REQUIRE(restore_zero_state(handle.value, 2), "zero-state restore failed");
+    RhCudaHostBatch batch{};
+    initialize(&batch);
+    batch.x_design = kWideDesign2;
+    batch.y = kTarget;
+    batch.n_rows = 4;
+    batch.n_columns = 2;
+    batch.batch_weight = 4.0;
+    const RhCudaUpdateConfig config = unpenalized_config(1);
+    initialize(&fit.diagnostics);
+    REQUIRE(
+        rh_cuda_engine_update_host(handle.value, &batch, &config, &fit.diagnostics) ==
+            RH_CUDA_STATUS_SUCCESS,
+        "update before prediction failed"
+    );
+
+    DeviceBuffer wide;
+    DeviceBuffer narrow;
+    REQUIRE(wide.upload(kWideDesign2, 8) && narrow.upload(kNarrowDesign2, 4), "upload failed");
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess, "device upload did not complete");
+
+    double from_host[4] = {};
+    double from_wide[4] = {};
+    double from_narrow[4] = {};
+    RhCudaPrediction request{};
+    initialize(&request);
+    request.n_rows = 4;
+    request.n_features_in = 1;
+
+    request.x_design = kWideDesign2;
+    request.prediction = from_host;
+    request.n_columns = 2;
+    request.input_location = RH_CUDA_MEMORY_HOST;
+    REQUIRE(rh_cuda_engine_predict(handle.value, &request) == RH_CUDA_STATUS_SUCCESS, "host");
+
+    request.x_design = wide.value;
+    request.prediction = from_wide;
+    request.input_location = RH_CUDA_MEMORY_DEVICE;
+    REQUIRE(rh_cuda_engine_predict(handle.value, &request) == RH_CUDA_STATUS_SUCCESS, "wide");
+
+    request.x_design = narrow.value;
+    request.prediction = from_narrow;
+    request.n_columns = 1;
+    REQUIRE(rh_cuda_engine_predict(handle.value, &request) == RH_CUDA_STATUS_SUCCESS, "narrow");
+    REQUIRE(
+        std::memcmp(from_host, from_wide, sizeof(from_host)) == 0 &&
+            std::memcmp(from_host, from_narrow, sizeof(from_host)) == 0,
+        "device prediction differs from host prediction"
+    );
+
+    request.x_design = kNarrowDesign2;  /* host memory declared as device */
+    REQUIRE(
+        rh_cuda_engine_predict(handle.value, &request) != RH_CUDA_STATUS_SUCCESS,
+        "a host pointer was accepted as device prediction input"
+    );
+    request.x_design = narrow.value;
+    request.input_location = 7;
+    REQUIRE(
+        rh_cuda_engine_predict(handle.value, &request) == RH_CUDA_STATUS_INVALID_ARGUMENT,
+        "an unknown prediction input location was accepted"
     );
     return true;
 }
@@ -574,7 +861,7 @@ int main() {
     batch.n_columns = 2;
     batch.batch_weight = 4.0;
 
-    RhCudaUnpenalizedConfig config{};
+    RhCudaUpdateConfig config{};
     initialize(&config);
     config.n_features_in = 1;
     config.max_iter = 100;
@@ -623,13 +910,15 @@ int main() {
     }
 
     double predictions[4] = {};
-    RhCudaHostPrediction prediction{};
+    RhCudaPrediction prediction{};
     initialize(&prediction);
     prediction.x_design = design;
     prediction.prediction = predictions;
     prediction.n_rows = 4;
     prediction.n_columns = 2;
-    if (!check(rh_cuda_engine_predict_host(engine, &prediction), "rh_cuda_engine_predict_host")) {
+    prediction.n_features_in = 1;
+    prediction.input_location = RH_CUDA_MEMORY_HOST;
+    if (!check(rh_cuda_engine_predict(engine, &prediction), "rh_cuda_engine_predict")) {
         rh_cuda_engine_destroy(engine);
         return 1;
     }
@@ -767,6 +1056,11 @@ int main() {
         {"device_batch_rejects_host_pointer", case_device_batch_rejects_host_pointer},
         {"status_survives_translation_units", case_status_survives_translation_units},
         {"intercept_invariant_is_enforced", case_intercept_invariant_is_enforced},
+        {"l1_stream_matches_reference", case_l1_stream_matches_reference},
+        {"l1_never_penalizes_the_intercept", case_l1_never_penalizes_the_intercept},
+        {"l1_rejections_leave_state_untouched", case_l1_rejections_leave_state_untouched},
+        {"l1_device_input_matches_host", case_l1_device_input_matches_host},
+        {"prediction_reads_device_input", case_prediction_reads_device_input},
     };
     for (const auto& entry : cases) {
         if (!entry.run()) {

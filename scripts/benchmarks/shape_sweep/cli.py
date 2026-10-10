@@ -2,25 +2,30 @@
 
 Every unsupported combination is written into ``skipped`` with an explicit
 reason. Silence is not an acceptable way to report that a case did not run:
-a consumer comparing two records must be able to see that native CUDA declined
-an L1 case rather than infer it from an absence.
+a consumer comparing two records must be able to see that, for example, a
+steady-state ``fit`` was declined (``fit`` resets the estimator) rather than
+infer it from an absence.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-# ``src`` must be importable before ``renewable_huber``; see ``timing.py`` for
-# why the two lines are repeated rather than shared.
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-if str(_PROJECT_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT / "src"))
+from scripts.benchmarks.shape_sweep.source_root import (
+    assert_measuring,
+    is_overridden,
+    put_source_on_path,
+)
 
+# ``src`` must be importable before ``renewable_huber``; see ``source_root``.
+put_source_on_path()
+
+import renewable_huber  # noqa: E402
 from renewable_huber import BackendUnavailableError  # noqa: E402
 from scripts.benchmarks.shape_sweep.environment import environment_metadata  # noqa: E402
 from scripts.benchmarks.shape_sweep.runners import (  # noqa: E402
@@ -28,6 +33,11 @@ from scripts.benchmarks.shape_sweep.runners import (  # noqa: E402
     benchmark_native_cpu,
     benchmark_native_cuda,
     benchmark_numpy,
+)
+from scripts.benchmarks.shape_sweep.sampling_plan import (  # noqa: E402
+    load_plan,
+    plan_key,
+    planned_repetitions,
 )
 from scripts.benchmarks.shape_sweep.shapes import (  # noqa: E402
     PROFILES,
@@ -78,6 +88,31 @@ def _record_skip(
     print(
         f"Skipped {base['shape']['name']} {base['penalty']} {base['dtype']} "
         f"{lifecycle}/{operation} {engine}: {reason}"
+    )
+
+
+def _planned_repetitions(
+    plan: dict[str, int] | None,
+    *,
+    shape: str,
+    dtype: str,
+    penalty: str,
+    lifecycle: str,
+    operation: str,
+    engine: str,
+) -> int | None:
+    """Return a case's planned sample block size, or ``None`` without a plan."""
+
+    return planned_repetitions(
+        plan,
+        plan_key(
+            shape=shape,
+            dtype=dtype,
+            penalty=penalty,
+            lifecycle=lifecycle,
+            operation=operation,
+            engine=engine,
+        ),
     )
 
 
@@ -137,6 +172,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tol", type=float, default=1e-6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-host-memory-mib", type=float, default=2048.0)
+    parser.add_argument(
+        "--sample-repetitions-plan",
+        type=Path,
+        help=(
+            "Use the fixed per-case sample block sizes in this plan instead of sizing each "
+            "block from this run's warmup. Written by run_interleaved_benchmark.py "
+            "--freeze-sample-repetitions; every measured case must have an entry."
+        ),
+    )
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -155,6 +199,16 @@ def main() -> int:
             "warmup and minimum-sample-seconds must be non-negative; repeats, "
             "max-iter, and max-sample-repetitions must be positive"
         )
+
+    if is_overridden():
+        assert_measuring(renewable_huber.__file__)
+    plan: dict[str, int] | None = None
+    plan_sha256: str | None = None
+    if args.sample_repetitions_plan is not None:
+        try:
+            plan, plan_sha256 = load_plan(args.sample_repetitions_plan)
+        except (OSError, ValueError) as error:
+            parser.error(f"--sample-repetitions-plan: {error}")
 
     shapes = list(PROFILES[args.profile])
     if args.case:
@@ -192,6 +246,9 @@ def main() -> int:
         },
         "cases": [],
     }
+    if plan_sha256 is not None:
+        # Absent without a plan, so a default record is unchanged.
+        record["arguments"]["sample_repetitions_plan_sha256"] = plan_sha256
 
     profile_shape_indexes = {
         shape.name: index for index, shape in enumerate(PROFILES[args.profile])
@@ -220,6 +277,15 @@ def main() -> int:
                 }
                 for lifecycle in lifecycles:
                     for operation in operations:
+                        planned = partial(
+                            _planned_repetitions,
+                            plan,
+                            shape=shape.name,
+                            dtype=dtype,
+                            penalty=penalty,
+                            lifecycle=lifecycle,
+                            operation=operation,
+                        )
                         # ``fit`` concatenates the generated stream before the
                         # timed call, so its real public-API batch contains all
                         # samples. Keep the comparison key honest instead of
@@ -306,6 +372,7 @@ def main() -> int:
                                 tol=args.tol,
                                 minimum_sample_seconds=args.minimum_sample_seconds,
                                 max_sample_repetitions=args.max_sample_repetitions,
+                                sample_repetitions=planned(engine="numpy_cpu"),
                             )
                             _add_throughput(result, shape.samples)
                             case = {**case_base, "engine": "numpy_cpu", "result": result}
@@ -325,6 +392,7 @@ def main() -> int:
                                     tol=args.tol,
                                     minimum_sample_seconds=args.minimum_sample_seconds,
                                     max_sample_repetitions=args.max_sample_repetitions,
+                                    sample_repetitions=planned(engine="rust_native_cpu"),
                                 )
                             except (BackendUnavailableError, ImportError) as error:
                                 record.setdefault("unavailable", {})["native_cpu"] = str(error)
@@ -353,6 +421,10 @@ def main() -> int:
                                     tol=args.tol,
                                     minimum_sample_seconds=args.minimum_sample_seconds,
                                     max_sample_repetitions=args.max_sample_repetitions,
+                                    host_sample_repetitions=planned(engine="cupy_cuda_host_input"),
+                                    device_sample_repetitions=planned(
+                                        engine="cupy_cuda_device_input"
+                                    ),
                                 )
                             except (BackendUnavailableError, ImportError) as error:
                                 record.setdefault("unavailable", {})["cupy_cuda"] = str(error)
@@ -368,43 +440,39 @@ def main() -> int:
                                     record["cases"].append(case)
                                     _print_result(case)
                         if run_native_cuda:
-                            if penalty != "none":
-                                _record_skip(
-                                    record,
-                                    case_base,
-                                    engine="native_cuda_host_input",
+                            try:
+                                host_result, device_result = benchmark_native_cuda(
+                                    batches,
+                                    dtype=dtype,
+                                    penalty=penalty,
                                     lifecycle=lifecycle,
                                     operation=operation,
-                                    input_location="host",
-                                    reason="P2 native CUDA supports penalty='none' only",
+                                    warmup=args.warmup,
+                                    repeats=args.repeats,
+                                    max_iter=args.max_iter,
+                                    tol=args.tol,
+                                    minimum_sample_seconds=args.minimum_sample_seconds,
+                                    max_sample_repetitions=args.max_sample_repetitions,
+                                    host_sample_repetitions=planned(
+                                        engine="native_cuda_host_input"
+                                    ),
+                                    device_sample_repetitions=planned(
+                                        engine="native_cuda_device_input"
+                                    ),
                                 )
+                            except (BackendUnavailableError, ImportError, OSError) as error:
+                                record.setdefault("unavailable", {})["native_cuda"] = str(error)
+                                print(f"Native CUDA unavailable: {error}")
+                                run_native_cuda = False
                             else:
-                                try:
-                                    host_result, device_result = benchmark_native_cuda(
-                                        batches,
-                                        dtype=dtype,
-                                        lifecycle=lifecycle,
-                                        operation=operation,
-                                        warmup=args.warmup,
-                                        repeats=args.repeats,
-                                        max_iter=args.max_iter,
-                                        tol=args.tol,
-                                        minimum_sample_seconds=args.minimum_sample_seconds,
-                                        max_sample_repetitions=args.max_sample_repetitions,
-                                    )
-                                except (BackendUnavailableError, ImportError, OSError) as error:
-                                    record.setdefault("unavailable", {})["native_cuda"] = str(error)
-                                    print(f"Native CUDA unavailable: {error}")
-                                    run_native_cuda = False
-                                else:
-                                    for engine, result in (
-                                        ("native_cuda_host_input", host_result),
-                                        ("native_cuda_device_input", device_result),
-                                    ):
-                                        _add_throughput(result, shape.samples)
-                                        case = {**case_base, "engine": engine, "result": result}
-                                        record["cases"].append(case)
-                                        _print_result(case)
+                                for engine, result in (
+                                    ("native_cuda_host_input", host_result),
+                                    ("native_cuda_device_input", device_result),
+                                ):
+                                    _add_throughput(result, shape.samples)
+                                    case = {**case_base, "engine": engine, "result": result}
+                                    record["cases"].append(case)
+                                    _print_result(case)
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)

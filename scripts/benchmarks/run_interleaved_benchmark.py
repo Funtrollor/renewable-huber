@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -17,9 +18,13 @@ try:
         report,
     )
     from .performance_policy import NATIVE_ENGINES
+    from .shape_sweep.sampling_plan import plan_from_records, write_plan
+    from .shape_sweep.source_root import ENVIRONMENT_VARIABLE as SOURCE_ROOT_VARIABLE
 except ImportError:  # pragma: no cover - direct CLI invocation.
     from interleaved_regression import compare_interleaved_records, merge_round_records, report
     from performance_policy import NATIVE_ENGINES
+    from shape_sweep.sampling_plan import plan_from_records, write_plan
+    from shape_sweep.source_root import ENVIRONMENT_VARIABLE as SOURCE_ROOT_VARIABLE
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -35,19 +40,32 @@ def _run_round(
     repo: Path,
     output: Path,
     benchmark_args: list[str],
+    harness_repo: Path | None = None,
 ) -> dict[str, Any]:
-    script = repo / "scripts" / "benchmarks" / "benchmark_shape_sweep.py"
+    """Run one sweep of ``repo`` with ``python``.
+
+    Without ``harness_repo`` the variant runs its own checkout's sweep. With
+    it, the sweep script comes from ``harness_repo`` and measures ``repo``'s
+    ``src`` through ``RENEWABLE_HUBER_BENCHMARK_SOURCE_ROOT``, so both variants
+    share one measurement harness.
+    """
+
+    script_root = repo if harness_repo is None else harness_repo
+    script = script_root / "scripts" / "benchmarks" / "benchmark_shape_sweep.py"
     if not python.is_file():
         raise ValueError(f"Python executable does not exist: {python}")
     if not script.is_file():
         raise ValueError(f"benchmark script does not exist: {script}")
+    environment = None
+    if harness_repo is not None:
+        environment = {**os.environ, SOURCE_ROOT_VARIABLE: str(repo)}
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [str(python), str(script), *benchmark_args, "--repeats", "1", "--output", str(output)]
-    subprocess.run(command, cwd=repo, check=True)
+    subprocess.run(command, cwd=repo, check=True, env=environment)
     return _load(output)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-python", required=True, type=Path)
     parser.add_argument("--baseline-repo", required=True, type=Path)
@@ -78,6 +96,32 @@ def main() -> int:
     parser.add_argument("--cpu-max-relative-mad", type=float, default=0.05)
     parser.add_argument("--gpu-max-relative-mad", type=float, default=0.10)
     parser.add_argument("--max-competitor-slowdown", type=float, default=1.0)
+    parser.add_argument(
+        "--allow-native-version-change",
+        action="store_true",
+        help=(
+            "Compare builds whose native extensions report a different abi_version or "
+            "python_api_version (an A/B across a native interface change). Only those two "
+            "fields are exempt: driver, runtime, GPU and every other fingerprint field must "
+            "still match. Recorded in gate.json with both sides' versions."
+        ),
+    )
+    parser.add_argument(
+        "--freeze-sample-repetitions",
+        action="store_true",
+        help=(
+            "Calibrate each case's sample block size once, before the first timed round, "
+            "and use that fixed plan for every round of both variants. Both variants then "
+            "run the candidate checkout's sweep harness against their own source tree, "
+            "because an older harness cannot read a plan. Without this, each round sizes "
+            "its own blocks and only --max-sample-repetitions 1 merges reliably."
+        ),
+    )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
     if args.rounds < 3 or args.warmup < 0 or args.minimum_sample_seconds < 0:
         parser.error("rounds must be at least 3; warmup and sample duration must be non-negative")
@@ -121,6 +165,33 @@ def main() -> int:
     execution_order: dict[str, list[int]] = {name: [] for name in variants}
     output_dir = args.output_dir.resolve()
     raw_dir = output_dir / "rounds"
+    harness_repo: Path | None = None
+    sampling: dict[str, Any] = {"policy": "per_round_calibration"}
+    if args.freeze_sample_repetitions:
+        harness_repo = variants["candidate"][1]
+        calibration = []
+        for variant in ("baseline", "candidate"):
+            python, repo = variants[variant]
+            print(f"calibration: {variant}", flush=True)
+            calibration.append(
+                _run_round(
+                    python=python,
+                    repo=repo,
+                    output=output_dir / "calibration" / f"{variant}.json",
+                    benchmark_args=benchmark_args,
+                    harness_repo=harness_repo,
+                )
+            )
+        plan = plan_from_records(calibration)
+        plan_path = output_dir / "sample-repetitions-plan.json"
+        plan_sha256 = write_plan(plan_path, plan)
+        benchmark_args = [*benchmark_args, "--sample-repetitions-plan", str(plan_path)]
+        sampling = {
+            "policy": "frozen_plan",
+            "plan_sha256": plan_sha256,
+            "harness": "candidate",
+        }
+        print(f"sample repetitions plan: {len(plan)} cases, sha256 {plan_sha256}", flush=True)
     for round_index in range(args.rounds):
         order = ("baseline", "candidate") if round_index % 2 == 0 else ("candidate", "baseline")
         print(f"round {round_index + 1}/{args.rounds}: {' -> '.join(order)}", flush=True)
@@ -132,6 +203,7 @@ def main() -> int:
                     repo=repo,
                     output=raw_dir / f"{round_index:02d}-{variant}.json",
                     benchmark_args=benchmark_args,
+                    harness_repo=harness_repo,
                 )
             )
             execution_order[variant].append(position)
@@ -146,6 +218,8 @@ def main() -> int:
         )
         for variant, variant_records in records.items()
     }
+    for record in merged.values():
+        record["interleaved_capture"]["sample_repetitions"] = dict(sampling)
     for variant, record in merged.items():
         (output_dir / f"{variant}.json").write_text(
             json.dumps(record, indent=2, sort_keys=True, allow_nan=False) + "\n",
@@ -162,12 +236,21 @@ def main() -> int:
         cpu_max_relative_mad=args.cpu_max_relative_mad,
         gpu_max_relative_mad=args.gpu_max_relative_mad,
         max_competitor_slowdown=args.max_competitor_slowdown,
+        allow_native_version_change=args.allow_native_version_change,
     )
-    gate = report(checks)
+    gate = report(
+        checks,
+        baseline=merged["baseline"],
+        candidate=merged["candidate"],
+        allow_native_version_change=args.allow_native_version_change,
+    )
     (output_dir / "gate.json").write_text(
         json.dumps(gate, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    print(f"allow_native_version_change={gate['allow_native_version_change']}")
+    for section, versions in gate["native_versions"].items():
+        print(f"{section}: baseline={versions['baseline']} candidate={versions['candidate']}")
     for check in checks:
         status = "PASS" if check.passed else "FAIL"
         paired_value = (

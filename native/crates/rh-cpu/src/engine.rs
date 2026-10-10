@@ -11,7 +11,9 @@ use rh_core::{
     scalar_from_f64, BatchView, CoreError, Diagnostics, Penalty, State, Transition, UpdateConfig,
 };
 
-use crate::kernels::gram::{gradient_and_hessian, gradient_from_current_residual, weighted_gram};
+use crate::kernels::gram::{
+    gradient_and_hessian_from_current_residual, gradient_from_current_residual, weighted_gram,
+};
 use crate::kernels::objective::{diagnostic_objective, smooth_objective};
 use crate::kernels::vector::{dot, norm, residual, smoothed_curvature, soft_threshold};
 use crate::kernels::{bandwidth, lambda_value};
@@ -104,7 +106,7 @@ impl<T: CpuScalar, S: DenseSolver<T>> CpuEngine<T, S> {
         weighted_gram(
             batch,
             &self.workspace.curvature,
-            &mut self.workspace.weighted_design,
+            &mut self.workspace.weighted_rows,
             &mut self.workspace.partial_grams,
             &mut self.workspace.gram,
         )?;
@@ -165,7 +167,7 @@ impl<T: CpuScalar, S: DenseSolver<T>> CpuEngine<T, S> {
         let mut used_minimum_norm_fallback = false;
 
         for iteration in 1..=config.max_iter {
-            gradient_and_hessian(
+            gradient_and_hessian_from_current_residual(
                 batch,
                 &beta,
                 state,

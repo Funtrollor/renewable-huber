@@ -114,6 +114,8 @@ class CHeaderContractTests(_ContractTestCase):
         for prefix, group, pattern in (
             ("RH_CUDA_STATUS_", "status_codes", r"\(\(RhCudaStatus\)(\d+)\)"),
             ("RH_CUDA_DTYPE_", "dtype_codes", r"\(\(RhCudaDType\)(\d+)\)"),
+            ("RH_CUDA_PENALTY_", "penalty_codes", r"\(\(RhCudaPenalty\)(\d+)\)"),
+            ("RH_CUDA_MEMORY_", "memory_codes", r"\(\(RhCudaMemory\)(\d+)\)"),
         ):
             found = dict(
                 re.findall(
@@ -223,6 +225,22 @@ class CppMirrorTests(_ContractTestCase):
         }
         self.assert_found(len(widths), len(expected), "field width assertions", CPP_MIRROR_PATH)
         self.assertEqual(widths, expected)
+
+    def test_code_groups_are_asserted(self) -> None:
+        for prefix, group, label in (
+            ("RH_CUDA_STATUS_", "status_codes", "status code"),
+            ("RH_CUDA_DTYPE_", "dtype_codes", "dtype code"),
+            ("RH_CUDA_PENALTY_", "penalty_codes", "penalty code"),
+            ("RH_CUDA_MEMORY_", "memory_codes", "memory code"),
+        ):
+            found = dict(
+                re.findall(rf"static_assert\(({prefix}\w+) == (\d+), \"{label} ", self.SOURCE)
+            )
+            self.assert_found(
+                len(found), len(MANIFEST[group]), f"{group} assertions", CPP_MIRROR_PATH
+            )
+            for name, value in MANIFEST[group].items():
+                self.assertEqual(int(found[f"{prefix}{name}"]), value, f"{prefix}{name}")
 
     def test_pointer_size_and_abi_version_are_asserted(self) -> None:
         self.assertIn(
@@ -380,6 +398,17 @@ class PyO3ResultKeyTests(_ContractTestCase):
             sorted(self._keys_in("features")),
             PYO3_PATH,
         )
+
+    def test_supported_penalties_match_manifest_codes(self) -> None:
+        # The Python spelling of every penalty the engine advertises must be a
+        # code the C ABI defines, and every defined code must be advertised.
+        ffi_types = (RUST_CRATE_DIR / "types.rs").read_text(encoding="utf-8")
+        match = re.search(r"pub const SUPPORTED_PENALTIES: \[&str; (\d+)\] = \[(.*?)\];", ffi_types)
+        self.assertIsNotNone(match, "SUPPORTED_PENALTIES is no longer declared as expected")
+        names = re.findall(r'"(\w+)"', match.group(2))
+        self.assert_found(len(names), int(match.group(1)), "supported penalty names", PYO3_PATH)
+        self.assertEqual(sorted(name.upper() for name in names), sorted(MANIFEST["penalty_codes"]))
+        self.assertIn("SUPPORTED_PENALTIES", self.SOURCE)
 
     def test_python_api_version_matches_manifest(self) -> None:
         match = re.search(r"const PYTHON_API_VERSION: u32 = (\d+);", self.SOURCE)

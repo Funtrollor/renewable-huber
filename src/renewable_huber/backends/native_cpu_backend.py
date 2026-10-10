@@ -31,6 +31,8 @@ class NativeCpuBackend(NativeEngineBackend):
     # Inherited from NumPyBackend but never applicable: this backend runs
     # the whole batch natively and never reaches the portable solver.
     supports_elementwise_workspace = False
+    #: The Rust engine implements every public penalty.
+    native_update_penalties = frozenset({"none", "l1"})
 
     _EXPECTED_ABI_VERSION = _EXPECTED_ABI_VERSION
     _EXPECTED_PYTHON_API_VERSION = _EXPECTED_PYTHON_API_VERSION
@@ -92,7 +94,7 @@ class NativeCpuBackend(NativeEngineBackend):
             None if sample_weight is None else np.ascontiguousarray(sample_weight, dtype=self.dtype)
         )
         with self._engine_call():
-            result = self._engine.update(
+            result = self._resident_engine().update(
                 np.ascontiguousarray(X, dtype=self.dtype),
                 np.ascontiguousarray(y, dtype=self.dtype),
                 weights,
@@ -114,5 +116,5 @@ class NativeCpuBackend(NativeEngineBackend):
 
         self.restore_native_state(state)
         with self._engine_call():
-            prediction = self._engine.predict(np.ascontiguousarray(X, dtype=self.dtype))
+            prediction = self._resident_engine().predict(np.ascontiguousarray(X, dtype=self.dtype))
         return np.asarray(prediction, dtype=self.dtype)

@@ -52,10 +52,11 @@ struct RhCudaEngine {
     void* d_information = nullptr;
     void* d_information_next = nullptr;
     void* d_trial_beta = nullptr;
-    void* d_candidate = nullptr;
     void* d_delta = nullptr;
-    void* d_history_vector = nullptr;
     void* d_gradient = nullptr;
+    // sign(previous coefficients) on penalized coordinates, zero elsewhere.
+    // Formed once per L1 update from the committed state.
+    void* d_penalty_sign = nullptr;
     void* d_direction = nullptr;
     void* d_gram = nullptr;
     void* d_hessian = nullptr;
@@ -67,6 +68,15 @@ struct RhCudaEngine {
     void* d_factor_work = nullptr;
     void* d_svd_work = nullptr;
     void* d_reduction_results = nullptr;
+    // Fused line-search rounds (launch_candidate_round in huber_kernels.cuh).
+    // The parameters and results cross PCIe through the pinned h_ buffers.
+    void* d_round_parameters = nullptr;
+    void* h_round_parameters = nullptr;
+    void* d_round_candidates = nullptr;
+    void* d_round_term_partials = nullptr;
+    void* d_round_results = nullptr;
+    void* h_round_results = nullptr;
+    void* d_round_counter = nullptr;
     int* d_pivots = nullptr;
     int* d_solver_info = nullptr;
     int* h_solver_info = nullptr;
@@ -80,17 +90,24 @@ struct RhCudaEngine {
     void* d_residual = nullptr;
     void* d_score = nullptr;
     void* d_curvature = nullptr;
-    void* d_loss = nullptr;
     void* d_weighted_design = nullptr;
+    void* d_round_residuals = nullptr;
+    void* d_round_loss_partials = nullptr;
 
     rh_cuda::engine::ErrorBuffer last_error{};
 
-    // Defined out of line in workspace.cu so its 28-entry release list sits
-    // next to the allocation it mirrors.
+    // Defined out of line in workspace.cu so its release list sits next to
+    // the allocation it mirrors.
     ~RhCudaEngine() noexcept;
 };
 
 namespace rh_cuda::engine {
+
+/// Scalar slots in d_reduction_results / h_reduction_results.  Line-search
+/// rounds have their own double results (huber_kernels.cuh); only slot 6 is
+/// still used:
+///   6 final L1 norm of the penalized coordinates
+constexpr int kReductionSlots = 8;
 
 template <typename T>
 T* typed(void* value) {

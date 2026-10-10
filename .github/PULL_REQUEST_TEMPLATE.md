@@ -17,7 +17,7 @@ List the exact commands, environments, and benchmark inputs used.
 - [ ] `ruff check`, `ruff format --check`, relevant tests, and package build pass locally.
 - [ ] Required test profiles were used; missing native dependencies/devices did not become silent skips.
 - [ ] Golden corpus and native ABI/contract gates pass when algorithm or native boundaries are touched.
-- [ ] GPU changes include local-only evidence tied to the exact commit, environment fingerprint, artifact hash, and machine-readable gate result.
+- [ ] GPU changes include local-only evidence tied to the exact commit, environment, and machine-readable gate result.
 - [ ] Distribution versions, exact native dependencies, citation, security policy, changelog, and release metadata stay synchronized when preparing a release.
 - [ ] Performance claims include reproducible before/after measurements.
 

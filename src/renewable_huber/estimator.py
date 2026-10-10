@@ -52,6 +52,14 @@ class RenewableHuberRegressor:
     historical raw observations.
     """
 
+    # Private fitted state. ``reset`` sets every one of these, so ``None`` means
+    # "no batch consumed yet"; declared here so the type checker sees the
+    # non-``None`` types the update path assigns.
+    _backend: ArrayBackend | None
+    _state: RenewableHuberState | None
+    _diagnostics: UpdateDiagnostics | None
+    _auto_cpu_pending: bool
+
     def __init__(
         self,
         *,
@@ -179,7 +187,7 @@ class RenewableHuberRegressor:
         backend = self._require_backend()
         self._validate_feature_names(X)
         X_array = self._validate_features(X, state.n_features_in, backend)
-        design = self._design_matrix(X_array)
+        design = self._design_matrix(X_array, backend=backend)
         capabilities = capabilities_of(backend)
         if capabilities.native_predict is not None:
             prediction = capabilities.native_predict(design, state)
@@ -382,7 +390,7 @@ class RenewableHuberRegressor:
         leave the estimator exactly as it was.
         """
 
-        state = getattr(self, "_state", None)
+        state: RenewableHuberState | None = getattr(self, "_state", None)
         first_batch = state is None
         if state is not None:
             self._validate_feature_names(X)
@@ -392,7 +400,7 @@ class RenewableHuberRegressor:
         )
 
         feature_names = None
-        if first_batch:
+        if state is None:  # the first batch of a stream
             feature_names = self._feature_names(X)
             state = RenewableHuberState.empty(
                 X_array.shape[1],
@@ -577,7 +585,7 @@ class RenewableHuberRegressor:
             raise RuntimeError("an initialized backend is required for input validation")
         RenewableHuberRegressor._reject_sparse(X)
         if hasattr(X, "to_numpy"):
-            X = X.to_numpy()  # type: ignore[union-attr]
+            X = X.to_numpy()
         RenewableHuberRegressor._reject_complex(X, "X")
         try:
             X_array = backend.asarray(X)
@@ -621,7 +629,7 @@ class RenewableHuberRegressor:
     def _validate_target(y: ArrayLike, expected_samples: int, backend: ArrayBackend) -> Any:
         RenewableHuberRegressor._reject_sparse(y)
         if hasattr(y, "to_numpy"):
-            y = y.to_numpy()  # type: ignore[union-attr]
+            y = y.to_numpy()
         RenewableHuberRegressor._reject_complex(y, "y")
         try:
             y_array = backend.reshape(backend.asarray(y), (-1,))
@@ -653,7 +661,7 @@ class RenewableHuberRegressor:
             return None, float(expected_samples)
         RenewableHuberRegressor._reject_sparse(sample_weight)
         if hasattr(sample_weight, "to_numpy"):
-            sample_weight = sample_weight.to_numpy()  # type: ignore[union-attr]
+            sample_weight = sample_weight.to_numpy()
         RenewableHuberRegressor._reject_complex(sample_weight, "sample_weight")
         try:
             weights = backend.reshape(backend.asarray(sample_weight), (-1,))
@@ -695,11 +703,10 @@ class RenewableHuberRegressor:
         return weights, weight_sum
 
     def _design_matrix(self, X: Any, *, backend: ArrayBackend | None = None) -> Any:
-        # Only the update path passes ``backend``, so only it delegates the
-        # design matrix. predict() deliberately builds the expanded matrix on
-        # the host: the native CUDA engine's predict entry point requires the
-        # full n_parameters width, while its update accepts unexpanded features
-        # and appends the intercept on device.
+        # A backend that owns the design matrix (native CUDA) receives the raw
+        # features for both updates and predictions and appends the intercept
+        # on device; widening a CUDA DLPack tensor here would need an implicit
+        # device-to-host copy. Every other backend gets the expanded matrix.
         if backend is not None:
             capabilities = capabilities_of(backend)
             if capabilities.native_design_matrix is not None:

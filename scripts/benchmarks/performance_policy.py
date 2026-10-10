@@ -26,11 +26,23 @@ GPU_ENGINES = frozenset(
         "native_cuda_device_input",
     }
 )
+NATIVE_CUDA_ENGINES = frozenset({"native_cuda_host_input", "native_cuda_device_input"})
 DIRECT_COMPETITORS = {
     "rust_native_cpu": "numpy_cpu",
     "native_cuda_host_input": "cupy_cuda_host_input",
     "native_cuda_device_input": "cupy_cuda_device_input",
 }
+#: The ``environment`` section in which each native engine's extension
+#: reports its own ``version()`` metadata.
+NATIVE_METADATA_SECTIONS = {
+    "rust_native_cpu": "native_cpu",
+    "native_cuda_host_input": "native_cuda_abi",
+    "native_cuda_device_input": "native_cuda_abi",
+}
+#: Native extension interface versions. They are part of every native
+#: fingerprint; only an interleaved A/B that explicitly opts in to comparing
+#: across a native ABI/API change may leave them out, and nothing else.
+NATIVE_VERSION_FIELDS = ("abi_version", "python_api_version")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +165,9 @@ def validate_record(record: Mapping[str, Any]) -> None:
     cases = record.get("cases")
     if not isinstance(cases, list):
         raise ValueError("record cases must be a list")
+    # Only consulted for a native CUDA case that claims a penalty; a missing
+    # or malformed environment then counts as no evidence of L1 support.
+    environment = record.get("environment")
     keys: set[MeasurementKey] = set()
     for case in cases:
         if not isinstance(case, Mapping):
@@ -166,13 +181,24 @@ def validate_record(record: Mapping[str, Any]) -> None:
         _median_iterations(result)
         _all_batches_converged(result)
         _validate_sampling_result(result, key)
-        _validate_timing_contract(key)
+        _validate_timing_contract(key, environment)
 
 
-def hardware_fingerprint(record: Mapping[str, Any], engine: str) -> tuple[tuple[str, str], ...]:
-    """Return the runner attributes relevant to a CPU or GPU measurement."""
+def hardware_fingerprint(
+    record: Mapping[str, Any],
+    engine: str,
+    *,
+    include_native_versions: bool = True,
+) -> tuple[tuple[str, str], ...]:
+    """Return the runner attributes relevant to a CPU or GPU measurement.
+
+    ``include_native_versions=False`` drops exactly the native extension's
+    ``abi_version`` and ``python_api_version``; every hardware, driver,
+    runtime, provider and transport field is still returned.
+    """
 
     environment = _mapping(record, "environment")
+    version_fields = NATIVE_VERSION_FIELDS if include_native_versions else ()
     fields = [
         "platform",
         "processor",
@@ -191,18 +217,16 @@ def hardware_fingerprint(record: Mapping[str, Any], engine: str) -> tuple[tuple[
                 environment,
                 "native_cpu",
                 (
-                    "abi_version",
-                    "python_api_version",
+                    *version_fields,
                     "linear_algebra_provider",
                     "parallel_provider",
                     "parallel_threads",
                 ),
             )
         )
-    elif engine in {"native_cuda_host_input", "native_cuda_device_input"}:
+    elif engine in NATIVE_CUDA_ENGINES:
         native_cuda_fields = [
-            "abi_version",
-            "python_api_version",
+            *version_fields,
             "driver_version",
             "runtime_version",
         ]
@@ -216,6 +240,22 @@ def hardware_fingerprint(record: Mapping[str, Any], engine: str) -> tuple[tuple[
             )
         )
     return tuple(fingerprint)
+
+
+def native_versions(record: Mapping[str, Any], engine: str) -> dict[str, Any]:
+    """Return the recorded native interface versions for a native engine.
+
+    A field the record does not carry is returned as ``None`` rather than
+    omitted, so evidence built from it cannot silently drop a side.
+    """
+
+    section = NATIVE_METADATA_SECTIONS.get(engine)
+    if section is None:
+        raise ValueError(f"{engine!r} is not a native engine")
+    environment = record.get("environment")
+    metadata = environment.get(section) if isinstance(environment, Mapping) else None
+    mapping = metadata if isinstance(metadata, Mapping) else {}
+    return {field: mapping.get(field) for field in NATIVE_VERSION_FIELDS}
 
 
 def relative_mad(seconds: Iterable[float]) -> float:
@@ -244,6 +284,7 @@ def compare_records(
     require_competitor_parity: bool = True,
     max_competitor_slowdown: float = 1.0,
     require_same_hardware: bool = True,
+    allow_native_version_change: bool = False,
 ) -> list[RegressionCheck]:
     """Compare strict-equivalent native cases from two v2 sweep records.
 
@@ -251,6 +292,12 @@ def compare_records(
     carried by the record, input location, lifecycle, initialization policy,
     and state-reset policy.  The gate is intentionally conservative: it is
     useful only on a fixed runner and rejects short or noisy samples.
+
+    ``allow_native_version_change`` leaves only the native extensions'
+    ``abi_version`` and ``python_api_version`` out of the fingerprint
+    comparison. It exists for the interleaved A/B runner, which measures both
+    builds on the same host in alternating order; a gate against a stored
+    baseline must keep the default and reject an interface change.
     """
 
     _validate_thresholds(
@@ -312,6 +359,7 @@ def compare_records(
                 require_competitor_parity=require_competitor_parity,
                 max_competitor_slowdown=max_competitor_slowdown,
                 require_same_hardware=require_same_hardware,
+                allow_native_version_change=allow_native_version_change,
             )
         )
     return checks
@@ -332,6 +380,7 @@ def _compare_case(
     require_competitor_parity: bool,
     max_competitor_slowdown: float,
     require_same_hardware: bool,
+    allow_native_version_change: bool,
 ) -> RegressionCheck:
     baseline_seconds = _timings(baseline_case)
     candidate_seconds = _timings(candidate_case)
@@ -340,9 +389,12 @@ def _compare_case(
     baseline_mad = relative_mad(baseline_seconds)
     candidate_mad = relative_mad(candidate_seconds)
     reasons: list[str] = []
+    include_native_versions = not allow_native_version_change
     if require_same_hardware and hardware_fingerprint(
-        baseline_record, key.engine
-    ) != hardware_fingerprint(candidate_record, key.engine):
+        baseline_record, key.engine, include_native_versions=include_native_versions
+    ) != hardware_fingerprint(
+        candidate_record, key.engine, include_native_versions=include_native_versions
+    ):
         reasons.append("hardware or runtime fingerprint differs")
     if len(baseline_seconds) < min_repeats:
         reasons.append(f"baseline has {len(baseline_seconds)} repeats; need at least {min_repeats}")
@@ -543,7 +595,25 @@ def _nested_fingerprint(
     return [(f"{section}.{field}", _normalise_metadata(mapping.get(field))) for field in fields]
 
 
-def _validate_timing_contract(key: MeasurementKey) -> None:
+def _records_native_cuda_l1_support(environment: Any) -> bool:
+    """Return whether a record's own native CUDA metadata shows L1 support.
+
+    ABI 2 added the L1 penalty to the native CUDA engine, and Python API 4
+    advertises it in ``supported_penalties``. Either one recorded at capture
+    time is evidence; anything else, including no metadata, is not.
+    """
+
+    metadata = environment.get("native_cuda_abi") if isinstance(environment, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        return False
+    abi_version = metadata.get("abi_version")
+    if isinstance(abi_version, int) and not isinstance(abi_version, bool) and abi_version >= 2:
+        return True
+    penalties = metadata.get("supported_penalties")
+    return isinstance(penalties, (list, tuple)) and "l1" in penalties
+
+
+def _validate_timing_contract(key: MeasurementKey, environment: Any) -> None:
     """Reject records whose labels disagree with the measured lifecycle."""
 
     if key.lifecycle == "cold":
@@ -580,11 +650,15 @@ def _validate_timing_contract(key: MeasurementKey) -> None:
         != expected_transport
     ):
         raise ValueError("engine labels do not match its input-transfer policy")
-    if (
-        key.engine in {"native_cuda_host_input", "native_cuda_device_input"}
-        and key.penalty != "none"
-    ):
-        raise ValueError("native CUDA benchmark records may not claim L1 support")
+    if key.engine in NATIVE_CUDA_ENGINES and key.penalty != "none":
+        if key.penalty != "l1":
+            raise ValueError(f"native CUDA benchmark records may not claim penalty {key.penalty!r}")
+        if not _records_native_cuda_l1_support(environment):
+            raise ValueError(
+                "native CUDA benchmark records may claim L1 support only when the "
+                "recorded native_cuda_abi shows abi_version >= 2 or lists 'l1' in "
+                "supported_penalties; an ABI 1 engine implements only penalty 'none'"
+            )
 
 
 def _validate_thresholds(

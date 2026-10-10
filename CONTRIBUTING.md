@@ -31,7 +31,7 @@ mistaken for a fully passing suite.
 
 The PowerShell setup below remains supported for Windows-only work.
 
-Create an isolated environment with Python 3.10–3.12:
+Create an isolated environment with Python 3.10–3.13:
 
 ```powershell
 python -m venv .venv
@@ -55,6 +55,9 @@ Run the checks relevant to the change before opening a pull request:
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m ruff check src tests scripts
 .venv/bin/python -m ruff format --check src tests scripts
+.venv/bin/python -m mypy                      # settings in [tool.mypy]
+.venv/bin/python -m coverage run scripts/run_test_profile.py core
+.venv/bin/python -m coverage report           # enforces fail_under
 .venv/bin/python scripts/native/validate_release_artifacts.py --source-only
 .venv/bin/python scripts/generate_native_golden.py --check
 .venv/bin/python -m build
@@ -68,6 +71,14 @@ g++ -std=c++17 -fsyntax-only -I native/cuda/include native/cuda/src/abi_contract
   cargo test --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets
 )
 ```
+
+`fail_under` in `[tool.coverage.report]` is the `core` profile's line+branch
+coverage in a clean `pip install ".[dev]"` environment (73.2% when set), rounded
+down, less one point; CI measures it the same way in the `quality` job. An
+installed native extension or optional framework tends to raise the local
+figure. The Rust property tests in `rh-core/tests/properties.rs` and
+`rh-cpu/src/proptests.rs` run a modest number of cases; set `PROPTEST_CASES`
+for a longer local soak (in `--release` if it includes the large-batch cases).
 
 `discover` remains supported and is the quickest local pass. It is tolerant by
 design: a suite whose dependency or device is missing reports success as a set
@@ -101,6 +112,24 @@ Backend-specific changes must include parity tests against NumPy. Performance ch
 correctness tests and reproducible before/after benchmark output; a faster result is not accepted
 if it changes the documented numerical contract.
 
+## Documentation site
+
+The English documentation site is built with MkDocs Material from
+`mkdocs.yml` and `docs/`. Preview it locally from the repository root:
+
+```bash
+python -m pip install -e ".[docs]" && mkdocs serve
+mkdocs build --strict    # what CI runs
+```
+
+Pull requests run `mkdocs build --strict` (`.github/workflows/docs.yml`), which
+fails on a broken link or anchor. The home page and user guide include marked
+regions of `README.en.md`, so edit the README there rather than copying text
+into `docs/`, and keep relative links out of those regions. Links from `docs/`
+to files outside it use absolute GitHub URLs. Existing documents keep their
+language and file names, because the READMEs, `AGENTS.md`, the changelog and
+scripts link to them.
+
 ## Pull requests
 
 - Branch from the latest `main` and keep the change focused.
@@ -111,20 +140,14 @@ if it changes the documented numerical contract.
 - Let CI pass on all required CPU platforms. Run GPU correctness, CUDA smoke,
   profiling, and performance gates locally on the fixed GPU host; GPU
   validation must not run in GitHub Actions for pull requests. Record the exact
-  commit, environment fingerprint, machine-readable gate output and artifact
-  SHA-256 so reviewers can tie evidence to the code under review.
+  commit, the environment (GPU, driver, CUDA runtime) and the machine-readable
+  gate output with the pull request.
 - Use Conventional Commit-style imperative subjects when practical, for example
   `perf: fuse CUDA renewal kernels`.
 
-For assisted development, Claude Code implements an accepted engineering plan
-and records its hand-off in `docs/agent-handoff.md`. Codex owns review,
-acceptance, commits, pushes and pull requests. The two agents must use separate
-worktrees when active concurrently.
-
 The `main` branch requires a pull request, an up-to-date branch, all cross-platform and optional
 CPU integration checks, package smoke tests, and resolved review conversations. Force pushes and
-branch deletion are disabled. The applied settings are recorded in
-`.github/branch-protection.json`.
+branch deletion are disabled. These rules live in the repository's branch protection settings.
 
 Unless explicitly marked otherwise, contributions intentionally submitted for inclusion are
 distributed under the Apache License, Version 2.0, as described in section 5 of that license.

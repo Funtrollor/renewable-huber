@@ -23,8 +23,13 @@ Always check which scheme a document is using.
 
 P0 through P3 of the maintainability audit are implemented and verified. P3
 added the `CheckpointPayload` boundary, executable unittest profiles and the
-shape-sweep module split. See `docs/agent-handoff.md` for the acceptance
-evidence and remaining follow-up work.
+shape-sweep module split; `docs/maintainability-refactor.md` records what each
+phase changed and why.
+
+The native CUDA engine is at C ABI 2 / Python API 4: it implements
+`penalty="l1"` (`docs/native-penalty-completion-plan.md`) and device-resident
+prediction, ships Linux `manylinux_2_28` wheels, takes its CUDA runtime from
+`nvidia-*-cu12` wheels, and every package supports CPython 3.10–3.13.
 
 On top of P3, `backend="auto"` on CPU may now select the Rust CPU engine from
 bounded runtime evidence measured on the current host. The design, its cost
@@ -32,24 +37,14 @@ bounds and what it deliberately declines to do are in
 [`docs/cpu-auto-dispatch-rfc.md`](docs/cpu-auto-dispatch-rfc.md); the
 invariants it introduces are in the list below.
 
-## Agent roles and hand-off
+## Working rules
 
-- **Claude Code writes implementation code from an agreed engineering plan.**
-- **Codex owns architecture, review, acceptance, commits, pushes and pull
-  requests.** Claude Code must not commit or push this repository.
-- Before starting work, both agents read this file and
-  [`docs/agent-handoff.md`](docs/agent-handoff.md), then inspect `git status`
-  and the commits made since the hand-off's base SHA.
-- After a work session, append one structured entry to `docs/agent-handoff.md`.
-  Never use a transcript or an ignored `.claude/` file as the only record of a
-  design decision.
-- Do not run both agents in the same working tree at the same time. Use
-  separate branches/worktrees, and let Codex integrate reviewed commits or
-  uncommitted patches into the publishing branch.
-
-Nothing in it changes an algorithm, a kernel order, stream behaviour, or a
-public API. Keep it that way: the committed schema-v2 baselines are CPU
-1.17x–15.65x (median 1.68x), CUDA host 1.04x–1.96x (median 1.35x), and CUDA
+- Record design decisions in the repository (a doc under `docs/`, the
+  CHANGELOG, or the pull request description), never only in a transcript or
+  an ignored `.claude/` file.
+- Structural refactors must not change an algorithm, a kernel order, stream
+  behaviour, or a public API. The committed schema-v2 baselines are CPU
+1.38x–7.86x (median 1.81x), CUDA host 1.04x–1.96x (median 1.35x), and CUDA
 DLPack 1.06x–2.04x (median 1.53x). Differences within about 10% on this GPU are
 noise, not a performance claim. The golden corpus must stay bit-identical.
 
@@ -125,6 +120,22 @@ report; these are the ones worth memorising.
   reads the required names out of the consumers' own import statements and
   checks them against `__all__` and the module attributes. Extra exports are
   fine; a missing one is not.
+- **The native-version exemption is interleaved-only and opt-in.**
+  `run_interleaved_benchmark.py --allow-native-version-change` drops only
+  `abi_version`/`python_api_version` from the fingerprint and records it in
+  `gate.json`; `check_performance_regression.py` must keep rejecting an ABI
+  change against a stored baseline. Guarded by `NativeVersionChangeGateTests`.
+- **A frozen-plan A/B measures the variant's code, never the harness's.**
+  `run_interleaved_benchmark.py --freeze-sample-repetitions` runs the
+  candidate's sweep against both checkouts through
+  `RENEWABLE_HUBER_BENCHMARK_SOURCE_ROOT`. Every sweep module that imports
+  `renewable_huber` must go through `shape_sweep/source_root.py`'s
+  `put_source_on_path()`; a bare `sys.path.insert` of the harness `src` would
+  shadow the baseline and the A/B would compare the candidate with itself,
+  passing every gate. The sweep refuses to run when `renewable_huber` resolves
+  outside the selected tree, and records `git_revision` (measured tree) and
+  `benchmark_harness_git_revision` separately. Guarded by
+  `tests/test_benchmark_sampling_plan.py::SourceRootTests`.
 - **`NativeCpuBackend` must keep inheriting NumPy's array handling and must
   not gain a `native_design_matrix`.** `backend="auto"` on CPU validates and
   prepares a batch on `NumPyBackend`, learns its shape, and only then may swap
@@ -201,6 +212,38 @@ report; these are the ones worth memorising.
   in `PORTABLE_NATIVE_MODULES`; `validate_profiles` fails if one of those
   modules leaves `core`, and a self-test rejects unittest skip controls and
   executes the nine-test contract with the GPU hidden to prove it has no skips.
+- **A native engine is never asked to run a penalty it does not advertise.**
+  `native_update_penalties` is read only through `capabilities_of()`; the core
+  raises `ValidationError` before `native_update` for anything outside it, and
+  a CUDA extension that advertises nothing counts as `{"none"}`. The C ABI
+  rejects an unknown `RhCudaPenalty`, a non-zero `reserved0` and a bad
+  `lambda_scale` before enqueueing work. Relaxing any one of these lets an
+  engine silently solve L1 as unpenalized with every other test still green.
+  Guarded by `tests/test_backend_capabilities.py`,
+  `tests/test_native_cuda_selection.py` and the `l1_rejections_leave_state_untouched`
+  smoke case.
+- **`renewable_huber._cuda_runtime` uses the pip `nvidia-*-cu12` libraries only
+  as a complete set.** A partial set falls back entirely to the system
+  toolkit; loading some libraries from each puts two CUDA builds in one
+  process, which works until a symbol differs. Its component list must match
+  `NATIVE_RUNTIME_DEPENDENCIES` in `scripts/native/validate_release_artifacts.py`.
+  Guarded by `tests/test_native_cuda_runtime.py`.
+- **The Linux CUDA wheel is built with `--auditwheel skip` inside
+  `manylinux_2_28`, never repaired.** Repair would vendor the NVIDIA libraries
+  the wheel deliberately takes from its dependencies, and building outside the
+  container would make the glibc tag untrue. `scripts/native/build_linux_cuda_wheel.sh`
+  also fails on any `NEEDED` entry outside the declared runtime closure. CI and
+  the release run that same script; keep it that way.
+- **A line-search round's arithmetic must not depend on the round width.**
+  `launch_candidate_round` (`native/cuda/src/huber_kernels.cu`) sizes its
+  grids from the batch shape alone, computes each candidate with the same
+  threads in the same order whatever `width` is, and folds partial sums in
+  index order. That is what lets `pipeline.cu` pick round widths purely for
+  speed and keeps `cuda_graphs=True` bit-identical to the stream path. A grid
+  that depends on the width, or atomic accumulation, still passes the golden
+  corpus, whose tolerances absorb it; results just stop being reproducible.
+  Only `NativeCudaTuningTests`' `assert_array_equal` of graph against strict
+  notices, and only when the two paths happen to differ.
 - **`CUDA_SEPARABLE_COMPILATION` must stay `OFF` in `native/cuda/CMakeLists.txt`.**
   Turning it on routes every architecture through nvlink, which emits SASS only.
   The device-linked image the runtime registers then has no PTX, so the
@@ -218,6 +261,9 @@ report; these are the ones worth memorising.
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python -m ruff check src tests scripts
 .venv/bin/python -m ruff format --check src tests scripts
+.venv/bin/python -m mypy                                    # [tool.mypy]
+.venv/bin/python -m coverage run scripts/run_test_profile.py core
+.venv/bin/python -m coverage report                         # fail_under
 
 # Named profiles. `discover` above is tolerant: a missing dependency or device
 # turns into skips and still reports success. A *required* profile probes its
@@ -238,6 +284,8 @@ cargo check  --locked --workspace --all-targets
 # NOT --workspace: PyO3 extension-module crates cannot link as standalone test
 # binaries on Linux (unresolved CPython symbols). ci.yml scopes it the same way.
 cargo test   --locked -p rh-core -p rh-cpu -p rh-cuda-ffi --all-targets
+# Includes the proptest suites; PROPTEST_CASES=N (with --release) for a soak.
+# proptest stays on ~1.9: later releases need a newer Rust than the 1.83 MSRV.
 ```
 
 CUDA (needs `nvcc`; `export PATH=/usr/local/cuda/bin:$PATH`):
@@ -263,7 +311,12 @@ The CUDA benchmark harness on this host drifts 2%–19% between runs of the *sam
 binary* (`wide float32` is worst). Five runs of A followed by five of B compares
 two thermal states, not two binaries. Use
 `scripts/benchmarks/run_interleaved_benchmark.py`, which alternates A/B and B/A
-and gates aligned paired ratios. **Do not draw conclusions below about ±10%.**
+and gates aligned paired ratios. Pass `--freeze-sample-repetitions`: each case's
+sample block is calibrated once and reused by every round of both variants, so
+a sample averages about `--minimum-sample-seconds` of work instead of one short
+call (the old `--max-sample-repetitions 1` workaround), which is what keeps
+relative MAD under the gate on a desktop that is in use.
+**Do not draw conclusions below about ±10%.**
 
 ## Corrections to the audit report
 

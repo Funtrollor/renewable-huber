@@ -8,6 +8,174 @@ stabilised.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-09
+
+This patch release makes both native engines faster. No public API, C ABI,
+native Python API or checkpoint format changed; native CPU and CUDA results
+change at rounding level, and `float32` L1 iteration counts can move.
+
+### Changed
+
+- The native CUDA engine's `partial_fit` is faster: 1.58x in the median cold
+  case and 1.69x in the median steady case on the fixed RTX 5070 Ti host,
+  with no case slower than before. Nsight showed launch and synchronization
+  latency dominating, with the line search evaluating up to 11 candidates per
+  Newton iteration at about 21 API calls each. A fused round now evaluates up
+  to four candidates in two kernels and one synchronization, and accepts the
+  first in step order as before. Its sums accumulate in double in a fixed
+  order, so results are deterministic and `cuda_graphs=True` (which now
+  captures the round) stays bit-identical to the stream path; against 0.7.0
+  they change at rounding level, and `float32` L1 iteration counts can move.
+  No C ABI, contract or public default changed. See `docs/native-core-p2.md`.
+- The Rust CPU engine is faster on every standard shape that engages its
+  thread pool. Four changes, each measured against the 0.7.0 engine; see
+  `docs/native-core-p1.md` for the measurements and the rejected alternative:
+  - the row-chunked gradient (all L1 batches, and narrow unpenalized ones)
+    now accumulates into worker-local buffers. In place, neighbouring
+    workers wrote the same cache line on every row, and the loop did not
+    speed up with threads at all;
+  - Newton iterations reuse the residual the accepted line-search trial
+    already computed, as L1 iterations did, instead of recomputing `X @ beta`;
+  - the weighted Gram matrix is built 256 rows at a time through a
+    cache-resident scratch block, reading the batch once instead of writing
+    and re-reading a full `n * p` weighted copy. That workspace is gone;
+  - `dot` keeps eight independent partial sums, so the residual and
+    prediction row kernels vectorize.
+
+  The first three are bitwise identical to 0.7.0. The `dot` change fixes a
+  different, still deterministic summation order, so native CPU coefficients
+  and information matrices differ from 0.7.0 in the last bits; the golden
+  corpora and their tolerances are unchanged.
+- The approved CPU schema-v2 baseline is now
+  `benchmarks/baselines/p6-windows-ryzen9900x-native-cpu-v2.json`, captured on
+  the fixed Ryzen 9 9900X runner with the optimized engine: NumPy/native
+  1.38x-7.86x (median 1.81x) across all 32 cases, gate passed with 0.5-second
+  samples. `p3-windows-ryzen9900x-native-cpu-v2.json` stays as history. The
+  wide unpenalized ratios are lower than before because the NumPy reference
+  became faster there, while native also got faster.
+- A fixed-host interleaved A/B against `v0.7.0` (cold and steady,
+  `--freeze-sample-repetitions`, records under `benchmarks/baselines/`)
+  measured the optimized engine 1.21x (cold) and 1.18x (steady) faster at the
+  median, with no case slower. Neither gate passed: three float32 L1 cases
+  take a different number of solver iterations after the `dot` change
+  (difference 2-5, limit 1), and in the steady capture one of them also
+  exceeded the 5% MAD limit (5.02%).
+
+## [0.7.0] - 2026-10-03
+
+This minor release breaks the native CUDA interface: C ABI 2 and Python API 4
+replace C ABI 1 and Python API 3, and the two generations refuse each other.
+The public estimator API and checkpoint format 2 are unchanged.
+
+### Added
+
+- Native CUDA L1 (`penalty="l1"`): the LAMM proximal-gradient transition now
+  runs whole-batch on the GPU, mirroring the NumPy reference and the Rust CPU
+  engine, with transactional `previous_lambda` commits and L1 checkpoints that
+  resume across all three engines. This raises the CUDA C ABI to 2 and the
+  CUDA Python API to 4; older and newer components refuse each other instead
+  of treating L1 as `none`.
+- Native CUDA `predict` accepts CUDA DLPack tensors (CuPy, PyTorch, TensorFlow
+  eager) and reads them in place on the engine stream; raw feature matrices
+  are widened on device for both host and device input. Predictions are still
+  returned as NumPy arrays.
+- A `native_update_penalties` backend capability. The core refuses a penalty a
+  native engine does not advertise with `ValidationError` before the engine is
+  called.
+- A second, frozen golden corpus (`tests/golden/native_core_v2.json`) of four
+  converged L1 streams, replayed by the NumPy, Rust CPU and CUDA engines.
+- Linux x86-64 (`manylinux_2_28`) CUDA 12 plugin wheels, built by
+  `scripts/native/build_linux_cuda_wheel.sh` in both the release workflow and
+  a new no-GPU pull-request CI job.
+- CPython 3.13 support for the base package and both native wheels, across CI
+  and the release matrix (20 CPU wheels, 8 CUDA wheels).
+- An English README (`README.en.md`) and a MkDocs Material documentation site
+  (`docs` extra, `mkdocs.yml`) with a generated Python API reference. A new
+  Docs workflow builds it with `--strict` on every pull request and deploys it
+  to GitHub Pages only when run by hand.
+- Development tooling: mypy over `src/renewable_huber` and branch coverage of
+  the required `core` profile (`fail_under = 72`) in the CI quality job, and
+  `proptest` property tests for the `rh-core` validation contracts and the
+  `rh-cpu` numeric kernels.
+- First on-device verification of the native CUDA C ABI 2 / Python API 4
+  engine, on the fixed Windows GPU host (RTX 5070 Ti, SM 12.0, CUDA 12.9,
+  driver 616.64, Python 3.11) at `4114918`. The `core`, `native-cpu`, `cuda`
+  and `performance` profiles, both golden corpora, the C ABI smoke test, the
+  17-symbol export check and the clean CUDA wheel smoke all passed. The
+  PyTorch and TensorFlow CUDA DLPack integration tests skipped because neither
+  framework was installed.
+- On-device verification of PyTorch CUDA DLPack input to native CUDA, on the
+  same host at `33cb075` with `torch` 2.9.0+cu129: `PyTorchDlpackIntegrationTests`
+  passed in the `cuda` profile, and the native extension still reported
+  CUDA runtime 12090. TensorFlow eager CUDA DLPack remains unverified on a
+  device, because TensorFlow has no GPU support on native Windows since 2.11;
+  the support matrix says so.
+- Fixed-host native CUDA L1 baselines
+  (`benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-l1-run{1,2,3}.json`):
+  three standard-profile runs against CuPy under the same input transport.
+  Native CUDA L1 stays explicit opt-in; `backend="auto"` never selects native
+  CUDA. The results and the reasoning are in
+  `docs/native-penalty-completion-plan.md`.
+- An accepted interleaved `penalty="none"` A/B of native CUDA across the
+  ABI 2 change: `fca7b83` (ABI 1 / API 3) against `10fc363` (ABI 2 / API 4)
+  on the same host, cold and steady. Both gates passed on all 16 native cases,
+  and every difference was inside ±10%, which is no measurable difference.
+  The records, gate reports and sample-repetition plans are
+  `benchmarks/baselines/p5-windows-rtx5070ti-native-cuda-none-ab-{cold,steady}-*.json`.
+- `run_interleaved_benchmark.py --allow-native-version-change`, for an A/B
+  between builds whose native extensions report a different `abi_version` or
+  `python_api_version`. Only those two fields leave the hardware and runtime
+  fingerprint. `check_performance_regression.py` has no such option and still
+  rejects an interface change.
+- `run_interleaved_benchmark.py --freeze-sample-repetitions`. It calibrates
+  every case once for both variants, writes `sample-repetitions-plan.json`
+  (each case gets the larger block size, still capped by
+  `--max-sample-repetitions`), and uses that plan in every round. Rounds
+  therefore merge without the `--max-sample-repetitions 1` workaround. In this
+  mode both variants run the candidate's sweep harness against their own
+  source tree through `RENEWABLE_HUBER_BENCHMARK_SOURCE_ROOT`, and records keep
+  `git_revision` apart from `benchmark_harness_git_revision`. The shape sweep
+  gains the matching `--sample-repetitions-plan` option.
+
+### Changed
+
+- The `Documentation` project URL of all three distributions points to the
+  MkDocs site at <https://funtrollor.github.io/renewable-huber/> (the home page
+  for the base package, the rendered P1/P2 notes for the native packages)
+  instead of the GitHub README and the raw Markdown notes.
+- `renewable-huber-native-cuda` now depends on NVIDIA's `nvidia-*-cu12` runtime
+  wheels (cudart, cuBLAS, cuSOLVER, cuSPARSE, nvJitLink) and loads that set at
+  import, falling back to a system CUDA 12 toolkit only when the set is
+  incomplete. `CUDA_PATH` is no longer required.
+- The C ABI 2 break renames `RhCudaUnpenalizedConfig` to `RhCudaUpdateConfig`
+  and `rh_cuda_engine_predict_host`/`RhCudaHostPrediction` to
+  `rh_cuda_engine_predict`/`RhCudaPrediction`; the library still exports
+  exactly 17 `rh_cuda_*` symbols.
+- The native CUDA shape sweep and profiler accept `penalty="l1"`.
+- The interleaved gate report (`gate.json`) is at schema version 2. It always
+  records `allow_native_version_change` and, for each gated native family,
+  both sides' `abi_version`/`python_api_version` and whether they changed. It
+  also records how sample blocks were sized, as
+  `sample_repetitions: {policy, plan_sha256, harness}`, where `policy` is
+  `frozen_plan` or `per_round_calibration`. Each merged record's
+  `interleaved_capture` carries the same field.
+- `validate_record` accepts native CUDA `penalty="l1"` benchmark records when
+  the recorded `native_cuda_abi` shows `abi_version` 2 or later or lists `l1`
+  in `supported_penalties`. ABI 1 records that claim L1 are still rejected.
+- The GPU-host runbook (`docs/gpu-host-runbook.md`) now matches what the
+  scripts require:
+  - the interleaved `penalty="none"` A/B runs with `--backend gpu
+    --allow-native-version-change --freeze-sample-repetitions`, gives the
+    steady run a separate output directory, and is accepted only when
+    `gate.json` shows `sample_repetitions.policy` `frozen_plan`;
+  - both venvs use the same Python 3.10–3.12 version and pinned
+    NumPy/SciPy/CuPy;
+  - the native build scripts get absolute `-Python` paths, and the developer
+    shell is located with `vswhere` and started with `-SkipAutomaticLocation`;
+  - the two expected DLPack integration skips are documented;
+  - GPU clients are recorded before and after each run instead of being
+    closed.
+
 ## [0.6.1] - 2026-08-09
 
 This is the first published native-core release. The earlier `v0.6.0` tag did
@@ -166,7 +334,9 @@ retained as an immutable historical record rather than moved or reused.
 
 - Documented private vulnerability reporting and supported-version policy.
 
-[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Funtrollor/renewable-huber/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/Funtrollor/renewable-huber/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.1...v0.6.1
 [0.5.1]: https://github.com/Funtrollor/renewable-huber/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Funtrollor/renewable-huber/releases/tag/v0.5.0

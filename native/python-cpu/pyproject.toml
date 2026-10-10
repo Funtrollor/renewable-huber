@@ -4,20 +4,21 @@ build-backend = "maturin"
 
 [project]
 name = "renewable-huber-native-cpu"
-version = "0.6.1"
+version = "0.7.1"
 description = "Optional Rust CPU engine for renewable-huber."
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 authors = [{ name = "Renewable Huber contributors" }]
-dependencies = ["renewable-huber==0.6.1"]
+dependencies = ["renewable-huber==0.7.1"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Rust",
   "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
@@ -25,7 +26,7 @@ classifiers = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/Funtrollor/renewable-huber/blob/main/docs/native-core-p1.md"
+Documentation = "https://funtrollor.github.io/renewable-huber/native-core-p1/"
 Issues = "https://github.com/Funtrollor/renewable-huber/issues"
 Source = "https://github.com/Funtrollor/renewable-huber"
 

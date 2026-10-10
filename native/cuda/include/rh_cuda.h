@@ -30,7 +30,7 @@
 extern "C" {
 #endif
 
-#define RH_CUDA_ABI_VERSION UINT32_C(1)
+#define RH_CUDA_ABI_VERSION UINT32_C(2)
 
 typedef int32_t RhCudaStatus;
 #define RH_CUDA_STATUS_SUCCESS ((RhCudaStatus)0)
@@ -46,6 +46,16 @@ typedef int32_t RhCudaStatus;
 typedef int32_t RhCudaDType;
 #define RH_CUDA_DTYPE_FLOAT32 ((RhCudaDType)1)
 #define RH_CUDA_DTYPE_FLOAT64 ((RhCudaDType)2)
+
+/* Penalty applied by one update; see RhCudaUpdateConfig. */
+typedef int32_t RhCudaPenalty;
+#define RH_CUDA_PENALTY_NONE ((RhCudaPenalty)0)
+#define RH_CUDA_PENALTY_L1 ((RhCudaPenalty)1)
+
+/* Where a caller-owned input buffer lives; see RhCudaPrediction. */
+typedef int32_t RhCudaMemory;
+#define RH_CUDA_MEMORY_HOST ((RhCudaMemory)0)
+#define RH_CUDA_MEMORY_DEVICE ((RhCudaMemory)1)
 
 /*
  * Optional engine tuning flags carried in RhCudaEngineOptions::reserved0.
@@ -104,13 +114,25 @@ typedef struct RhCudaHostState {
 } RhCudaHostState;
 
 /*
- * Immutable unpenalized configuration for one update.  n_features_in counts
- * the columns of the caller's feature matrix, excluding any intercept, and it
- * fixes the engine's intercept contract: n_parameters must equal n_features_in
- * when the model has no intercept, or n_features_in + 1 when it has one.  No
- * other relationship between the two is accepted.
+ * Immutable configuration for one update.  n_features_in counts the columns
+ * of the caller's feature matrix, excluding any intercept, and it fixes the
+ * engine's intercept contract: n_parameters must equal n_features_in when the
+ * model has no intercept, or n_features_in + 1 when it has one.  No other
+ * relationship between the two is accepted.
+ *
+ * penalty selects the solver.  RH_CUDA_PENALTY_NONE runs the damped Newton
+ * transition and ignores lambda_scale.  RH_CUDA_PENALTY_L1 runs the LAMM
+ * proximal-gradient transition with
+ *
+ *     lambda = lambda_scale * tau * sqrt(log(max(n_features_in, 2)) / N)
+ *
+ * where N is the cumulative effective weight after this batch.  The trailing
+ * intercept coordinate, when present, is never penalized.  The committed
+ * lambda becomes the state's previous_lambda only after a successful update.
+ * Any other penalty value, a non-zero reserved0, or a negative or non-finite
+ * lambda_scale is rejected before any device work is enqueued.
  */
-typedef struct RhCudaUnpenalizedConfig {
+typedef struct RhCudaUpdateConfig {
     uint32_t abi_version;
     uint32_t struct_size;
     int64_t n_features_in;
@@ -119,7 +141,10 @@ typedef struct RhCudaUnpenalizedConfig {
     double bandwidth_scale;
     double tolerance;
     double ridge;
-} RhCudaUnpenalizedConfig;
+    RhCudaPenalty penalty;
+    int32_t reserved0;
+    double lambda_scale;
+} RhCudaUpdateConfig;
 
 /*
  * Host-fed C-contiguous batch.  x_design is row-major with n_rows rows and
@@ -176,14 +201,29 @@ typedef struct RhCudaDeviceBatch {
     double batch_weight;
 } RhCudaDeviceBatch;
 
-typedef struct RhCudaHostPrediction {
+/*
+ * Prediction request.  x_design is a C-contiguous row-major matrix with n_rows
+ * rows in the engine dtype, resident where input_location says: host memory,
+ * or device memory on the engine's CUDA device (a DLPack producer's storage,
+ * read in place and never staged through the host).  prediction is always a
+ * caller-owned host buffer of n_rows values.
+ *
+ * n_columns follows the batch contract: either n_parameters for an already
+ * expanded design, or n_features_in to have the engine append the trailing
+ * all-ones intercept column on device.  n_features_in obeys the same intercept
+ * invariant as RhCudaUpdateConfig.  reserved0 must be zero.
+ */
+typedef struct RhCudaPrediction {
     uint32_t abi_version;
     uint32_t struct_size;
     const void* x_design;
     void* prediction;
     int64_t n_rows;
     int64_t n_columns;
-} RhCudaHostPrediction;
+    int64_t n_features_in;
+    RhCudaMemory input_location;
+    int32_t reserved0;
+} RhCudaPrediction;
 
 typedef struct RhCudaDiagnostics {
     uint32_t abi_version;
@@ -241,11 +281,11 @@ RH_CUDA_API RhCudaStatus rh_cuda_engine_copy_state(
     RhCudaHostState* state
 );
 
-/* Execute one complete unpenalized Newton batch transition. */
+/* Execute one complete batch transition for the configured penalty. */
 RH_CUDA_API RhCudaStatus rh_cuda_engine_update_host(
     RhCudaEngine* engine,
     const RhCudaHostBatch* batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     RhCudaDiagnostics* diagnostics
 );
 
@@ -258,7 +298,7 @@ RH_CUDA_API RhCudaStatus rh_cuda_engine_update_host(
 RH_CUDA_API RhCudaStatus rh_cuda_engine_update_host_with_state(
     RhCudaEngine* engine,
     const RhCudaHostBatch* batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     RhCudaDiagnostics* diagnostics,
     RhCudaHostState* state
 );
@@ -273,14 +313,15 @@ RH_CUDA_API RhCudaStatus rh_cuda_engine_stream(
 RH_CUDA_API RhCudaStatus rh_cuda_engine_update_device_with_state(
     RhCudaEngine* engine,
     const RhCudaDeviceBatch* batch,
-    const RhCudaUnpenalizedConfig* config,
+    const RhCudaUpdateConfig* config,
     RhCudaDiagnostics* diagnostics,
     RhCudaHostState* state
 );
 
-RH_CUDA_API RhCudaStatus rh_cuda_engine_predict_host(
+/* Predict from host or device input into a caller-owned host buffer. */
+RH_CUDA_API RhCudaStatus rh_cuda_engine_predict(
     RhCudaEngine* engine,
-    const RhCudaHostPrediction* request
+    const RhCudaPrediction* request
 );
 
 RH_CUDA_API RhCudaStatus rh_cuda_engine_synchronize(RhCudaEngine* engine);

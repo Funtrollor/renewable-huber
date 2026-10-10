@@ -15,4 +15,5 @@ rayon = "1.10"
 rh-core = { path = "../rh-core" }
 
 [dev-dependencies]
+proptest.workspace = true
 serde_json = "1.0"

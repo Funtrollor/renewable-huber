@@ -6,6 +6,7 @@
 
 use rh_core::CoreError;
 
+use crate::kernels::gram::GRAM_ROW_CHUNK;
 use crate::scalar::CpuScalar;
 use crate::{MAX_PARTIAL_GRAM_BYTES, PARALLEL_GRAM_WORK, PARALLEL_VECTOR_WORK};
 
@@ -15,7 +16,7 @@ pub struct Workspace<T: CpuScalar> {
     pub(crate) residual: Vec<T>,
     pub(crate) score: Vec<T>,
     pub(crate) curvature: Vec<T>,
-    pub(crate) weighted_design: Vec<T>,
+    pub(crate) weighted_rows: Vec<T>,
     pub(crate) partial_grams: Vec<T>,
     pub(crate) partial_gradients: Vec<T>,
     pub(crate) gradient: Vec<T>,
@@ -29,16 +30,12 @@ pub struct Workspace<T: CpuScalar> {
 
 impl<T: CpuScalar> Workspace<T> {
     pub(crate) fn reserve(&mut self, n_rows: usize, n_parameters: usize) -> Result<(), CoreError> {
-        let design_length = n_rows
-            .checked_mul(n_parameters)
-            .ok_or(CoreError::SizeOverflow)?;
         let matrix_length = n_parameters
             .checked_mul(n_parameters)
             .ok_or(CoreError::SizeOverflow)?;
         self.residual.resize(n_rows, T::zero());
         self.score.resize(n_rows, T::zero());
         self.curvature.resize(n_rows, T::zero());
-        self.weighted_design.resize(design_length, T::zero());
         let gram_work = n_rows.saturating_mul(matrix_length);
         let gram_bytes = matrix_length
             .checked_mul(std::mem::size_of::<T>())
@@ -54,6 +51,16 @@ impl<T: CpuScalar> Workspace<T> {
         self.partial_grams.resize(
             matrix_length
                 .checked_mul(gram_workers)
+                .ok_or(CoreError::SizeOverflow)?,
+            T::zero(),
+        );
+        // One cache-resident block of weighted rows per Gram worker, not the
+        // whole weighted design; see `GRAM_ROW_CHUNK`.
+        self.weighted_rows.resize(
+            gram_workers
+                .max(1)
+                .checked_mul(n_rows.min(GRAM_ROW_CHUNK))
+                .and_then(|rows| rows.checked_mul(n_parameters))
                 .ok_or(CoreError::SizeOverflow)?,
             T::zero(),
         );

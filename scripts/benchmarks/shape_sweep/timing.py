@@ -13,18 +13,15 @@ from __future__ import annotations
 import gc
 import math
 import statistics
-import sys
-from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from scripts.benchmarks.shape_sweep.source_root import put_source_on_path
+
 # The benchmarks run straight from a source checkout, so ``src`` has to be on
-# the path before ``renewable_huber`` is imported. An import sorter would move
-# a relative helper import below the third-party block, which is why the two
-# lines are written out here instead of being shared.
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-if str(_PROJECT_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT / "src"))
+# the path before ``renewable_huber`` is imported. ``put_source_on_path`` also
+# honours an interleaved A/B's choice of source tree; see ``source_root``.
+put_source_on_path()
 
 from renewable_huber import RenewableHuberRegressor  # noqa: E402
 from renewable_huber.state import RenewableHuberState  # noqa: E402
@@ -94,6 +91,7 @@ def _measure(
     estimated_operation_seconds: float | None = None,
     minimum_sample_seconds: float = 0.0,
     max_sample_repetitions: int = 64,
+    sample_repetitions: int | None = None,
 ) -> dict[str, Any]:
     """Measure per-operation time using independent, fixed-size sample blocks.
 
@@ -107,13 +105,25 @@ def _measure(
     ``estimated_operation_seconds`` comes from the explicit warmup/calibration
     run outside the measured samples.  It only selects the fixed block size;
     it is never included in the result.
+
+    ``sample_repetitions`` replaces that choice with a block size decided
+    before the run (an interleaved A/B's sampling plan), so every round and
+    both variants use the same block. The warmup still runs unchanged.
     """
 
-    sample_repetitions = _sample_repetitions(
-        estimated_operation_seconds,
-        minimum_sample_seconds=minimum_sample_seconds,
-        maximum=max_sample_repetitions,
-    )
+    planned = sample_repetitions is not None
+    if sample_repetitions is None:
+        sample_repetitions = _sample_repetitions(
+            estimated_operation_seconds,
+            minimum_sample_seconds=minimum_sample_seconds,
+            maximum=max_sample_repetitions,
+        )
+    elif (
+        not isinstance(sample_repetitions, int)
+        or isinstance(sample_repetitions, bool)
+        or sample_repetitions < 1
+    ):
+        raise ValueError("planned sample_repetitions must be a positive integer")
     seconds = []
     iterations = []
     convergence = []
@@ -154,7 +164,7 @@ def _measure(
         iterations.append(statistics.median(sample_iterations))
         convergence.append(all(sample_convergence))
     median_seconds = statistics.median(seconds)
-    return {
+    result: dict[str, Any] = {
         "seconds": seconds,
         "median_seconds": median_seconds,
         "minimum_seconds": min(seconds),
@@ -169,6 +179,11 @@ def _measure(
         "gc_collected_before_sample": True,
         "gc_disabled_during_timing": True,
     }
+    if planned:
+        # Only planned captures carry the field, so a default record stays
+        # byte-for-byte what earlier schema-v2 captures contain.
+        result["sample_repetitions_source"] = "plan"
+    return result
 
 
 def _sample_repetitions(
@@ -291,6 +306,7 @@ def _benchmark_engine(
     synchronize: Any | None = None,
     minimum_sample_seconds: float = 0.0,
     max_sample_repetitions: int = 64,
+    sample_repetitions: int | None = None,
 ) -> dict[str, Any]:
     """Measure one engine under an explicit cold or steady-state contract."""
 
@@ -344,6 +360,7 @@ def _benchmark_engine(
             estimated_operation_seconds=statistics.median(calibration_seconds),
             minimum_sample_seconds=minimum_sample_seconds,
             max_sample_repetitions=max_sample_repetitions,
+            sample_repetitions=sample_repetitions,
         )
         result["sampling_calibration_runs"] = len(calibration_seconds)
     elif lifecycle == "steady":
@@ -395,6 +412,7 @@ def _benchmark_engine(
             estimated_operation_seconds=statistics.median(calibration_seconds),
             minimum_sample_seconds=minimum_sample_seconds,
             max_sample_repetitions=max_sample_repetitions,
+            sample_repetitions=sample_repetitions,
         )
         result["sampling_calibration_runs"] = len(calibration_seconds)
     else:

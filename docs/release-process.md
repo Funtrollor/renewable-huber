@@ -6,31 +6,43 @@
 | --- | --- | --- |
 | `renewable-huber` | 公開 Python API 與 NumPy backend | 否 |
 | `renewable-huber-native-cpu` | Rust／Rayon CPU extension | 否；從對應平台 wheel 安裝 |
-| `renewable-huber-native-cuda` | Rust/CUDA 12 extension | 否；目前發布 Windows x86-64 wheel |
+| `renewable-huber-native-cuda` | Rust/CUDA 12 extension | 否；發布 Windows x86-64 與 Linux x86-64（`manylinux_2_28`）wheels |
 
 三個 distribution 在同一次 release 使用相同版本。Native wheel 會以精確相依條件
 `renewable-huber==X.Y.Z` 鎖定 base package，避免 Python API、checkpoint 或 native ABI
 不相容的組合被 pip 解析在一起。`scripts/native/validate_release_artifacts.py` 會在 CI
 同時驗證來源 metadata 與最終 wheels。
 
-`v0.6.0` tag 曾用於未完成的發布流程，沒有成為正式 PyPI release。Tag 保持不可變；
-本次完整 native release 使用 `v0.6.1`，release notes 以 `v0.5.1` 為使用者升級基線。
+`v0.6.0` tag 曾用於未完成的發布流程，沒有成為正式 PyPI release。既有 tag 一律不可變，
+不移動、不重用。本次發布使用 `v0.7.1`；GitHub Release notes 從上一個正式 release
+`v0.7.0` 開始產生（`release.yml` 的 `--notes-start-tag`），每次發布都要把它改成上一個
+正式 release 的 tag。
 
 ## Wheel 支援範圍
 
 CPU release matrix：
 
-- CPython 3.10、3.11、3.12。
+- CPython 3.10、3.11、3.12、3.13。
 - manylinux2014 x86-64 與 aarch64。
 - Windows x86-64。
 - macOS x86-64 與 Apple Silicon arm64。
 
-CUDA 12 release matrix 目前為 CPython 3.10–3.12、Windows x86-64。Release fat binary
-包含 SM 75、80、86、89、90、120 SASS，並只為最高的 SM 120 保留 PTX，因此建置
-runner 固定使用 CUDA Toolkit 12.9.1（最低需 12.8 才能編譯 SM 120）。使用者安裝已
-發布 wheel 時不需要 Rust、CMake、Visual Studio 或 `nvcc`，但 wheel 不封裝 NVIDIA
-DLL；執行時仍需相容 driver 與 CUDA 12 的 cudart、cuBLAS／cuBLASLt、cuSOLVER、
-cuSPARSE、nvJitLink runtime closure，且 toolkit `bin` 必須可由 `CUDA_PATH` 找到。
+CUDA 12 release matrix 為 CPython 3.10–3.13 × Windows x86-64 與 Linux x86-64
+（`manylinux_2_28`），共 8 個 wheels。Release fat binary 包含 SM 75、80、86、89、
+90、120 SASS，並只為最高的 SM 120 保留 PTX，因此建置固定使用 CUDA Toolkit 12.9
+（最低需 12.8 才能編譯 SM 120）。使用者安裝 wheel 時不需要 Rust、CMake、Visual
+Studio 或 `nvcc`。Wheel 不封裝 NVIDIA 函式庫；cudart、cuBLAS／cuBLASLt、cuSOLVER、
+cuSPARSE、nvJitLink runtime closure 以 `nvidia-*-cu12` 相依套件安裝，匯入時由
+`renewable_huber._cuda_runtime` 載入；該組不完整時才退回系統 toolkit。
+
+Linux CUDA wheels 在 `quay.io/pypa/manylinux_2_28_x86_64` container 內由
+`scripts/native/build_linux_cuda_wheel.sh` 建置，因此 wheel 宣告的 glibc 2.28 tag
+對 binary 成立。腳本以 `--auditwheel skip` 刻意不 vendor NVIDIA 函式庫，並在
+container 內用 `cuobjdump` 檢查 SASS／PTX，另拒絕宣告 runtime closure 以外的
+`NEEDED`。兩個 workflow 以同一個 digest 固定這個 image；Dependabot 看不到 `run:`
+步驟裡的 image，更新時需手動把兩處 digest 一起換掉。一般 PR CI 的 `native-cuda-linux-wheel` job 執行同一支腳本（縮小的
+架構清單）並在無 GPU runner 上乾淨安裝、匯入，因此 release 路徑在 tag 前就已被
+驗證。
 
 CUDA wheels 在固定的 GitHub-hosted `windows-2022` runner（Visual Studio 2022）
 安裝 CUDA 12.9 build-only toolchain 後編譯；不用 `windows-latest`，因為它已移至
@@ -60,18 +72,23 @@ macOS CPU wheels 使用 `macos-15-intel`（x86-64）與 `macos-15`（Apple Silic
    ```
 
 5. 在 GitHub 對 `main` 手動執行 `release.yml`。這是 build-only rehearsal：建置並
-   驗證完整 20 個 artifacts，但不建立 GitHub Release，也不發布到 PyPI/TestPyPI。
+   驗證完整 30 個 artifacts（base wheel 與 sdist、20 個 CPU wheels、8 個 CUDA
+   wheels），但不建立 GitHub Release，也不發布到 PyPI/TestPyPI。
 6. 從已通過一般 CI 與 build-only rehearsal 的**精確 `main` tip** 建立 `vX.Y.Z`
    annotated tag；若維護環境已有可信任簽章金鑰，則改用 signed tag。Release
    workflow 會拒絕版本不一致或不是目前 `main` tip 的 tag。
-7. Workflow 建置 base wheel/sdist、15 個 CPU wheels、3 個 CUDA wheels，並執行
+7. Workflow 建置 base wheel/sdist、20 個 CPU wheels（4 個 CPython × 5 個
+   OS/architecture targets）、8 個 CUDA wheels（4 個 CPython × Windows x86-64 與
+   Linux x86-64 `manylinux_2_28`），並執行
    Twine、metadata、artifact-set、CUDA SASS/PTX 實體檢查，以及無 GPU 的 clean
    install/import ABI capability smoke；GPU correctness 與效能不在 GitHub Actions
    執行，採用第 3 步的本機證據。
 8. 完整 artifact set 通過後才建立 GitHub Release。人工核准 PyPI 前，下載實際
    CUDA artifacts 至固定 GPU 主機，對 artifact hash 執行最後 smoke。
 9. 三個 PyPI publish jobs 分別等待對應 GitHub Environment 的人工核准，再透過
-   Trusted Publishing/OIDC 發布；不儲存長效 API token。
+   Trusted Publishing/OIDC 發布；不儲存長效 API token。Native wheels 精確依賴同版
+   base，因此 `pypi-native-cpu` 與 `pypi-native-cuda` 兩個 jobs 要等 `pypi`（base）
+   發布成功後才會開始等待核准。
 
 Release tag 範例：
 
@@ -108,14 +125,14 @@ publisher（或既有 project publisher）的 owner、repository、workflow 與 
 CPU 使用者：
 
 ```bash
-python -m pip install renewable-huber-native-cpu==0.6.1
+python -m pip install renewable-huber-native-cpu==0.7.1
 python -c "from renewable_huber import RenewableHuberRegressor; print(RenewableHuberRegressor(backend='native_cpu', n_jobs=-1))"
 ```
 
 CUDA 12 使用者：
 
 ```powershell
-python -m pip install renewable-huber-native-cuda==0.6.1
+python -m pip install renewable-huber-native-cuda==0.7.1
 python -c "from renewable_huber import _native_cuda; print(_native_cuda.version()); print(_native_cuda.is_available())"
 ```
 

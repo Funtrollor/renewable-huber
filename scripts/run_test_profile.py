@@ -85,6 +85,9 @@ def _native_cuda_device_probe() -> str | None:
         from renewable_huber import _native_cuda
     except (ImportError, OSError, RuntimeError) as error:
         return f"the native CUDA extension is not importable: {error}"
+    version = _native_cuda.version()
+    if version.get("abi_version") != 2 or version.get("python_api_version") != 4:
+        return f"the native CUDA extension reports an unsupported contract: {dict(version)}"
     if not _native_cuda.is_available():
         return "the native CUDA extension reports no usable runtime"
     if not _native_cuda.device_count():
@@ -143,6 +146,8 @@ _LEAF_PROFILES: tuple[Profile, ...] = (
             "tests.test_estimator",
             "tests.test_loss",
             "tests.test_native_cuda_contract",
+            # The CUDA runtime search, driven by a fake nvidia tree: no device.
+            "tests.test_native_cuda_runtime",
             # Selection and routing driven by fakes: no device, no extension.
             # It is a separate module from test_native_cuda_backend precisely so
             # that CPU CI keeps running it; see PORTABLE_NATIVE_MODULES below.
@@ -197,6 +202,7 @@ _LEAF_PROFILES: tuple[Profile, ...] = (
         modules=(
             "tests.test_benchmark_interleaved_regression",
             "tests.test_benchmark_performance_policy",
+            "tests.test_benchmark_sampling_plan",
         ),
         requirements=("numpy",),
     ),
@@ -221,6 +227,7 @@ PORTABLE_NATIVE_MODULES = frozenset(
         "tests.test_cpu_auto_dispatch",
         "tests.test_native_cuda_selection",
         "tests.test_native_cuda_contract",
+        "tests.test_native_cuda_runtime",
         "tests.test_native_golden",
     }
 )

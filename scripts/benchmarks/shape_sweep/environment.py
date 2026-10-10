@@ -16,6 +16,8 @@ from typing import Any
 
 import numpy as np
 
+from scripts.benchmarks.shape_sweep.source_root import HARNESS_ROOT, is_overridden, source_root
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 _THREAD_ENVIRONMENT_KEYS = (
@@ -27,11 +29,13 @@ _THREAD_ENVIRONMENT_KEYS = (
 )
 
 
-def _git_revision() -> str:
+def _git_revision(root: Path | None = None) -> str:
+    """Return the revision of the measured tree (``root`` overrides it)."""
+
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=PROJECT_ROOT,
+            cwd=source_root() if root is None else root,
             check=True,
             capture_output=True,
             text=True,
@@ -60,6 +64,11 @@ def environment_metadata() -> dict[str, Any]:
             "adjustable": timer.adjustable,
         },
     }
+    if is_overridden():
+        # One harness measured another checkout: ``git_revision`` names the
+        # code under test, this names the measurement code. Absent otherwise,
+        # so a default record is unchanged.
+        metadata["benchmark_harness_git_revision"] = _git_revision(HARNESS_ROOT)
     try:
         from renewable_huber import _native_cpu
 

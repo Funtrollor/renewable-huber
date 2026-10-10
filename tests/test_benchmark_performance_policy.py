@@ -27,7 +27,15 @@ from scripts.benchmarks.dispatch_policy import (
     Workload,
     recommend_backend,
 )
-from scripts.benchmarks.performance_policy import compare_records, validate_record
+from scripts.benchmarks.performance_policy import (
+    DIRECT_COMPETITORS,
+    NATIVE_CUDA_ENGINES,
+    NATIVE_ENGINES,
+    NATIVE_METADATA_SECTIONS,
+    compare_records,
+    hardware_fingerprint,
+    validate_record,
+)
 from scripts.benchmarks.shape_sweep.shapes import PROFILES, Shape, make_batches
 from scripts.benchmarks.shape_sweep.timing import _fit_batch
 
@@ -504,6 +512,265 @@ class PerformanceGateTests(unittest.TestCase):
 
                 self.assertFalse(checks[0].passed)
                 self.assertIn("fingerprint", " ".join(checks[0].reasons))
+
+
+#: The two native CUDA builds in the N5 A/B: identical host, driver and
+#: runtime, different extension interface.
+_NATIVE_CUDA_ABI_1 = {
+    "abi_version": 1,
+    "python_api_version": 3,
+    "driver_version": 13040,
+    "runtime_version": 12090,
+    "device_input": "dlpack",
+}
+_NATIVE_CUDA_ABI_2 = {
+    **_NATIVE_CUDA_ABI_1,
+    "abi_version": 2,
+    "python_api_version": 4,
+    "supported_penalties": ["none", "l1"],
+}
+_NATIVE_CPU_API_2 = {
+    "abi_version": 1,
+    "python_api_version": 2,
+    "linear_algebra_provider": "nalgebra+matrixmultiply",
+    "parallel_provider": "rayon",
+    "parallel_threads": 24,
+}
+_FINGERPRINT_ONLY = ("hardware or runtime fingerprint differs",)
+
+
+def _native_pair(
+    engine: str,
+    baseline_metadata: dict[str, Any],
+    candidate_metadata: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A baseline/candidate pair that differs only in native metadata."""
+
+    location = "device" if engine.endswith("device_input") else "host"
+    competitor = DIRECT_COMPETITORS[engine]
+    records = []
+    for metadata in (baseline_metadata, candidate_metadata):
+        record = _record(
+            _case(competitor, [1.20] * 9, input_location=location),
+            _case(engine, [1.0] * 9, input_location=location),
+        )
+        record["environment"][NATIVE_METADATA_SECTIONS[engine]] = dict(metadata)
+        records.append(record)
+    return records[0], records[1]
+
+
+class NativeVersionChangeGateTests(unittest.TestCase):
+    """Only an explicit opt-in may compare across a native ABI/API change."""
+
+    def test_default_gate_rejects_a_native_cuda_abi_and_api_change(self) -> None:
+        for engine in sorted(NATIVE_CUDA_ENGINES):
+            baseline, candidate = _native_pair(engine, _NATIVE_CUDA_ABI_1, _NATIVE_CUDA_ABI_2)
+            for options in ({}, {"allow_native_version_change": False}):
+                with self.subTest(engine=engine, options=options):
+                    checks = compare_records(baseline, candidate, **options)
+
+                    self.assertEqual(len(checks), 1)
+                    self.assertFalse(checks[0].passed)
+                    self.assertEqual(checks[0].reasons, _FINGERPRINT_ONLY)
+
+    def test_default_gate_rejects_a_native_cpu_abi_or_api_change(self) -> None:
+        for field in ("abi_version", "python_api_version"):
+            with self.subTest(field=field):
+                baseline, candidate = _native_pair(
+                    "rust_native_cpu",
+                    _NATIVE_CPU_API_2,
+                    {**_NATIVE_CPU_API_2, field: 3},
+                )
+
+                checks = compare_records(baseline, candidate)
+
+                self.assertFalse(checks[0].passed)
+                self.assertEqual(checks[0].reasons, _FINGERPRINT_ONLY)
+
+    def test_option_accepts_a_native_cuda_abi_and_api_change_alone(self) -> None:
+        for engine in sorted(NATIVE_CUDA_ENGINES):
+            with self.subTest(engine=engine):
+                baseline, candidate = _native_pair(engine, _NATIVE_CUDA_ABI_1, _NATIVE_CUDA_ABI_2)
+
+                checks = compare_records(baseline, candidate, allow_native_version_change=True)
+
+                self.assertEqual(len(checks), 1)
+                self.assertTrue(checks[0].passed, checks[0].reasons)
+
+    def test_option_accepts_a_native_cpu_abi_and_api_change_alone(self) -> None:
+        baseline, candidate = _native_pair(
+            "rust_native_cpu",
+            _NATIVE_CPU_API_2,
+            {**_NATIVE_CPU_API_2, "abi_version": 2, "python_api_version": 3},
+        )
+
+        checks = compare_records(baseline, candidate, allow_native_version_change=True)
+
+        self.assertTrue(checks[0].passed, checks[0].reasons)
+
+    def test_option_still_rejects_every_other_native_cuda_fingerprint_change(self) -> None:
+        changes = (
+            ("native_cuda_abi", "driver_version", 13020),
+            ("native_cuda_abi", "runtime_version", 13000),
+            ("native_cuda_abi", "device_input", "none"),
+            (None, "gpu", "different-gpu"),
+            (None, "gpu_compute_capability", "8.9"),
+            (None, "cuda_runtime", 13000),
+            (None, "cupy", "13.6.0"),
+            (None, "processor", "different-cpu"),
+        )
+        for engine in sorted(NATIVE_CUDA_ENGINES):
+            for section, field, value in changes:
+                if field == "device_input" and engine != "native_cuda_device_input":
+                    continue
+                with self.subTest(engine=engine, field=field):
+                    baseline, candidate = _native_pair(
+                        engine, _NATIVE_CUDA_ABI_1, _NATIVE_CUDA_ABI_2
+                    )
+                    environment = candidate["environment"]
+                    (environment if section is None else environment[section])[field] = value
+
+                    checks = compare_records(baseline, candidate, allow_native_version_change=True)
+
+                    self.assertFalse(checks[0].passed)
+                    self.assertEqual(checks[0].reasons, _FINGERPRINT_ONLY)
+
+    def test_option_still_rejects_a_native_cpu_provider_or_parallelism_change(self) -> None:
+        for field, value in (
+            ("linear_algebra_provider", "different-provider"),
+            ("parallel_provider", "different-parallel-runtime"),
+            ("parallel_threads", 12),
+        ):
+            with self.subTest(field=field):
+                baseline, candidate = _native_pair(
+                    "rust_native_cpu",
+                    _NATIVE_CPU_API_2,
+                    {**_NATIVE_CPU_API_2, "abi_version": 2, field: value},
+                )
+
+                checks = compare_records(baseline, candidate, allow_native_version_change=True)
+
+                self.assertFalse(checks[0].passed)
+                self.assertEqual(checks[0].reasons, _FINGERPRINT_ONLY)
+
+    def test_relaxed_fingerprint_drops_exactly_the_two_interface_versions(self) -> None:
+        record = _record()
+        record["environment"]["native_cpu"] = dict(_NATIVE_CPU_API_2)
+        record["environment"]["native_cuda_abi"] = dict(_NATIVE_CUDA_ABI_2)
+        for engine in sorted(NATIVE_ENGINES):
+            with self.subTest(engine=engine):
+                strict = dict(hardware_fingerprint(record, engine))
+                relaxed = dict(hardware_fingerprint(record, engine, include_native_versions=False))
+                section = NATIVE_METADATA_SECTIONS[engine]
+
+                self.assertEqual(
+                    set(strict) - set(relaxed),
+                    {f"{section}.abi_version", f"{section}.python_api_version"},
+                )
+                self.assertEqual(relaxed, {name: strict[name] for name in relaxed})
+        for engine in ("numpy_cpu", "cupy_cuda_host_input", "cupy_cuda_device_input"):
+            with self.subTest(engine=engine):
+                self.assertEqual(
+                    hardware_fingerprint(record, engine),
+                    hardware_fingerprint(record, engine, include_native_versions=False),
+                )
+
+    def test_the_stored_baseline_gate_never_passes_the_option(self) -> None:
+        # check_performance_regression compares against a committed baseline
+        # captured by an older build; it must keep rejecting an ABI change.
+        path = Path(__file__).resolve().parents[1] / (
+            "scripts/benchmarks/check_performance_regression.py"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "compare_records"
+        ]
+
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn(
+            "allow_native_version_change",
+            {keyword.arg for keyword in calls[0].keywords},
+        )
+        self.assertNotIn("native-version", path.read_text(encoding="utf-8"))
+
+
+class NativeCudaPenaltyContractTests(unittest.TestCase):
+    """A native CUDA L1 record needs its own evidence that the engine had L1."""
+
+    @staticmethod
+    def _record(
+        native_cuda_abi: dict[str, Any] | None,
+        *,
+        engine: str = "native_cuda_host_input",
+        penalty: str = "l1",
+    ) -> dict[str, Any]:
+        location = "device" if engine.endswith("device_input") else "host"
+        record = _record(_case(engine, [1.0] * 9, penalty=penalty, input_location=location))
+        if native_cuda_abi is not None:
+            record["environment"]["native_cuda_abi"] = dict(native_cuda_abi)
+        return record
+
+    def test_abi_2_native_cuda_l1_record_is_valid(self) -> None:
+        # No supported_penalties: the ABI version alone is sufficient evidence.
+        metadata = {**_NATIVE_CUDA_ABI_1, "abi_version": 2, "python_api_version": 4}
+        for engine in sorted(NATIVE_CUDA_ENGINES):
+            with self.subTest(engine=engine):
+                validate_record(self._record(metadata, engine=engine))
+
+    def test_advertised_l1_support_is_valid_evidence(self) -> None:
+        for metadata in (
+            {"python_api_version": 4, "supported_penalties": ["none", "l1"]},
+            {**_NATIVE_CUDA_ABI_1, "supported_penalties": ["l1"]},
+        ):
+            for engine in sorted(NATIVE_CUDA_ENGINES):
+                with self.subTest(engine=engine, metadata=metadata):
+                    validate_record(self._record(metadata, engine=engine))
+
+    def test_native_cuda_l1_record_without_evidence_is_rejected(self) -> None:
+        for label, metadata in (
+            ("abi 1", _NATIVE_CUDA_ABI_1),
+            ("abi 1 advertising none", {**_NATIVE_CUDA_ABI_1, "supported_penalties": ["none"]}),
+            ("penalties not a list", {**_NATIVE_CUDA_ABI_1, "supported_penalties": "none,l1"}),
+            ("abi version not an integer", {**_NATIVE_CUDA_ABI_1, "abi_version": "2"}),
+            ("empty metadata", {}),
+            ("no metadata", None),
+        ):
+            for engine in sorted(NATIVE_CUDA_ENGINES):
+                record = self._record(metadata, engine=engine)
+                with (
+                    self.subTest(engine=engine, case=label),
+                    self.assertRaisesRegex(ValueError, "L1 support only when"),
+                ):
+                    validate_record(record)
+
+    def test_native_cuda_may_not_claim_a_penalty_other_than_l1(self) -> None:
+        with self.assertRaisesRegex(ValueError, "may not claim penalty 'l2'"):
+            validate_record(self._record(_NATIVE_CUDA_ABI_2, penalty="l2"))
+
+    def test_l1_evidence_does_not_relax_any_other_record_check(self) -> None:
+        mislabeled = self._record(_NATIVE_CUDA_ABI_2)
+        mislabeled["cases"][0]["result"]["resident_engine"] = False
+        with self.assertRaisesRegex(ValueError, "lifecycle labels"):
+            validate_record(mislabeled)
+
+        wrong_transport = self._record(_NATIVE_CUDA_ABI_2)
+        wrong_transport["cases"][0]["result"]["includes_input_transfer"] = False
+        with self.assertRaisesRegex(ValueError, "input-transfer policy"):
+            validate_record(wrong_transport)
+
+        unconverged = self._record(_NATIVE_CUDA_ABI_2)
+        unconverged["cases"][0]["result"]["all_batches_converged"] = "true"
+        with self.assertRaisesRegex(ValueError, "must be a boolean"):
+            validate_record(unconverged)
+
+    def test_unpenalized_records_need_no_native_cuda_metadata(self) -> None:
+        for metadata in (_NATIVE_CUDA_ABI_1, None):
+            with self.subTest(metadata=metadata):
+                validate_record(self._record(metadata, penalty="none"))
 
 
 class BenchmarkLifecycleTests(unittest.TestCase):

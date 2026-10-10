@@ -15,8 +15,10 @@ if TYPE_CHECKING:
     from ..core import UpdateDiagnostics
     from ..state import RenewableHuberState
 
-_EXPECTED_ABI_VERSION = 1
-_EXPECTED_PYTHON_API_VERSION = 3
+_EXPECTED_ABI_VERSION = 2
+_EXPECTED_PYTHON_API_VERSION = 4
+#: Assumed when an extension does not advertise ``supported_penalties``.
+_DEFAULT_PENALTIES = frozenset({"none"})
 
 
 class NativeCudaBackend(NativeEngineBackend):
@@ -50,9 +52,9 @@ class NativeCudaBackend(NativeEngineBackend):
             from renewable_huber import _native_cuda
         except (ImportError, OSError) as error:
             raise BackendUnavailableError(
-                "backend='native_cuda' requires the separately built Rust/CUDA extension. "
-                "Build it with scripts/native/build_native_cuda.ps1 and ensure the matching "
-                "CUDA Toolkit runtime is installed."
+                "backend='native_cuda' requires the separately distributed Rust/CUDA extension. "
+                "Install it with `pip install renewable-huber-native-cuda` (Windows or Linux "
+                "x86-64), which also installs the matching NVIDIA CUDA 12 runtime wheels."
             ) from error
 
         try:
@@ -88,6 +90,15 @@ class NativeCudaBackend(NativeEngineBackend):
         self._native_module = _native_cuda
         self._initial_state_is_canonical_empty = version.get("initial_state") == "canonical_empty"
         self._supports_dlpack = version.get("device_input") == "dlpack"
+        self._supports_device_predict = version.get("device_predict") == "dlpack"
+        advertised = version.get("supported_penalties")
+        #: Penalties the loaded engine implements. Read by capabilities_of();
+        #: an extension that does not say is assumed to implement only "none".
+        self.native_update_penalties = (
+            frozenset(str(penalty) for penalty in advertised)
+            if isinstance(advertised, (list, tuple, set, frozenset))
+            else _DEFAULT_PENALTIES
+        )
         self._device_id = device_id
         self._cuda_graphs = cuda_graphs
         self._cuda_fast_math = cuda_fast_math
@@ -224,12 +235,14 @@ class NativeCudaBackend(NativeEngineBackend):
         sample_weight: np.ndarray | None,
         batch_weight: float,
     ) -> tuple[RenewableHuberState, UpdateDiagnostics]:
-        """Run one complete unpenalized update without a Python solver loop."""
+        """Run one complete update without a Python solver loop."""
 
-        if config.penalty != "none":
+        if config.penalty not in self.native_update_penalties:
+            # The core refuses this first; kept for direct backend callers so an
+            # engine is never handed a penalty it would not implement.
             raise ValidationError(
-                "backend='native_cuda' currently supports penalty='none'; "
-                "use backend='cupy' for the L1 solver"
+                f"the loaded native CUDA engine does not support penalty={config.penalty!r}; "
+                f"supported: {sorted(self.native_update_penalties)}"
             )
 
         n_parameters = int(state.coefficients.shape[0])
@@ -246,7 +259,8 @@ class NativeCudaBackend(NativeEngineBackend):
         if not device_input and sample_weight is not None:
             weights = np.ascontiguousarray(sample_weight, dtype=self.dtype)
         with self._engine_call():
-            update = self._engine.update_device if device_input else self._engine.update
+            engine = self._resident_engine()
+            update = engine.update_device if device_input else engine.update
             x_input = X if device_input else np.ascontiguousarray(X, dtype=self.dtype)
             y_input = y if device_input else np.ascontiguousarray(y, dtype=self.dtype)
             result = update(
@@ -261,33 +275,50 @@ class NativeCudaBackend(NativeEngineBackend):
                 max_iter=int(config.max_iter),
                 tol=float(config.tol),
                 ridge=float(config.ridge),
+                penalty=str(config.penalty),
+                lambda_scale=float(config.lambda_scale),
             )
         return self._adopt_result(result, state)
 
     def native_design_matrix(self, X: np.ndarray, *, fit_intercept: bool) -> np.ndarray:
-        """Leave host features unexpanded; CUDA appends the intercept column.
+        """Leave features unexpanded; CUDA appends the intercept column.
 
         Materializing ``column_stack((X, ones))`` on the CPU copied the entire
-        batch before every H2D transfer. The native ABI accepts the original
-        feature matrix and expands it in reusable device workspace instead.
-        ``fit_intercept`` remains explicit for protocol clarity; the engine
-        derives the actual layout from state and configuration dimensions.
+        batch before every H2D transfer, and cannot be done at all for a CUDA
+        DLPack tensor without an implicit device-to-host copy. The native ABI
+        accepts the original feature matrix for both updates and predictions
+        and expands it in reusable device workspace instead. ``fit_intercept``
+        remains explicit for protocol clarity; the engine derives the actual
+        layout from the state's dimensions.
         """
 
         del fit_intercept
         return X
 
-    def native_predict(self, X: np.ndarray, state: RenewableHuberState) -> np.ndarray:
-        """Predict through the resident CUDA coefficient vector."""
+    def native_predict(self, X: Any, state: RenewableHuberState) -> np.ndarray:
+        """Predict through the resident CUDA coefficient vector.
 
+        Host input is copied to the device once. A CUDA DLPack tensor is read in
+        place on the engine stream; only the predictions cross to the host.
+        Either way the result is a NumPy array, as for every host-fed update.
+        """
+
+        device_input = self._cuda_dlpack_device(X) is not None
+        if device_input and not self._supports_device_predict:
+            raise BackendUnavailableError(
+                "The loaded native CUDA extension does not support DLPack prediction input"
+            )
         self.restore_native_state(state)
         with self._engine_call():
-            if self._cuda_dlpack_device(X) is not None:
-                raise ValidationError(
-                    "native CUDA device-resident prediction is not supported yet; "
-                    "pass a host array explicitly (no implicit device-to-host copy is performed)"
+            engine = self._resident_engine()
+            if device_input:
+                prediction = engine.predict_device(X, state.n_features_in, state.fit_intercept)
+            else:
+                prediction = engine.predict(
+                    np.ascontiguousarray(X, dtype=self.dtype),
+                    state.n_features_in,
+                    state.fit_intercept,
                 )
-            prediction = self._engine.predict(np.ascontiguousarray(X, dtype=self.dtype))
         return np.asarray(prediction, dtype=self.dtype)
 
     def _create_engine(self, n_parameters: int) -> Any:

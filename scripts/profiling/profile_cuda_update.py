@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import platform
 import subprocess
@@ -55,6 +56,33 @@ def make_batches(
     ]
 
 
+def _install_phase_ranges() -> None:
+    """Mark the estimator's three phases of ``partial_fit`` with NVTX ranges.
+
+    ``phase/prepare`` is input validation and batch assembly, ``phase/update``
+    is the backend call (for native engines: Python core, PyO3 binding, the C
+    ABI solve and result decoding), and ``phase/commit`` adopts the new state.
+    The summarizer splits ``phase/update`` further at its first and last CUDA
+    API call. This wraps private methods of this process's estimator class
+    only; nothing in the library changes.
+    """
+
+    from cupyx.profiler import time_range
+
+    def ranged(name: str, function: Any) -> Any:
+        @functools.wraps(function)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with time_range(f"phase/{name}", color_id=6):
+                return function(*args, **kwargs)
+
+        return wrapper
+
+    estimator = RenewableHuberRegressor
+    estimator._prepare_batch = ranged("prepare", estimator._prepare_batch)  # type: ignore[method-assign]
+    estimator._run_update = staticmethod(ranged("update", estimator._run_update))  # type: ignore[method-assign]
+    estimator._commit = ranged("commit", estimator._commit)  # type: ignore[method-assign]
+
+
 def _fit(
     batches: list[tuple[Any, Any]],
     *,
@@ -65,6 +93,7 @@ def _fit(
     annotate_batches: bool,
     backend: str,
     model: RenewableHuberRegressor | None = None,
+    batch_iterations: list[int] | None = None,
 ) -> tuple[int, bool]:
     from cupyx.profiler import time_range
 
@@ -86,6 +115,8 @@ def _fit(
         else:
             model.partial_fit(X_batch, y_batch)
         iterations += model.diagnostics_.iterations
+        if batch_iterations is not None:
+            batch_iterations.append(int(model.diagnostics_.iterations))
         converged = converged and model.diagnostics_.converged
     return iterations, converged
 
@@ -109,7 +140,9 @@ def _metadata(
     args: argparse.Namespace,
     elapsed: list[float],
     iteration_counts: list[int],
+    batch_iterations: list[list[int]],
     convergence: list[bool],
+    cuda_features: dict[str, Any] | None,
 ) -> dict[str, Any]:
     properties = cp.cuda.runtime.getDeviceProperties(cp.cuda.Device().id)
     name = properties["name"]
@@ -142,6 +175,7 @@ def _metadata(
             "cuda_graphs": args.cuda_graphs,
             "cuda_fast_math": args.cuda_fast_math,
             "seed": args.seed,
+            "phase_ranges": args.phase_ranges,
             "resident_engine": args.engine == "native_cuda",
             "includes_engine_initialization": args.engine != "native_cuda",
             "engine_prime_runs": 1 if args.engine == "native_cuda" else 0,
@@ -151,8 +185,11 @@ def _metadata(
         },
         "elapsed_seconds": elapsed,
         "iteration_counts": iteration_counts,
+        "batch_iterations": batch_iterations,
         "all_batches_converged": all(convergence),
     }
+    if cuda_features is not None:
+        metadata["cuda_features"] = cuda_features
     if args.engine == "native_cuda":
         from renewable_huber import _native_cuda
 
@@ -176,6 +213,11 @@ def main() -> int:
     parser.add_argument("--cuda-graphs", action="store_true")
     parser.add_argument("--cuda-fast-math", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--phase-ranges",
+        action="store_true",
+        help="add phase/prepare, phase/update and phase/commit NVTX ranges",
+    )
     parser.add_argument("--metadata-output", type=Path)
     args = parser.parse_args()
     if (
@@ -186,14 +228,10 @@ def main() -> int:
         or args.repeats < 1
     ):
         parser.error("sizes and repeats must be positive; warmup must be non-negative")
-    if args.engine == "native_cuda" and args.penalty != "none":
-        parser.error("the P2 native CUDA engine currently supports only penalty='none'")
     if (args.cuda_graphs or args.cuda_fast_math) and args.engine != "native_cuda":
         parser.error("CUDA tuning flags require --engine native_cuda")
     if args.cuda_fast_math and args.dtype != "float32":
         parser.error("--cuda-fast-math requires --dtype float32")
-    if args.engine == "native_cuda" and args.input_location != "host":
-        parser.error("the P2 native CUDA engine accepts host input; use --input-location host")
 
     try:
         import cupy as cp
@@ -272,12 +310,18 @@ def main() -> int:
                 )
         cp.cuda.get_current_stream().synchronize()
 
+    if args.phase_ranges:
+        # Installed after warmup so the priming runs stay unannotated.
+        _install_phase_ranges()
+
     elapsed = []
     iteration_counts = []
+    batch_iterations: list[list[int]] = []
     convergence = []
     for repeat in range(args.repeats):
         if native_model is not None and native_empty_state is not None:
             _restore_empty_native_model(native_model, native_empty_state)
+        repeat_iterations: list[int] = []
         start = perf_counter()
         with time_range(f"profile/repeat-{repeat}", color_id=repeat % 6):
             iterations, converged = _fit(
@@ -289,17 +333,24 @@ def main() -> int:
                 annotate_batches=True,
                 backend=args.engine,
                 model=native_model,
+                batch_iterations=repeat_iterations,
             )
             cp.cuda.get_current_stream().synchronize()
         seconds = perf_counter() - start
         elapsed.append(seconds)
         iteration_counts.append(iterations)
+        batch_iterations.append(repeat_iterations)
         convergence.append(converged)
         print(
             f"repeat={repeat} elapsed={seconds:.6f}s iterations={iterations} converged={converged}"
         )
 
-    metadata = _metadata(cp, args, elapsed, iteration_counts, convergence)
+    cuda_features = None
+    if native_model is not None:
+        cuda_features = dict(native_model.cuda_features_)
+    metadata = _metadata(
+        cp, args, elapsed, iteration_counts, batch_iterations, convergence, cuda_features
+    )
     if args.metadata_output is not None:
         args.metadata_output.parent.mkdir(parents=True, exist_ok=True)
         args.metadata_output.write_text(

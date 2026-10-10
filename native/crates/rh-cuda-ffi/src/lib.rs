@@ -21,11 +21,13 @@ mod validation;
 #[cfg(test)]
 mod tests;
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 pub use engine::CudaEngine;
+pub use rh_core::Penalty;
 pub use runtime::{device_count, is_available, linked_abi_version, runtime_info};
 pub use types::{
-    CudaDtype, CudaError, CudaScalar, DeviceBatch, Diagnostics, EngineFeatures, EngineTuning,
-    HostBatch, HostMatrix, HostState, HostVector, RuntimeInfo, StateMetadata, UnpenalizedConfig,
+    parse_penalty, CudaDtype, CudaError, CudaScalar, DeviceBatch, DeviceMatrix, Diagnostics,
+    EngineFeatures, EngineTuning, HostBatch, HostMatrix, HostState, HostVector, RuntimeInfo,
+    StateMetadata, UpdateConfig, SUPPORTED_PENALTIES,
 };
