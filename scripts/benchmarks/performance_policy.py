@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from math import isfinite
+from math import ceil, isfinite
 from statistics import median
 from typing import Any
 
@@ -43,6 +43,24 @@ NATIVE_METADATA_SECTIONS = {
 #: fingerprint; only an interleaved A/B that explicitly opts in to comparing
 #: across a native ABI/API change may leave them out, and nothing else.
 NATIVE_VERSION_FIELDS = ("abi_version", "python_api_version")
+
+#: Iteration policies. ``absolute`` holds every case to ``max_iteration_delta``.
+#: ``relative`` applies only to float32 cases in an interleaved A/B: float32
+#: sits at its rounding floor at the default ``tol``, so any change to a
+#: summation order moves its iteration count by more than one without the
+#: solver getting worse. Such a case passes only if the count moved by at most
+#: ``FLOAT32_RELATIVE_ITERATION_FRACTION`` of the baseline (and never less than
+#: ``max_iteration_delta``), each iteration is no slower than the slowdown
+#: limit, and both builds reach the same final objective to within
+#: ``FLOAT32_FINAL_OBJECTIVE_RTOL``. float64 and every stored-baseline gate
+#: stay ``absolute``.
+ITERATION_POLICIES = ("absolute", "relative")
+FLOAT32_RELATIVE_ITERATION_FRACTION = 0.25
+#: Measured, not guessed: across every standard shape the released 0.7.0 ->
+#: 0.7.1 Rust CPU change moved float32 final objectives by at most 6.1e-5
+#: (streaming L1, 56 -> 61 iterations), the summed float32 loss over 65,536
+#: rows being only that accurate. float64 moved by under 1e-15.
+FLOAT32_FINAL_OBJECTIVE_RTOL = 1e-4
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +110,17 @@ class RegressionCheck:
     baseline_relative_mad: float | None
     candidate_relative_mad: float | None
     reasons: tuple[str, ...]
+    #: ``absolute`` or ``float32_relative``: the rule this case's iterations met.
+    iteration_policy: str = "absolute"
+    baseline_iterations: float | None = None
+    candidate_iterations: float | None = None
+    #: Candidate seconds per iteration over the baseline's.
+    per_iteration_ratio: float | None = None
+    #: |candidate - baseline| / |baseline| of the median final objective.
+    final_objective_relative_difference: float | None = None
+    #: The iteration count moved past ``max_iteration_delta`` and the float32
+    #: relative policy accepted it. Visible in the report, never silent.
+    iterations_changed: bool = False
 
 
 def measurement_key(case: Mapping[str, Any]) -> MeasurementKey:
@@ -285,6 +314,7 @@ def compare_records(
     max_competitor_slowdown: float = 1.0,
     require_same_hardware: bool = True,
     allow_native_version_change: bool = False,
+    iteration_policy: str = "absolute",
 ) -> list[RegressionCheck]:
     """Compare strict-equivalent native cases from two v2 sweep records.
 
@@ -298,7 +328,13 @@ def compare_records(
     comparison. It exists for the interleaved A/B runner, which measures both
     builds on the same host in alternating order; a gate against a stored
     baseline must keep the default and reject an interface change.
+
+    ``iteration_policy="relative"`` is likewise for the interleaved runner
+    only; see ``ITERATION_POLICIES``.
     """
+
+    if iteration_policy not in ITERATION_POLICIES:
+        raise ValueError(f"iteration_policy must be one of {ITERATION_POLICIES}")
 
     _validate_thresholds(
         cpu_max_slowdown=cpu_max_slowdown,
@@ -360,6 +396,7 @@ def compare_records(
                 max_competitor_slowdown=max_competitor_slowdown,
                 require_same_hardware=require_same_hardware,
                 allow_native_version_change=allow_native_version_change,
+                iteration_policy=iteration_policy,
             )
         )
     return checks
@@ -381,6 +418,7 @@ def _compare_case(
     max_competitor_slowdown: float,
     require_same_hardware: bool,
     allow_native_version_change: bool,
+    iteration_policy: str = "absolute",
 ) -> RegressionCheck:
     baseline_seconds = _timings(baseline_case)
     candidate_seconds = _timings(candidate_case)
@@ -414,14 +452,58 @@ def _compare_case(
         reasons.append("candidate did not converge for every batch")
     baseline_iterations = _median_iterations(baseline_result)
     candidate_iterations = _median_iterations(candidate_result)
-    if abs(candidate_iterations - baseline_iterations) > max_iteration_delta:
-        reasons.append(
-            "median solver iterations differ by "
-            f"{abs(candidate_iterations - baseline_iterations):.0f}; allowed {max_iteration_delta}"
-        )
     slowdown = candidate_median / baseline_median
     if slowdown > max_slowdown:
         reasons.append(f"slowdown {slowdown:.3f} exceeds limit {max_slowdown:.3f}")
+    per_iteration_ratio = (
+        slowdown * baseline_iterations / candidate_iterations
+        if baseline_iterations > 0 and candidate_iterations > 0
+        else None
+    )
+    baseline_objective = _median_final_objective(baseline_result)
+    candidate_objective = _median_final_objective(candidate_result)
+    objective_difference = (
+        abs(candidate_objective - baseline_objective) / max(abs(baseline_objective), 1e-300)
+        if baseline_objective is not None and candidate_objective is not None
+        else None
+    )
+    relative = iteration_policy == "relative" and key.dtype == "float32"
+    iteration_delta = abs(candidate_iterations - baseline_iterations)
+    iterations_changed = False
+    if iteration_delta > max_iteration_delta:
+        if not relative:
+            reasons.append(
+                "median solver iterations differ by "
+                f"{iteration_delta:.0f}; allowed {max_iteration_delta}"
+            )
+        else:
+            iterations_changed = True
+            allowed = max(
+                max_iteration_delta,
+                ceil(FLOAT32_RELATIVE_ITERATION_FRACTION * baseline_iterations),
+            )
+            if iteration_delta > allowed:
+                reasons.append(
+                    f"median solver iterations differ by {iteration_delta:.0f}; the float32 "
+                    f"relative policy allows {allowed}"
+                )
+            if per_iteration_ratio is None:
+                reasons.append("per-iteration slowdown is undefined for zero iterations")
+            elif per_iteration_ratio > max_slowdown:
+                reasons.append(
+                    f"per-iteration slowdown {per_iteration_ratio:.3f} exceeds limit "
+                    f"{max_slowdown:.3f}"
+                )
+            if objective_difference is None:
+                reasons.append(
+                    "the float32 relative iteration policy needs median_final_objective "
+                    "in both records"
+                )
+            elif objective_difference > FLOAT32_FINAL_OBJECTIVE_RTOL:
+                reasons.append(
+                    f"final objectives differ by {objective_difference:.2e} (relative); "
+                    f"limit {FLOAT32_FINAL_OBJECTIVE_RTOL:.0e}"
+                )
     competitor_engine = DIRECT_COMPETITORS.get(key.engine)
     competitor_seconds: float | None = None
     competitor_ratio: float | None = None
@@ -454,6 +536,12 @@ def _compare_case(
         baseline_relative_mad=baseline_mad,
         candidate_relative_mad=candidate_mad,
         reasons=tuple(reasons),
+        iteration_policy="float32_relative" if relative else "absolute",
+        baseline_iterations=baseline_iterations,
+        candidate_iterations=candidate_iterations,
+        per_iteration_ratio=per_iteration_ratio,
+        final_objective_relative_difference=objective_difference,
+        iterations_changed=iterations_changed and not reasons,
     )
 
 
@@ -472,6 +560,15 @@ def _timings(case: Mapping[str, Any]) -> tuple[float, ...]:
     if any(not isfinite(value) or value <= 0 for value in seconds):
         raise ValueError("benchmark timings must be positive finite numbers")
     return seconds
+
+
+def _median_final_objective(result: Mapping[str, Any]) -> float | None:
+    value = result.get("median_final_objective")
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not isfinite(value):
+        raise ValueError("benchmark median_final_objective must be a finite number")
+    return float(value)
 
 
 def _median_iterations(result: Mapping[str, Any]) -> float:

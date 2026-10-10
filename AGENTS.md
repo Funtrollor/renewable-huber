@@ -125,6 +125,14 @@ report; these are the ones worth memorising.
   `abi_version`/`python_api_version` from the fingerprint and records it in
   `gate.json`; `check_performance_regression.py` must keep rejecting an ABI
   change against a stored baseline. Guarded by `NativeVersionChangeGateTests`.
+- **The float32 relative iteration policy is interleaved-only and float32-only.**
+  `run_interleaved_benchmark.py --iteration-policy relative` (the default)
+  lets a float32 case's iteration count move by up to 25% only when each
+  iteration is no slower and the final objectives agree to 1e-4. Applying it to
+  float64, giving `check_performance_regression.py` the option, or dropping the
+  per-iteration or objective condition turns an iteration count that moved
+  because something broke into a pass. Guarded by
+  `tests/test_benchmark_performance_policy.py::Float32IterationPolicyTests`.
 - **A frozen-plan A/B measures the variant's code, never the harness's.**
   `run_interleaved_benchmark.py --freeze-sample-repetitions` runs the
   candidate's sweep against both checkouts through

@@ -187,6 +187,25 @@ class PlannedMeasureTests(unittest.TestCase):
                 timing._measure(operation, repeats=1, sample_repetitions=bad)  # type: ignore[arg-type]
 
 
+class FinalObjectiveTests(unittest.TestCase):
+    def test_an_operation_reporting_its_objective_is_recorded_per_sample(self) -> None:
+        values = iter([2.0, 2.0, 4.0, 4.0, 6.0, 6.0])
+
+        def operation() -> tuple[int, bool, float]:
+            return 3, True, next(values)
+
+        result = timing._measure(operation, repeats=3, sample_repetitions=2)
+
+        self.assertEqual(result["final_objectives"], [2.0, 4.0, 6.0])
+        self.assertEqual(result["median_final_objective"], 4.0)
+
+    def test_an_operation_without_an_objective_leaves_the_record_unchanged(self) -> None:
+        result = timing._measure(lambda: (3, True), repeats=2, sample_repetitions=1)
+
+        self.assertNotIn("final_objectives", result)
+        self.assertNotIn("median_final_objective", result)
+
+
 class ShapeSweepPlanOptionTests(unittest.TestCase):
     ARGS = (
         "--profile",

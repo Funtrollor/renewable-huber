@@ -63,13 +63,19 @@ def _run_operation(
     fit_batch: tuple[Any, Any],
     *,
     operation: str,
-) -> tuple[int, bool]:
-    """Run one public API workload and return its diagnostics summary."""
+) -> tuple[int, bool, float]:
+    """Run one public API workload and return its diagnostics summary.
+
+    The summary is the total solver iterations, whether every batch
+    converged, and the diagnostic objective of the last update. The objective
+    lets a gate that tolerates a float32 iteration-count change confirm the
+    two builds still reached the same solution.
+    """
 
     if operation == "fit":
         model.fit(*fit_batch)
         diagnostics = model.diagnostics_
-        return diagnostics.iterations, diagnostics.converged
+        return diagnostics.iterations, diagnostics.converged, float(diagnostics.objective)
     if operation != "partial_fit":
         raise ValueError(f"unknown benchmark operation {operation!r}")
     iterations = 0
@@ -78,7 +84,7 @@ def _run_operation(
         model.partial_fit(X_batch, y_batch)
         iterations += model.diagnostics_.iterations
         converged = converged and model.diagnostics_.converged
-    return iterations, converged
+    return iterations, converged, float(model.diagnostics_.objective)
 
 
 def _measure(
@@ -127,6 +133,7 @@ def _measure(
     seconds = []
     iterations = []
     convergence = []
+    final_objectives: list[float | None] = []
     for _ in range(repeats):
         # Cyclic GC is unrelated to the public solver operation and can pause a
         # short sample unpredictably.  Collect before each statistical sample,
@@ -139,6 +146,7 @@ def _measure(
         sample_seconds = 0.0
         sample_iterations: list[int] = []
         sample_convergence: list[bool] = []
+        sample_objective: float | None = None
         try:
             for _sample_run in range(sample_repetitions):
                 if prepare is not None:
@@ -146,7 +154,8 @@ def _measure(
                 if synchronize is not None:
                     synchronize()
                 start = perf_counter()
-                iteration_count, converged = operation()
+                outcome = operation()
+                iteration_count, converged = outcome[0], outcome[1]
                 if synchronize is not None:
                     synchronize()
                 sample_seconds += perf_counter() - start
@@ -157,12 +166,17 @@ def _measure(
                     finalize()
                 sample_iterations.append(iteration_count)
                 sample_convergence.append(converged)
+                # Optional third element: the last update's diagnostic
+                # objective. Repetitions of one sample replay the same
+                # deterministic workload, so the last one stands for all.
+                sample_objective = float(outcome[2]) if len(outcome) > 2 else None
         finally:
             if gc_was_enabled:
                 gc.enable()
         seconds.append(sample_seconds / sample_repetitions)
         iterations.append(statistics.median(sample_iterations))
         convergence.append(all(sample_convergence))
+        final_objectives.append(sample_objective)
     median_seconds = statistics.median(seconds)
     result: dict[str, Any] = {
         "seconds": seconds,
@@ -179,6 +193,10 @@ def _measure(
         "gc_collected_before_sample": True,
         "gc_disabled_during_timing": True,
     }
+    if final_objectives and all(value is not None for value in final_objectives):
+        recorded = [float(value) for value in final_objectives if value is not None]
+        result["final_objectives"] = recorded
+        result["median_final_objective"] = statistics.median(recorded)
     if planned:
         # Only planned captures carry the field, so a default record stays
         # byte-for-byte what earlier schema-v2 captures contain.
@@ -326,7 +344,7 @@ def _benchmark_engine(
     if lifecycle == "cold":
         cold_model: RenewableHuberRegressor | None = None
 
-        def cold_operation() -> tuple[int, bool]:
+        def cold_operation() -> tuple[int, bool, float]:
             nonlocal cold_model
             cold_model = new_model()
             return _run_operation(cold_model, batches, fit_batch, operation=operation)
@@ -368,7 +386,7 @@ def _benchmark_engine(
             raise ValueError("steady-state measurement is defined only for partial_fit")
         model = new_model()
 
-        def steady_operation() -> tuple[int, bool]:
+        def steady_operation() -> tuple[int, bool, float]:
             return _run_operation(model, batches, fit_batch, operation=operation)
 
         # Prime global/library handles and maximum batch workspaces once.  The
