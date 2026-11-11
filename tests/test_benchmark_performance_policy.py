@@ -1202,5 +1202,102 @@ class AutoDispatchBenchmarkContractTests(unittest.TestCase):
         self.assertIsNone(summary["calibration_overhead_seconds"])
 
 
+class Float32IterationPolicyTests(unittest.TestCase):
+    """float32 cases may move iteration counts under the interleaved relative policy."""
+
+    @staticmethod
+    def _pair(
+        *,
+        dtype: str = "float32",
+        iterations: tuple[float, float] = (26, 28),
+        seconds: tuple[float, float] = (1.0, 0.9),
+        objectives: tuple[float | None, float | None] = (1.2345, 1.2345),
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        records = []
+        for side in range(2):
+            native = _case("rust_native_cpu", [seconds[side]] * 9)
+            reference = _case("numpy_cpu", [5.0] * 9)
+            for case in (native, reference):
+                case["dtype"] = dtype
+                case["result"]["median_iterations"] = iterations[side]
+                if objectives[side] is not None:
+                    case["result"]["median_final_objective"] = objectives[side]
+            records.append(_record(native, reference))
+        return records[0], records[1]
+
+    def _check(self, policy: str, **pair: Any) -> Any:
+        baseline, candidate = self._pair(**pair)
+        (check,) = compare_records(
+            baseline, candidate, engines=("rust_native_cpu",), iteration_policy=policy
+        )
+        return check
+
+    def test_absolute_policy_still_rejects_any_float32_change_beyond_one(self) -> None:
+        check = self._check("absolute")
+
+        self.assertFalse(check.passed)
+        self.assertEqual(check.iteration_policy, "absolute")
+        self.assertIn("median solver iterations differ by 2; allowed 1", check.reasons)
+
+    def test_relative_policy_accepts_a_bounded_change_that_reaches_the_same_solution(
+        self,
+    ) -> None:
+        check = self._check("relative")
+
+        self.assertTrue(check.passed, check.reasons)
+        self.assertEqual(check.iteration_policy, "float32_relative")
+        self.assertTrue(check.iterations_changed)
+        self.assertEqual((check.baseline_iterations, check.candidate_iterations), (26, 28))
+        self.assertAlmostEqual(check.per_iteration_ratio, 0.9 * 26 / 28)
+        self.assertEqual(check.final_objective_relative_difference, 0.0)
+
+    def test_relative_policy_rejects_a_change_beyond_a_quarter_of_the_baseline(self) -> None:
+        check = self._check("relative", iterations=(20, 26))
+
+        self.assertFalse(check.passed)
+        self.assertIn(
+            "median solver iterations differ by 6; the float32 relative policy allows 5",
+            check.reasons,
+        )
+
+    def test_relative_policy_rejects_slower_iterations_hidden_by_fewer_of_them(self) -> None:
+        check = self._check("relative", iterations=(20, 16), seconds=(1.0, 1.0))
+
+        self.assertFalse(check.passed)
+        self.assertTrue(any("per-iteration slowdown 1.250" in r for r in check.reasons))
+
+    def test_relative_policy_needs_and_compares_the_final_objective(self) -> None:
+        missing = self._check("relative", objectives=(1.0, None))
+        drifted = self._check("relative", objectives=(1.0, 1.001))
+
+        self.assertFalse(missing.passed)
+        self.assertTrue(any("needs median_final_objective" in r for r in missing.reasons))
+        self.assertFalse(drifted.passed)
+        self.assertTrue(any("final objectives differ" in r for r in drifted.reasons))
+
+    def test_relative_policy_never_applies_to_float64(self) -> None:
+        check = self._check("relative", dtype="float64")
+
+        self.assertFalse(check.passed)
+        self.assertEqual(check.iteration_policy, "absolute")
+        self.assertIn("median solver iterations differ by 2; allowed 1", check.reasons)
+
+    def test_a_change_within_one_iteration_is_not_reported_as_changed(self) -> None:
+        check = self._check("relative", iterations=(26, 27))
+
+        self.assertTrue(check.passed, check.reasons)
+        self.assertFalse(check.iterations_changed)
+
+    def test_an_unknown_policy_is_rejected(self) -> None:
+        baseline, candidate = self._pair()
+        with self.assertRaisesRegex(ValueError, "iteration_policy"):
+            compare_records(baseline, candidate, iteration_policy="loose")
+
+    def test_the_stored_baseline_checker_offers_no_relative_policy(self) -> None:
+        scripts = Path(__file__).resolve().parents[1] / "scripts" / "benchmarks"
+        source = scripts / "check_performance_regression.py"
+        self.assertNotIn("iteration_policy", source.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

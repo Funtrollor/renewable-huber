@@ -97,6 +97,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-max-relative-mad", type=float, default=0.10)
     parser.add_argument("--max-competitor-slowdown", type=float, default=1.0)
     parser.add_argument(
+        "--iteration-policy",
+        choices=("relative", "absolute"),
+        default="relative",
+        help=(
+            "How float32 cases' solver iterations are gated. 'relative' (default) accepts a "
+            "change beyond one iteration of at most 25%% of the baseline count when "
+            "each iteration is no slower and both builds reach the same final objective "
+            "(relative difference <= 1e-4). float64 cases always use the absolute limit, "
+            "and check_performance_regression.py has no such option."
+        ),
+    )
+    parser.add_argument(
         "--allow-native-version-change",
         action="store_true",
         help=(
@@ -237,18 +249,23 @@ def main() -> int:
         gpu_max_relative_mad=args.gpu_max_relative_mad,
         max_competitor_slowdown=args.max_competitor_slowdown,
         allow_native_version_change=args.allow_native_version_change,
+        iteration_policy=args.iteration_policy,
     )
     gate = report(
         checks,
         baseline=merged["baseline"],
         candidate=merged["candidate"],
         allow_native_version_change=args.allow_native_version_change,
+        iteration_policy=args.iteration_policy,
     )
     (output_dir / "gate.json").write_text(
         json.dumps(gate, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     print(f"allow_native_version_change={gate['allow_native_version_change']}")
+    print(f"iteration_policy={gate['iteration_policy']}")
+    for key in gate["iterations_changed"]:
+        print(f"iterations changed (accepted): {key['shape_name']} {key['dtype']} {key['penalty']}")
     for section, versions in gate["native_versions"].items():
         print(f"{section}: baseline={versions['baseline']} candidate={versions['candidate']}")
     for check in checks:

@@ -171,7 +171,7 @@ tested commit and environment alongside the JSON report. Do not commit round or
 calibration files; accepted fixed-host records go to `benchmarks/baselines/`
 as the [GPU host runbook](gpu-host-runbook.md) describes.
 
-Two options exist only in the interleaved runner:
+Three options exist only in the interleaved runner:
 
 - `--freeze-sample-repetitions` calibrates every case once for both variants
   before the first timed round. It writes `sample-repetitions-plan.json`
@@ -192,12 +192,38 @@ Two options exist only in the interleaved runner:
   change. It drops only `abi_version` and `python_api_version` from the
   hardware and runtime fingerprint; driver and runtime versions, GPU, CuPy,
   Python, CPU, BLAS and threading must still match.
+- `--iteration-policy` (default `relative`) sets how float32 cases' solver
+  iterations are gated. float32 sits at its rounding floor at `tol=1e-6`, so
+  any change to a summation order moves its iteration count by more than one
+  without the solver getting worse: the 0.7.1 Rust CPU and CUDA changes moved
+  float32 L1 streams by 2-11 iterations. Under `relative`, a float32 case whose
+  median iterations moved by more than one still passes only if all of these
+  hold:
+  - the move is at most 25% of the baseline count;
+  - each iteration is no slower than the slowdown limit (candidate seconds per
+    iteration over the baseline's), so fewer iterations cannot hide slower
+    ones;
+  - both records carry `median_final_objective`, and the two differ by at most
+    1e-4 relative. That bound is measured: the released 0.7.0 -> 0.7.1 Rust
+    CPU change moved float32 final objectives by at most 6.1e-5 (streaming L1)
+    and float64 ones by under 1e-15.
 
-`gate.json` schema version 2 always records `allow_native_version_change` and,
-for each gated native family, both sides' `abi_version`/`python_api_version`
-and whether they `changed`. `check_performance_regression.py` has no
-native-version option and keeps rejecting an interface change against a
-stored baseline.
+  float64 cases always keep the one-iteration limit. `absolute` restores it for
+  float32 too. A whole-gate recomputation with a larger
+  `max_iteration_delta`, as the P7 A/B needed, is no longer the way through.
+
+`gate.json` schema version 2 added `allow_native_version_change` and, for each
+gated native family, both sides' `abi_version`/`python_api_version` and
+whether they `changed`. Schema version 3 adds `iteration_policy` and
+`iterations_changed`, the keys of every float32 case that passed with a moved
+iteration count. Each check also reports `baseline_iterations`,
+`candidate_iterations`, `per_iteration_ratio` and
+`final_objective_relative_difference`. Shape-sweep records now carry
+`final_objectives` (the last update's diagnostic objective, per sample) and
+`median_final_objective`; a record from an older harness simply lacks them,
+and a float32 case that needs them then fails. `check_performance_regression.py`
+has neither option: it keeps rejecting an interface change, and any iteration
+move beyond one, against a stored baseline.
 
 For a diagnostic record that was not captured by the interleaved runner, the
 older non-paired checker remains available:
@@ -211,8 +237,8 @@ python scripts/benchmarks/check_performance_regression.py `
 
 | Engine class | Maximum median slowdown | Maximum relative MAD | Other requirements |
 | --- | ---: | ---: | --- |
-| Rust native CPU | 1.10x | 5% | at least 9 repeats, convergence, same runner/thread/BLAS fingerprint, median iterations within 1, and no slower than matched NumPy |
-| Native CUDA | 1.15x | 10% | at least 9 repeats, convergence, same GPU/runtime fingerprint, median iterations within 1, and no slower than matched CuPy under the same host/device transport |
+| Rust native CPU | 1.10x | 5% | at least 9 repeats, convergence, same runner/thread/BLAS fingerprint, median iterations within 1 (float32 in an interleaved A/B: the relative policy above), and no slower than matched NumPy |
+| Native CUDA | 1.15x | 10% | at least 9 repeats, convergence, same GPU/runtime fingerprint, median iterations within 1 (float32 in an interleaved A/B: the relative policy above), and no slower than matched CuPy under the same host/device transport |
 
 The checker gates `rust_native_cpu`, `native_cuda_host_input`, and
 `native_cuda_device_input` by default.

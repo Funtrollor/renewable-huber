@@ -304,7 +304,7 @@ class NativeVersionChangeTests(unittest.TestCase):
                     allow_native_version_change=allowed,
                 )
 
-                self.assertEqual(GATE_SCHEMA_VERSION, 2)
+                self.assertEqual(GATE_SCHEMA_VERSION, 3)
                 self.assertEqual(gate["schema_version"], GATE_SCHEMA_VERSION)
                 self.assertIs(gate["allow_native_version_change"], allowed)
                 self.assertIs(gate["passed"], allowed)
@@ -365,6 +365,61 @@ class NativeVersionChangeTests(unittest.TestCase):
         )
 
 
+class Float32IterationPolicyGateTests(unittest.TestCase):
+    @staticmethod
+    def _float32_record(seconds: float, iterations: float, objective: float | None) -> Any:
+        record = _record(seconds)
+        for case in record["cases"]:
+            case["dtype"] = "float32"
+            case["result"]["iterations"] = [iterations]
+            case["result"]["median_iterations"] = iterations
+            if objective is not None:
+                case["result"]["final_objectives"] = [objective]
+                case["result"]["median_final_objective"] = objective
+        return record
+
+    def test_merge_carries_the_final_objective_only_when_every_round_has_it(self) -> None:
+        complete = _merge(
+            [1.0, 2.0, 3.0], "baseline", lambda value: self._float32_record(1.0, 5, value)
+        )
+        rounds = [self._float32_record(1.0, 5, 1.0), self._float32_record(1.0, 5, None)]
+        partial = merge_round_records(
+            rounds, variant="baseline", pair_id="pair", execution_order=[0, 1]
+        )
+
+        native = next(c for c in complete["cases"] if c["engine"] == "rust_native_cpu")
+        self.assertEqual(native["result"]["final_objectives"], [1.0, 2.0, 3.0])
+        self.assertEqual(native["result"]["median_final_objective"], 2.0)
+        for case in partial["cases"]:
+            self.assertNotIn("final_objectives", case["result"])
+            self.assertNotIn("median_final_objective", case["result"])
+
+    def test_gate_records_the_policy_and_every_accepted_iteration_change(self) -> None:
+        baseline = _merge([1.0] * 9, "baseline", lambda value: self._float32_record(value, 26, 1.5))
+        candidate = _merge(
+            [0.9] * 9, "candidate", lambda value: self._float32_record(value, 28, 1.5)
+        )
+        for policy, passed in (("absolute", False), ("relative", True)):
+            with self.subTest(policy=policy):
+                checks = compare_interleaved_records(
+                    baseline, candidate, engines=_CPU_ENGINES, iteration_policy=policy
+                )
+                gate = report(
+                    checks,
+                    baseline=baseline,
+                    candidate=candidate,
+                    allow_native_version_change=False,
+                    iteration_policy=policy,
+                )
+
+                self.assertIs(gate["passed"], passed)
+                self.assertEqual(gate["iteration_policy"], policy)
+                self.assertEqual(
+                    [key["engine"] for key in gate["iterations_changed"]],
+                    ["rust_native_cpu"] if passed else [],
+                )
+
+
 class InterleavedCliTests(unittest.TestCase):
     REQUIRED = (
         "--baseline-python",
@@ -378,6 +433,15 @@ class InterleavedCliTests(unittest.TestCase):
         "--output-dir",
         "out",
     )
+
+    def test_parser_defaults_to_the_relative_float32_iteration_policy(self) -> None:
+        parser = run_interleaved_benchmark.build_parser()
+
+        self.assertEqual(parser.parse_args(self.REQUIRED).iteration_policy, "relative")
+        self.assertEqual(
+            parser.parse_args([*self.REQUIRED, "--iteration-policy", "absolute"]).iteration_policy,
+            "absolute",
+        )
 
     def test_parser_exposes_the_option_defaulting_to_false(self) -> None:
         parser = run_interleaved_benchmark.build_parser()
