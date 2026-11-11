@@ -29,8 +29,11 @@ except ImportError:  # pragma: no cover - direct script imports use the sibling 
 
 #: Version 2 added ``allow_native_version_change`` and ``native_versions``: a
 #: passing v2 gate may compare across a native ABI/API change, which a v1 gate
-#: never could, so a reader must be able to tell the two apart.
-GATE_SCHEMA_VERSION = 2
+#: never could, so a reader must be able to tell the two apart. Version 3 adds
+#: ``iteration_policy`` and ``iterations_changed``: under the float32 relative
+#: policy a passing gate may contain float32 cases whose iteration counts
+#: moved, which no earlier gate allowed.
+GATE_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +112,19 @@ def merge_round_records(
             bool(round_result["all_batches_converged"]) for round_result in results
         )
         result["median_samples_per_second"] = key.samples / result["median_seconds"]
+        # The final objective is carried only when every round recorded it;
+        # a record from a harness that predates it simply omits the field.
+        if all("final_objectives" in round_result for round_result in results):
+            objectives = [
+                float(value)
+                for round_result in results
+                for value in round_result["final_objectives"]
+            ]
+            result["final_objectives"] = objectives
+            result["median_final_objective"] = statistics.median(objectives)
+        else:
+            result.pop("final_objectives", None)
+            result.pop("median_final_objective", None)
 
     merged["arguments"]["repeats"] = len(records)
     merged["interleaved_capture"] = {
@@ -135,6 +151,7 @@ def compare_interleaved_records(
     max_iteration_delta: int = 1,
     max_competitor_slowdown: float = 1.0,
     allow_native_version_change: bool = False,
+    iteration_policy: str = "absolute",
 ) -> list[PairedRegressionCheck]:
     """Require both the existing policy and an aligned paired slowdown gate.
 
@@ -181,6 +198,7 @@ def compare_interleaved_records(
         max_competitor_slowdown=max_competitor_slowdown,
         require_same_hardware=True,
         allow_native_version_change=allow_native_version_change,
+        iteration_policy=iteration_policy,
     )
     baseline_cases = _index(baseline)
     candidate_cases = _index(candidate)
@@ -258,6 +276,7 @@ def report(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
     allow_native_version_change: bool,
+    iteration_policy: str = "absolute",
 ) -> dict[str, Any]:
     """Build ``gate.json``; the option and native versions are always recorded."""
 
@@ -267,6 +286,14 @@ def report(
         "passed": bool(checks) and all(check.passed for check in checks),
         "checked_cases": len(checks),
         "allow_native_version_change": bool(allow_native_version_change),
+        # Schema 3: which iteration rule float32 cases were held to, and every
+        # case whose iteration count moved but was accepted under it.
+        "iteration_policy": iteration_policy,
+        "iterations_changed": [
+            asdict(check.key)
+            for check in checks
+            if check.passed and check.fixed_runner.get("iterations_changed")
+        ],
         "native_versions": native_version_evidence(checks, baseline, candidate),
         # How sample blocks were sized; absent for records merged by hand.
         "sample_repetitions": baseline.get("interleaved_capture", {}).get("sample_repetitions"),

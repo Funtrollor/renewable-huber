@@ -140,7 +140,7 @@ def benchmark_one(
     if lifecycle == "cold":
         cold_model: RenewableHuberRegressor | None = None
 
-        def cold_operation() -> tuple[int, bool]:
+        def cold_operation() -> tuple[int, bool, float]:
             nonlocal cold_model, effective
             cold_model = create_model()
             outcome = _run_operation(cold_model, batches, fit_batch, operation=operation)
@@ -168,7 +168,7 @@ def benchmark_one(
             raise ValueError("steady scaling is defined only for partial_fit")
         model = create_model()
 
-        def steady_operation() -> tuple[int, bool]:
+        def steady_operation() -> tuple[int, bool, float]:
             nonlocal effective
             outcome = _run_operation(model, batches, fit_batch, operation=operation)
             effective = _effective_threads(model, n_jobs)
