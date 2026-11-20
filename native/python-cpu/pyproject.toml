@@ -10,7 +10,7 @@ requires-python = ">=3.10,<3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
-authors = [{ name = "Renewable Huber contributors" }]
+authors = [{ name = "LI, CHIN-KAI" }]
 dependencies = ["renewable-huber==0.7.1"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
