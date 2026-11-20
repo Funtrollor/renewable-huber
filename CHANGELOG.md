@@ -10,6 +10,10 @@ stabilised.
 
 ### Changed
 
+- The author is now named as LI, CHIN-KAI in `CITATION.cff`, the `authors`
+  field of all three packages' metadata, the `NOTICE` copyright line (root and
+  both native packages) and the documentation site footer. Repository URLs
+  and `CODEOWNERS` keep the `Funtrollor` GitHub account name.
 - The interleaved A/B gate no longer fails a float32 case only because its
   solver iteration count moved. float32 sits at its rounding floor at
   `tol=1e-6`, and the 0.7.1 CPU and CUDA changes moved float32 L1 streams by
